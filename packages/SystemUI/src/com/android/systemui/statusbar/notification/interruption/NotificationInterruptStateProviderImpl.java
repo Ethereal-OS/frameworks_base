@@ -18,6 +18,7 @@ package com.android.systemui.statusbar.notification.interruption;
 
 import static com.android.systemui.statusbar.StatusBarState.SHADE;
 import static com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProviderImpl.NotificationInterruptEvent.FSI_SUPPRESSED_NO_HUN_OR_KEYGUARD;
+import static com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProviderImpl.NotificationInterruptEvent.FSI_SUPPRESSED_SUPPRESSIVE_BUBBLE_METADATA;
 import static com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProviderImpl.NotificationInterruptEvent.FSI_SUPPRESSED_SUPPRESSIVE_GROUP_ALERT_BEHAVIOR;
 
 import android.app.Notification;
@@ -81,6 +82,9 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
     public enum NotificationInterruptEvent implements UiEventLogger.UiEventEnum {
         @UiEvent(doc = "FSI suppressed for suppressive GroupAlertBehavior")
         FSI_SUPPRESSED_SUPPRESSIVE_GROUP_ALERT_BEHAVIOR(1235),
+
+        @UiEvent(doc = "FSI suppressed for suppressive BubbleMetadata")
+        FSI_SUPPRESSED_SUPPRESSIVE_BUBBLE_METADATA(1353),
 
         @UiEvent(doc = "FSI suppressed for requiring neither HUN nor keyguard")
         FSI_SUPPRESSED_NO_HUN_OR_KEYGUARD(1236),
@@ -236,6 +240,9 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
 
     @Override
     public FullScreenIntentDecision getFullScreenIntentDecision(NotificationEntry entry) {
+        if (mFlags.disableFsi()) {
+            return FullScreenIntentDecision.NO_FSI_DISABLED;
+        }
         if (entry.getSbn().getNotification().fullScreenIntent == null) {
             return FullScreenIntentDecision.NO_FULL_SCREEN_INTENT;
         }
@@ -263,6 +270,16 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
             // suppressive groupAlertBehavior, and now correctly block the FSI from firing.
             return getDecisionGivenSuppression(
                     FullScreenIntentDecision.NO_FSI_SUPPRESSIVE_GROUP_ALERT_BEHAVIOR,
+                    suppressedByDND);
+        }
+
+        // If the notification has suppressive BubbleMetadata, block FSI and warn.
+        Notification.BubbleMetadata bubbleMetadata = sbn.getNotification().getBubbleMetadata();
+        if (bubbleMetadata != null && bubbleMetadata.isNotificationSuppressed()) {
+            // b/274759612: Detect and report an event when a notification has both an FSI and a
+            // suppressive BubbleMetadata, and now correctly block the FSI from firing.
+            return getDecisionGivenSuppression(
+                    FullScreenIntentDecision.NO_FSI_SUPPRESSIVE_BUBBLE_METADATA,
                     suppressedByDND);
         }
 
@@ -325,6 +342,9 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
         final int uid = entry.getSbn().getUid();
         final String packageName = entry.getSbn().getPackageName();
         switch (decision) {
+            case NO_FSI_DISABLED:
+                mLogger.logNoFullscreen(entry, "Disabled");
+                return;
             case NO_FULL_SCREEN_INTENT:
                 return;
             case NO_FSI_SUPPRESSED_BY_DND:
@@ -340,6 +360,11 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
                 mUiEventLogger.log(FSI_SUPPRESSED_SUPPRESSIVE_GROUP_ALERT_BEHAVIOR, uid,
                         packageName);
                 mLogger.logNoFullscreenWarning(entry, "GroupAlertBehavior will prevent HUN");
+                return;
+            case NO_FSI_SUPPRESSIVE_BUBBLE_METADATA:
+                android.util.EventLog.writeEvent(0x534e4554, "274759612", uid, "bubbleMetadata");
+                mUiEventLogger.log(FSI_SUPPRESSED_SUPPRESSIVE_BUBBLE_METADATA, uid, packageName);
+                mLogger.logNoFullscreenWarning(entry, "BubbleMetadata may prevent HUN");
                 return;
             case FSI_DEVICE_NOT_INTERACTIVE:
                 mLogger.logFullscreen(entry, "Device is not interactive");

@@ -616,7 +616,7 @@ public class NotificationInterruptStateProviderImplTest extends SysuiTestCase {
         assertThat(mNotifInterruptionStateProvider.shouldLaunchFullScreenIntentWhenAdded(entry))
                 .isFalse();
         verify(mLogger, never()).logNoFullscreen(any(), any());
-        verify(mLogger).logNoFullscreenWarning(entry, "GroupAlertBehavior will prevent HUN");
+        verify(mLogger).logNoFullscreenWarning(entry, "BubbleMetadata may prevent HUN");
         verify(mLogger, never()).logFullscreen(any(), any());
 
         assertThat(mUiEventLoggerFake.numLogs()).isEqualTo(1);
@@ -634,8 +634,28 @@ public class NotificationInterruptStateProviderImplTest extends SysuiTestCase {
     }
 
     @Test
+    public void testShouldNotFullScreen_isSuppressedByBubbleMetadata() throws RemoteException {
+        NotificationEntry entry = createFsiNotification(IMPORTANCE_HIGH, /* silenced */ false);
+        Notification.BubbleMetadata bubbleMetadata = new Notification.BubbleMetadata.Builder("foo")
+                .setSuppressNotification(true).build();
+        entry.getSbn().getNotification().setBubbleMetadata(bubbleMetadata);
+        when(mPowerManager.isInteractive()).thenReturn(false);
+        when(mDreamManager.isDreaming()).thenReturn(true);
+        when(mStatusBarStateController.getState()).thenReturn(KEYGUARD);
+
+        assertThat(mNotifInterruptionStateProvider.shouldLaunchFullScreenIntentWhenAdded(entry))
+                .isFalse();
+        verify(mLogger, never()).logNoFullscreen(any(), any());
+        verify(mLogger).logNoFullscreenWarning(entry, "BubbleMetadata may prevent HUN");
+        verify(mLogger, never()).logFullscreen(any(), any());
+    }
+
+    @Test
     public void testShouldFullScreen_notInteractive() throws RemoteException {
         NotificationEntry entry = createFsiNotification(IMPORTANCE_HIGH, /* silenced */ false);
+        Notification.BubbleMetadata bubbleMetadata = new Notification.BubbleMetadata.Builder("foo")
+                .setSuppressNotification(false).build();
+        entry.getSbn().getNotification().setBubbleMetadata(bubbleMetadata);        
         when(mPowerManager.isInteractive()).thenReturn(false);
         when(mDreamManager.isDreaming()).thenReturn(false);
         when(mStatusBarStateController.getState()).thenReturn(SHADE);
