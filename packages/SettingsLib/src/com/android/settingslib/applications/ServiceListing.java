@@ -152,7 +152,7 @@ public class ServiceListing {
             }
             if (mValidator != null && !mValidator.test(info)) {
                 continue;
-            }            
+            }
             mServices.add(info);
         }
         for (Callback callback : mCallbacks) {

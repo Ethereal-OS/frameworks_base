@@ -340,7 +340,9 @@ oneway interface IStatusBar
     void enterStageSplitFromRunningApp(boolean leftOrTop);
 
     /**
-     * Used to block or unblock usage of gestural navigation
+     * Shows the media output switcher dialog.
+     *
+     * @param packageName of the session for which the output switcher is shown.
      */
-    void setBlockedGesturalNavigation(boolean blocked);
+    void showMediaOutputSwitcher(String packageName);
 }

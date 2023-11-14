@@ -29,7 +29,7 @@ public final class AccountManagerServiceTestFixtures {
     public static final String KEY_ACCOUNT_PASSWORD =
             "account_manager_service_test:account_password_key";
     public static final String KEY_INTENT_FLAGS =
-            "account_manager_service_test:intent_flags_key";            
+            "account_manager_service_test:intent_flags_key";
     public static final String KEY_OPTIONS_BUNDLE =
             "account_manager_service_test:option_bundle_key";
     public static final String ACCOUNT_NAME_SUCCESS = "success_on_return@fixture.com";

@@ -3091,7 +3091,7 @@ public class UsageStatsService extends SystemService implements
             mAppStandby.setAdminProtectedPackages(packageNames, userId);
         }
 
-        @Override        
+        @Override
         public void onAdminDataAvailable() {
             mAppStandby.onAdminDataAvailable();
         }

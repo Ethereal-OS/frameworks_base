@@ -743,7 +743,7 @@ public class AccountManagerServiceTest extends AndroidTestCase {
                 eq(AccountManager.ERROR_CODE_INVALID_RESPONSE), contains("invalid intent"));
     }
 
-    @SmallTest    
+    @SmallTest
     public void testStartAddAccountSessionError() throws Exception {
         unlockSystemUser();
         Bundle options = createOptionsWithAccountName(

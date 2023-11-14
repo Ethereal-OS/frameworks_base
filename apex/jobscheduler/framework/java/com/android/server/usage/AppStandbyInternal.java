@@ -227,6 +227,8 @@ public interface AppStandbyInternal {
     
     void setAdminProtectedPackages(Set<String> packageNames, int userId);
 
+    void setAdminProtectedPackages(Set<String> packageNames, int userId);
+
     /**
      * @return {@code true} if the given package is an active device admin app.
      */

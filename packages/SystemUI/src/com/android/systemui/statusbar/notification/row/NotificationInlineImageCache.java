@@ -85,6 +85,15 @@ public class NotificationInlineImageCache implements NotificationInlineImageReso
         });
     }
 
+    @Override
+    public void cancelRunningTasks() {
+        mCache.forEach((key, value) -> {
+            if (value.getStatus() != AsyncTask.Status.FINISHED) {
+                value.cancel(true);
+            }
+        });
+    }
+
     private static class PreloadImageTask extends AsyncTask<Uri, Void, Drawable> {
         private final NotificationInlineImageResolver mResolver;
 

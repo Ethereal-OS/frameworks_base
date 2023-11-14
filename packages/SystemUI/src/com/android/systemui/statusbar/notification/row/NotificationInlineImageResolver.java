@@ -49,6 +49,9 @@ public class NotificationInlineImageResolver implements ImageResolver {
     // Timeout for loading images from ImageCache when calling from UI thread
     private static final long MAX_UI_THREAD_TIMEOUT_MS = 100L;
 
+    // Timeout for loading images from ImageCache when calling from UI thread
+    private static final long MAX_UI_THREAD_TIMEOUT_MS = 100L;
+
     private final Context mContext;
     private final ImageCache mImageCache;
     private Set<Uri> mWantedUriSet;
@@ -126,7 +129,7 @@ public class NotificationInlineImageResolver implements ImageResolver {
         }
         return null;
     }
-    
+
     /**
      * Loads an image from the Uri.
      * This method is synchronous and is usually called from the Main thread.
@@ -243,7 +246,7 @@ public class NotificationInlineImageResolver implements ImageResolver {
         mImageCache.cancelRunningTasks();
     }
 
-    /**    
+    /**
      * A interface for internal cache implementation of this resolver.
      */
     interface ImageCache {
@@ -281,7 +284,7 @@ public class NotificationInlineImageResolver implements ImageResolver {
         /**
          * Cancel all unfinished image loading tasks
          */
-        void cancelRunningTasks();        
+        void cancelRunningTasks();
     }
 
 }
