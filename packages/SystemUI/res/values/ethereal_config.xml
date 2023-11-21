@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Copyright (C) 2022-2023 Ethereal
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- StatusBar burn-in protection -->
+    <bool name="config_statusBarBurnInProtection">false</bool>
+
+    <!-- Preferred max refresh rate at AOD & Ambient Display, if supported by the display. -->
+    <integer name="config_aodMaxRefreshRate">-1</integer>
+
+    <!-- FPSInfoService FPS node file path -->
+    <string name="config_fpsInfoSysNode" translatable="false"></string>
+
+    <!-- FPS measure interval in milliseconds, default 1000 -->
+    <integer name="config_fpsReadInterval">1000</integer>
+
+    <!-- The CPU temperature sensor path, defaults to empty -->
+    <string name="config_cpuTempSensor" translatable="false">/sys/class/thermal/thermal_zone0/temp</string>
+
+    <!-- The CPU temperature divider, if needed -->
+    <integer name="config_cpuTempDivider" translatable="false">1000</integer>
+
+    <!-- The CPUs to display in CPUInfoService view -->
+    <string name="config_displayCpus" translatable="false"></string>
+
+    <!-- If not empty, sets the AVC codec profile level used for the internal screen recorder.
+         Possible values: 3, 3.1, 3.2, 4, 4.1, 4.2
+    -->
+    <string name="config_screenRecorderAVCProfileLevel" translatable="false">4.2</string>
+</resources>
