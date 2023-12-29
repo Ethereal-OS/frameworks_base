@@ -210,7 +210,7 @@
     <dimen name="notification_min_interaction_height">40dp</dimen>
 
     <!-- Radius for notifications corners without adjacent notifications -->
-    <dimen name="notification_corner_radius">28dp</dimen>
+    <dimen name="notification_corner_radius">10dp</dimen>
 
     <!-- Distance over which notification corner animations run, near the shelf while scrolling. -->
     <dimen name="notification_corner_animation_distance">48dp</dimen>
@@ -336,7 +336,7 @@
     <dimen name="overlay_offset_x">16dp</dimen>
     <dimen name="overlay_action_container_margin_horizontal">8dp</dimen>
     <dimen name="overlay_bg_protection_height">242dp</dimen>
-    <dimen name="overlay_action_container_corner_radius">18dp</dimen>
+    <dimen name="overlay_action_container_corner_radius">10dp</dimen>
     <dimen name="overlay_action_container_padding_vertical">4dp</dimen>
     <dimen name="overlay_action_container_padding_right">8dp</dimen>
     <dimen name="overlay_dismiss_button_tappable_size">48dp</dimen>
@@ -385,7 +385,7 @@
     <!-- The size of each of the icon buttons in the QS footer -->
     <dimen name="qs_footer_action_button_size">48dp</dimen>
 
-    <dimen name="qs_footer_action_corner_radius">20dp</dimen>
+    <dimen name="qs_footer_action_corner_radius">10dp</dimen>
 
     <!-- (48dp - 40dp) / 2 -->
     <dimen name="qs_footer_action_inset">4dp</dimen>
@@ -445,7 +445,7 @@
 
     <dimen name="notification_panel_margin_horizontal">0dp</dimen>
 
-    <dimen name="brightness_mirror_height">48dp</dimen>
+    <dimen name="brightness_mirror_height">34dp</dimen>
 
     <dimen name="volume_dialog_panel_transparent_padding_horizontal">8dp</dimen>
 
@@ -459,9 +459,9 @@
 
     <dimen name="volume_dialog_panel_width_half">28dp</dimen>
 
-    <dimen name="volume_dialog_slider_width">42dp</dimen>
+    <dimen name="volume_dialog_slider_width">26dp</dimen>
 
-    <dimen name="volume_dialog_slider_corner_radius">21dp</dimen>
+    <dimen name="volume_dialog_slider_corner_radius">4dp</dimen>
 
     <!-- (volume_dialog_panel_width - rounded_slider_icon_size) / 2 -->
     <dimen name="volume_slider_icon_inset">11dp</dimen>
@@ -525,9 +525,9 @@
     <!-- The size of the gesture span needed to activate the "pull" notification expansion -->
     <dimen name="pull_span_min">25dp</dimen>
 
-    <dimen name="qs_corner_radius">28dp</dimen>
-    <dimen name="qs_tile_height">80dp</dimen>
-    <dimen name="qs_tile_margin_horizontal">8dp</dimen>
+    <dimen name="qs_corner_radius">8dp</dimen>
+    <dimen name="qs_tile_height">60dp</dimen>
+    <dimen name="qs_tile_margin_horizontal">12dp</dimen>
     <dimen name="qs_tile_margin_vertical">@dimen/qs_tile_margin_horizontal</dimen>
     <dimen name="qs_tile_margin_top_bottom">4dp</dimen>
     <dimen name="qs_brightness_margin_top">12dp</dimen>
@@ -590,7 +590,7 @@
     <dimen name="qs_security_footer_single_line_height">48dp</dimen>
     <dimen name="qs_footers_margin_bottom">8dp</dimen>
     <dimen name="qs_security_footer_background_inset">0dp</dimen>
-    <dimen name="qs_security_footer_corner_radius">28dp</dimen>
+    <dimen name="qs_security_footer_corner_radius">10dp</dimen>
 
     <dimen name="segmented_button_spacing">0dp</dimen>
     <dimen name="borderless_button_radius">2dp</dimen>
@@ -684,13 +684,13 @@
     <!-- With the large clock, move up slightly from the center -->
     <dimen name="keyguard_large_clock_top_margin">-60dp</dimen>
 
-    <dimen name="notification_scrim_corner_radius">32dp</dimen>
+    <dimen name="notification_scrim_corner_radius">10dp</dimen>
 
     <!-- The minimum amount the user needs to swipe to go to the camera / phone. -->
     <dimen name="keyguard_min_swipe_amount">110dp</dimen>
 
     <!-- The minimum background radius when swiping to a side for the camera / phone affordances. -->
-    <dimen name="keyguard_affordance_min_background_radius">30dp</dimen>
+    <dimen name="keyguard_affordance_min_background_radius">10dp</dimen>
 
     <!-- The grow amount for the camera and phone circles when hinting -->
     <dimen name="hint_grow_amount_sideways">60dp</dimen>
@@ -760,7 +760,7 @@
 
     <dimen name="keyguard_affordance_fixed_height">48dp</dimen>
     <dimen name="keyguard_affordance_fixed_width">48dp</dimen>
-    <dimen name="keyguard_affordance_fixed_radius">24dp</dimen>
+    <dimen name="keyguard_affordance_fixed_radius">10dp</dimen>
     <!-- Amount the button should shake when it's not long-pressed for long enough. -->
     <dimen name="keyguard_affordance_shake_amplitude">8dp</dimen>
 
@@ -888,7 +888,7 @@
     <!-- Power Menu Lite -->
     <dimen name="global_actions_button_size">96dp</dimen>
     <dimen name="global_actions_button_padding">38dp</dimen>
-    <dimen name="global_actions_corner_radius">28dp</dimen>
+    <dimen name="global_actions_corner_radius">8dp</dimen>
     <dimen name="global_actions_lite_padding">24dp</dimen>
     <dimen name="global_actions_info_margin">32dp</dimen>
 
@@ -992,7 +992,7 @@
     <integer name="wired_charging_keyguard_text_animation_distance">-30</integer>
 
     <!-- Logout button -->
-    <dimen name="logout_button_corner_radius">50dp</dimen>
+    <dimen name="logout_button_corner_radius">10dp</dimen>
 
     <!--  Blur radius on status bar window and power menu  -->
     <dimen name="min_window_blur_radius">1px</dimen>
@@ -1010,7 +1010,7 @@
     <!-- Icon size of Ongoing App Ops chip -->
     <dimen name="ongoing_appops_chip_icon_size">16dp</dimen>
     <!-- Radius of Ongoing App Ops chip corners -->
-    <dimen name="ongoing_appops_chip_bg_corner_radius">28dp</dimen>
+    <dimen name="ongoing_appops_chip_bg_corner_radius">10dp</dimen>
     <!--  One or two privacy items  -->
     <dimen name="ongoing_appops_chip_min_width">56dp</dimen>
     <!--  Three privacy items. This value must not be exceeded  -->
@@ -1034,7 +1034,7 @@
 
     <!-- Size of media cards in the QSPanel carousel -->
     <dimen name="qs_media_padding">16dp</dimen>
-    <dimen name="qs_media_album_radius">14dp</dimen>
+    <dimen name="qs_media_album_radius">10dp</dimen>
     <dimen name="qs_media_info_margin">12dp</dimen>
     <dimen name="qs_media_info_spacing">8dp</dimen>
     <dimen name="qs_media_icon_offset">4dp</dimen>
@@ -1118,7 +1118,7 @@
     <dimen name="control_chevron_icon_size">20dp</dimen>
     <dimen name="control_spacing">8dp</dimen>
     <dimen name="control_list_divider">1dp</dimen>
-    <dimen name="control_corner_radius">14dp</dimen>
+    <dimen name="control_corner_radius">10dp</dimen>
     <dimen name="control_height">104dp</dimen>
     <dimen name="control_padding">12dp</dimen>
     <dimen name="control_padding_adjustment">4dp</dimen>
@@ -1190,7 +1190,7 @@
     <dimen name="screenrecord_spinner_text_padding_start">20dp</dimen>
     <dimen name="screenrecord_spinner_text_padding_end">80dp</dimen>
     <dimen name="screenrecord_spinner_arrow_size">24dp</dimen>
-    <dimen name="screenrecord_spinner_background_radius">28dp</dimen>
+    <dimen name="screenrecord_spinner_background_radius">10dp</dimen>
 
     <dimen name="screenrecord_title_margin_top">20dp</dimen>
     <dimen name="screenrecord_warning_line_height">20dp</dimen>
@@ -1209,11 +1209,11 @@
     <dimen name="media_output_dialog_header_album_icon_size">72dp</dimen>
     <dimen name="media_output_dialog_header_back_icon_size">32dp</dimen>
     <dimen name="media_output_dialog_header_icon_padding">16dp</dimen>
-    <dimen name="media_output_dialog_icon_corner_radius">16dp</dimen>
+    <dimen name="media_output_dialog_icon_corner_radius">10dp</dimen>
     <dimen name="media_output_dialog_title_anim_y_delta">12.5dp</dimen>
     <dimen name="media_output_dialog_app_tier_icon_size">20dp</dimen>
-    <dimen name="media_output_dialog_background_radius">16dp</dimen>
-    <dimen name="media_output_dialog_active_background_radius">28dp</dimen>
+    <dimen name="media_output_dialog_background_radius">10dp</dimen>
+    <dimen name="media_output_dialog_active_background_radius">10dp</dimen>
     <dimen name="media_output_dialog_default_margin_end">16dp</dimen>
     <dimen name="media_output_dialog_selectable_margin_end">80dp</dimen>
 
@@ -1309,8 +1309,8 @@
          it is immediately visible. -->
     <integer name="auth_ripple_alpha_in_duration">100</integer>
 
-    <dimen name="people_space_widget_radius">28dp</dimen>
-    <dimen name="people_space_image_radius">20dp</dimen>
+    <dimen name="people_space_widget_radius">10dp</dimen>
+    <dimen name="people_space_image_radius">10dp</dimen>
     <dimen name="people_space_messages_count_radius">12dp</dimen>
     <dimen name="people_space_widget_background_padding">6dp</dimen>
     <dimen name="required_width_for_medium">136dp</dimen>
@@ -1354,12 +1354,12 @@
     <dimen name="accessibility_floating_menu_margin">16dp</dimen>
     <dimen name="accessibility_floating_menu_small_padding">6dp</dimen>
     <dimen name="accessibility_floating_menu_small_width_height">36dp</dimen>
-    <dimen name="accessibility_floating_menu_small_single_radius">25dp</dimen>
-    <dimen name="accessibility_floating_menu_small_multiple_radius">20dp</dimen>
+    <dimen name="accessibility_floating_menu_small_single_radius">10dp</dimen>
+    <dimen name="accessibility_floating_menu_small_multiple_radius">8dp</dimen>
     <dimen name="accessibility_floating_menu_large_padding">8dp</dimen>
     <dimen name="accessibility_floating_menu_large_width_height">56dp</dimen>
-    <dimen name="accessibility_floating_menu_large_single_radius">35dp</dimen>
-    <dimen name="accessibility_floating_menu_large_multiple_radius">35dp</dimen>
+    <dimen name="accessibility_floating_menu_large_single_radius">10dp</dimen>
+    <dimen name="accessibility_floating_menu_large_multiple_radius">10dp</dimen>
 
     <dimen name="accessibility_floating_tooltip_arrow_width">8dp</dimen>
     <dimen name="accessibility_floating_tooltip_arrow_height">16dp</dimen>
@@ -1370,20 +1370,20 @@
     <dimen name="accessibility_floating_tooltip_padding">16dp</dimen>
     <dimen name="accessibility_floating_tooltip_font_size">14sp</dimen>
 
-    <dimen name="rounded_slider_height">48dp</dimen>
+    <dimen name="rounded_slider_height">34dp</dimen>
     <!-- rounded_slider_height / 2 -->
-    <dimen name="rounded_slider_corner_radius">24dp</dimen>
-    <dimen name="rounded_slider_icon_size">20dp</dimen>
+    <dimen name="rounded_slider_corner_radius">8dp</dimen>
+    <dimen name="rounded_slider_icon_size">16dp</dimen>
     <!-- (rounded_slider_height - rounded_slider_icon_size) / 2 -->
     <dimen name="rounded_slider_icon_inset">14dp</dimen>
     <!-- rounded_slider_corner_radius - rounded_slider_track_corner_radius -->
-    <dimen name="rounded_slider_track_inset">22dp</dimen>
+    <dimen name="rounded_slider_track_inset">16dp</dimen>
     <dimen name="rounded_slider_track_width">4dp</dimen>
     <!-- rounded_slider_track_width / 2 -->
     <dimen name="rounded_slider_track_corner_radius">2dp</dimen>
     <dimen name="rounded_slider_background_padding">8dp</dimen>
     <!-- rounded_slider_corner_radius + rounded_slider_background_padding -->
-    <dimen name="rounded_slider_background_rounded_corner">32dp</dimen>
+    <dimen name="rounded_slider_background_rounded_corner">8dp</dimen>
 
     <!-- Location on the screen of the center of the physical power button. This is a reasonable
     default that should be overridden by device-specific overlays. -->
@@ -1420,7 +1420,7 @@
     <dimen name="card_carousel_dot_margin">4dp</dimen>
     <dimen name="min_wallet_empty_height">208dp</dimen>
     <dimen name="wallet_card_border_width">1dp</dimen>
-    <dimen name="wallet_empty_state_corner_radius">24dp</dimen>
+    <dimen name="wallet_empty_state_corner_radius">10dp</dimen>
     <dimen name="wallet_tile_card_view_height">32dp</dimen>
     <dimen name="wallet_tile_card_view_width">50dp</dimen>
     <dimen name="wallet_button_horizontal_padding">24dp</dimen>
@@ -1431,7 +1431,7 @@
     <dimen name="ongoing_call_chip_icon_size">16dp</dimen>
     <!-- The padding between the icon and the text. -->
     <dimen name="ongoing_call_chip_icon_text_padding">4dp</dimen>
-    <dimen name="ongoing_call_chip_corner_radius">28dp</dimen>
+    <dimen name="ongoing_call_chip_corner_radius">10dp</dimen>
 
     <!-- Status bar user chip -->
     <dimen name="status_bar_user_chip_avatar_size">16dp</dimen>
@@ -1450,7 +1450,7 @@
     <dimen name="signal_strength_icon_size">24dp</dimen>
 
     <!-- Internet dialog related dimensions -->
-    <dimen name="internet_dialog_corner_radius">24dp</dimen>
+    <dimen name="internet_dialog_corner_radius">10dp</dimen>
     <!-- Width of progress bar -->
     <dimen name="internet_dialog_progress_bar_width">152dp</dimen>
     <!-- End margin of network layout -->
@@ -1459,7 +1459,7 @@
     <!-- Minimum width of switch -->
     <dimen name="settingslib_min_switch_width">52dp</dimen>
     <!-- Radius of switch bar -->
-    <dimen name="settingslib_switch_bar_radius">35dp</dimen>
+    <dimen name="settingslib_switch_bar_radius">10dp</dimen>
     <!-- Margin of switch thumb -->
     <dimen name="settingslib_switch_thumb_margin">4dp</dimen>
     <!-- Size of switch thumb -->
@@ -1469,7 +1469,7 @@
     <!-- Height of switch track -->
     <dimen name="settingslib_switch_track_height">28dp</dimen>
     <!-- Radius of switch track -->
-    <dimen name="settingslib_switch_track_radius">35dp</dimen>
+    <dimen name="settingslib_switch_track_radius">10dp</dimen>
 
     <!-- Height percentage of the parent container occupied by the communal view -->
     <item name="communal_source_height_percentage" format="float" type="dimen">0.80</item>
@@ -1596,7 +1596,7 @@
     <dimen name="broadcast_dialog_subtitle_text_size">14sp</dimen>
     <dimen name="broadcast_dialog_icon_size">24dp</dimen>
     <dimen name="broadcast_dialog_icon_margin_top">25dp</dimen>
-    <dimen name="broadcast_dialog_btn_radius">100dp</dimen>
+    <dimen name="broadcast_dialog_btn_radius">10dp</dimen>
     <dimen name="broadcast_dialog_btn_margin_bottom">4dp</dimen>
     <dimen name="broadcast_dialog_btn_text_size">16sp</dimen>
     <dimen name="broadcast_dialog_btn_minHeight">44dp</dimen>
