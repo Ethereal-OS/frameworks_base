@@ -50,7 +50,6 @@ import android.os.UserHandle;
 import android.provider.DeviceConfig;
 import android.provider.DeviceConfigInterface;
 import android.provider.Settings;
-import android.text.TextUtils;
 import android.util.IndentingPrintWriter;
 import android.util.Pair;
 import android.util.Slog;
@@ -91,8 +90,6 @@ public class DisplayModeDirector {
     private static final String TAG = "DisplayModeDirector";
     private boolean mLoggingEnabled;
 
-    private static final String RESOLUTION_METRIC_SETTING_KEY = "user_selected_resolution";
-
     private static final int MSG_REFRESH_RATE_RANGE_CHANGED = 1;
     private static final int MSG_LOW_BRIGHTNESS_THRESHOLDS_CHANGED = 2;
     private static final int MSG_DEFAULT_PEAK_REFRESH_RATE_CHANGED = 3;
@@ -116,7 +113,6 @@ public class DisplayModeDirector {
 
     private final AppRequestObserver mAppRequestObserver;
     private final SettingsObserver mSettingsObserver;
-    private final ResolutionSettingsObserver mResolutionSettingsObserver;
     private final DisplayObserver mDisplayObserver;
     private final UdfpsObserver mUdfpsObserver;
     private final SensorObserver mSensorObserver;
@@ -163,9 +159,6 @@ public class DisplayModeDirector {
         mSupportedModesByDisplay = new SparseArray<>();
         mDefaultModeByDisplay = new SparseArray<>();
         mAppRequestObserver = new AppRequestObserver();
-        mForceSelectedResolution = context.getResources().getBoolean(
-                com.android.internal.R.bool.config_forceToUseSelectedResolution);
-        mResolutionSettingsObserver = new ResolutionSettingsObserver(context, handler);
         mDisplayObserver = new DisplayObserver(context, handler);
         mDeviceConfig = injector.getDeviceConfig();
         mDeviceConfigDisplaySettings = new DeviceConfigDisplaySettings();
@@ -194,9 +187,6 @@ public class DisplayModeDirector {
      */
     public void start(SensorManager sensorManager) {
         mSettingsObserver.observe();
-        if (mForceSelectedResolution) {
-            mResolutionSettingsObserver.observe();
-        }
         mDisplayObserver.observe();
         mBrightnessObserver.observe(sensorManager);
         mSensorObserver.observe();
@@ -205,6 +195,7 @@ public class DisplayModeDirector {
         synchronized (mLock) {
             // We may have a listener already registered before the call to start, so go ahead and
             // notify them to pick up our newly initialized state.
+            mSettingsObserver.updateRefreshRateSettingLocked();
             notifyDesiredDisplayModeSpecsChangedLocked();
         }
     }
@@ -351,15 +342,6 @@ public class DisplayModeDirector {
                         || primarySummary.width == Vote.INVALID_SIZE) {
                     primarySummary.width = defaultMode.getPhysicalWidth();
                     primarySummary.height = defaultMode.getPhysicalHeight();
-                }
-
-                if (mForceSelectedResolution) {
-                    int width = mResolutionSettingsObserver.getWidth();
-                    int height = mResolutionSettingsObserver.getHeight();
-                    if (width > 0 && height > 0) {
-                        primarySummary.width = width;
-                        primarySummary.height = height;
-                    }
                 }
 
                 availableModes = filterModes(modes, primarySummary);
@@ -1189,8 +1171,6 @@ public class DisplayModeDirector {
                 Settings.Global.getUriFor(Settings.Global.LOW_POWER_MODE);
         private final Uri mMatchContentFrameRateSetting =
                 Settings.Secure.getUriFor(Settings.Secure.MATCH_CONTENT_FRAME_RATE);
-        private final Uri mLowPowerRefreshRateSetting =
-                Settings.System.getUriFor(Settings.System.LOW_POWER_REFRESH_RATE);
 
         private final Context mContext;
         private float mDefaultPeakRefreshRate;
@@ -1229,8 +1209,6 @@ public class DisplayModeDirector {
                     UserHandle.USER_SYSTEM);
             cr.registerContentObserver(mMatchContentFrameRateSetting, false /*notifyDescendants*/,
                     this);
-            cr.registerContentObserver(mLowPowerRefreshRateSetting, false /*notifyDescendants*/, this,
-                    UserHandle.USER_SYSTEM);
 
             Float deviceConfigDefaultPeakRefresh =
                     mDeviceConfigDisplaySettings.getDefaultPeakRefreshRate();
@@ -1271,8 +1249,7 @@ public class DisplayModeDirector {
                 if (mPeakRefreshRateSetting.equals(uri)
                         || mMinRefreshRateSetting.equals(uri)) {
                     updateRefreshRateSettingLocked();
-                } else if (mLowPowerModeSetting.equals(uri)
-                        || mLowPowerRefreshRateSetting.equals(uri)) {
+                } else if (mLowPowerModeSetting.equals(uri)) {
                     updateLowPowerModeSettingLocked();
                 } else if (mMatchContentFrameRateSetting.equals(uri)) {
                     updateModeSwitchingTypeSettingLocked();
@@ -1314,10 +1291,8 @@ public class DisplayModeDirector {
         private void updateLowPowerModeSettingLocked() {
             boolean inLowPowerMode = Settings.Global.getInt(mContext.getContentResolver(),
                     Settings.Global.LOW_POWER_MODE, 0 /*default*/) != 0;
-            boolean shouldSwitchRefreshRate = Settings.System.getInt(mContext.getContentResolver(),
-                    Settings.System.LOW_POWER_REFRESH_RATE, 1 /*default*/) != 0;
             final Vote vote;
-            if (inLowPowerMode && shouldSwitchRefreshRate) {
+            if (inLowPowerMode) {
                 vote = Vote.forRefreshRates(0f, 60f);
             } else {
                 vote = null;
@@ -1329,7 +1304,7 @@ public class DisplayModeDirector {
         private void updateRefreshRateSettingLocked() {
             final ContentResolver cr = mContext.getContentResolver();
             float minRefreshRate = Settings.System.getFloatForUser(cr,
-                    Settings.System.MIN_REFRESH_RATE, 60.0f, cr.getUserId());
+                    Settings.System.MIN_REFRESH_RATE, mDefaultRefreshRate, cr.getUserId());
             float peakRefreshRate = Settings.System.getFloatForUser(cr,
                     Settings.System.PEAK_REFRESH_RATE, mDefaultPeakRefreshRate, cr.getUserId());
             updateRefreshRateSettingLocked(minRefreshRate, peakRefreshRate, mDefaultRefreshRate);
@@ -1386,61 +1361,6 @@ public class DisplayModeDirector {
             pw.println("  SettingsObserver");
             pw.println("    mDefaultRefreshRate: " + mDefaultRefreshRate);
             pw.println("    mDefaultPeakRefreshRate: " + mDefaultPeakRefreshRate);
-        }
-    }
-
-    final class ResolutionSettingsObserver extends ContentObserver {
-        private final Uri mUserSelectedResolutionUri =
-                Settings.System.getUriFor(RESOLUTION_METRIC_SETTING_KEY);
-
-        private final Context mContext;
-
-        private int mWidth;
-        private int mHeight;
-
-        ResolutionSettingsObserver(@NonNull Context context, @NonNull Handler handler) {
-            super(handler);
-            mContext = context;
-        }
-
-        @Override
-        public void onChange(boolean selfChange, Uri uri, int userId) {
-            synchronized (mLock) {
-                if (mUserSelectedResolutionUri.equals(uri)) {
-                    updateResolutionSettingsLocked();
-                }
-            }
-        }
-
-        public void observe() {
-            final ContentResolver cr = mContext.getContentResolver();
-            cr.registerContentObserver(mUserSelectedResolutionUri, false /*notifyDescendants*/,
-                    this, UserHandle.USER_SYSTEM);
-
-            synchronized (mLock) {
-                updateResolutionSettingsLocked();
-            }
-        }
-
-        public int getWidth() {
-            return mWidth;
-        }
-
-        public int getHeight() {
-            return mHeight;
-        }
-
-        private void updateResolutionSettingsLocked() {
-            final ContentResolver cr = mContext.getContentResolver();
-            final String resolution = Settings.System.getString(cr, RESOLUTION_METRIC_SETTING_KEY);
-            if (!TextUtils.isEmpty(resolution) && resolution.contains("x")) {
-                final String[] splited = resolution.split("x");
-                mWidth = Integer.parseInt(splited[0]);
-                mHeight = Integer.parseInt(splited[1]);
-            } else {
-                mWidth = -1;
-                mHeight = -1;
-            }
         }
     }
 

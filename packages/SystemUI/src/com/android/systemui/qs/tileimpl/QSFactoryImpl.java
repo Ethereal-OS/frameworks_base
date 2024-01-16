@@ -1,6 +1,5 @@
 /*
  * Copyright (C) 2017 The Android Open Source Project
- * Copyright (C) 2017 The LineageOS Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use mHost file
  * except in compliance with the License. You may obtain a copy of the License at
@@ -82,10 +81,11 @@ public class QSFactoryImpl implements QSFactory {
     protected QSTileImpl createTileInternal(String tileSpec) {
         // Stock tiles.
         if (mTileMap.containsKey(tileSpec)
-                // We should not return a Garbage Monitory Tile if the build is not Debuggable
-                && (!tileSpec.equals(GarbageMonitor.MemoryTile.TILE_SPEC) || Build.IS_DEBUGGABLE)) {
+                // We should not return a Garbage Monitory Tile if the build is not Eng
+                && (!tileSpec.equals(GarbageMonitor.MemoryTile.TILE_SPEC) || Build.IS_ENG)) {
             return mTileMap.get(tileSpec).get();
         }
+
         // Custom tiles
         if (tileSpec.startsWith(CustomTile.PREFIX)) {
             return CustomTile.create(

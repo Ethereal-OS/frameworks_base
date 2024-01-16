@@ -22,6 +22,7 @@ import static android.content.pm.PackageManager.FLAG_PERMISSION_POLICY_FIXED;
 import static android.content.pm.PackageManager.FLAG_PERMISSION_SYSTEM_FIXED;
 import static android.content.pm.PackageManager.FLAG_PERMISSION_USER_FIXED;
 import static android.content.pm.PackageManager.FLAG_PERMISSION_USER_SET;
+import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 import static android.os.Build.VERSION_CODES.S;
 
 import android.Manifest;
@@ -48,6 +49,7 @@ import android.compat.annotation.EnabledAfter;
 import android.content.AttributionSource;
 import android.content.Context;
 import android.content.PermissionChecker;
+import android.content.pm.AppPermissionUtils;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
@@ -219,7 +221,6 @@ public final class PermissionManager {
 
     private static String[] sLocationProviderPkgNames;
     private static String[] sLocationExtraPkgNames;
-    private static String[] sExemptedPkgNames;
 
     /**
      * Creates a new instance.
@@ -1179,11 +1180,6 @@ public final class PermissionManager {
                 pkgNames.add(pkgName);
             }
         }
-        for (String pkgName: sExemptedPkgNames) {
-            if (pkgName != null) {
-                pkgNames.add(pkgName);
-            }
-        }
         return pkgNames;
     }
 
@@ -1203,8 +1199,6 @@ public final class PermissionManager {
                     R.array.config_locationProviderPackageNames);
             sLocationExtraPkgNames = context.getResources().getStringArray(
                     R.array.config_locationExtraPackageNames);
-            sExemptedPkgNames = context.getResources().getStringArray(
-                    R.array.config_indicatorExemptedPackageNames);
         }
     }
     /**
@@ -1396,8 +1390,7 @@ public final class PermissionManager {
             @ActivityManager.RunningAppProcessInfo.Importance int importanceToKeepSessionAlive) {
         try {
             mPermissionManager.startOneTimePermissionSession(packageName, mContext.getUserId(),
-                    timeoutMillis, revokeAfterKilledDelayMillis, importanceToResetTimer,
-                    importanceToKeepSessionAlive);
+                    timeoutMillis, revokeAfterKilledDelayMillis);
         } catch (RemoteException e) {
             e.rethrowFromSystemServer();
         }
@@ -1535,12 +1528,22 @@ public final class PermissionManager {
                     + permission);
             return PackageManager.PERMISSION_DENIED;
         }
+        int res;
         try {
             sShouldWarnMissingActivityManager = true;
-            return am.checkPermission(permission, pid, uid);
+            res = am.checkPermission(permission, pid, uid);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+
+        if (res != PERMISSION_GRANTED) {
+            if (uid == android.os.Process.myUid()) {
+                if (AppPermissionUtils.shouldSpoofSelfCheck(permission)) {
+                    res = PERMISSION_GRANTED;
+                }
+            }
+        }
+        return res;
     }
 
     /**
@@ -1673,12 +1676,24 @@ public final class PermissionManager {
     /* @hide */
     private static int checkPackageNamePermissionUncached(
             String permName, String pkgName, @UserIdInt int userId) {
+        int res;
         try {
-            return ActivityThread.getPackageManager().checkPermission(
+            res = ActivityThread.getPackageManager().checkPermission(
                     permName, pkgName, userId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+
+        if (res != PERMISSION_GRANTED) {
+            if (pkgName.equals(ActivityThread.currentPackageName())
+                    && userId == UserHandle.myUserId()
+                    && AppPermissionUtils.shouldSpoofSelfCheck(permName))
+            {
+                res = PERMISSION_GRANTED;
+            }
+        }
+
+        return res;
     }
 
     /* @hide */

@@ -1,14 +1,14 @@
 package com.android.keyguard;
 
-import static com.android.systemui.shared.recents.utilities.Utilities.isTablet;
+import static com.android.systemui.shared.recents.utilities.Utilities.isLargeScreen;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.content.Context;
-import android.graphics.Rect;
 import android.content.res.Configuration;
+import android.graphics.Rect;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
@@ -106,7 +106,7 @@ public class KeyguardClockSwitch extends RelativeLayout {
         if (mDisplayedClockSize != null) {
             boolean landscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE;
             boolean useLargeClock = mDisplayedClockSize == LARGE &&
-                    (!landscape || isTablet(mContext));
+                    (!landscape || isLargeScreen(mContext));
             updateClockViews(useLargeClock, /* animate */ true);
         }
     }
@@ -283,7 +283,7 @@ public class KeyguardClockSwitch extends RelativeLayout {
         }
         boolean landscape = getResources().getConfiguration().orientation
                 == Configuration.ORIENTATION_LANDSCAPE;
-        boolean useLargeClock = clockSize == LARGE && (!landscape || isTablet(mContext));
+        boolean useLargeClock = clockSize == LARGE && (!landscape || isLargeScreen(mContext));
 
         // let's make sure clock is changed only after all views were laid out so we can
         // translate them properly

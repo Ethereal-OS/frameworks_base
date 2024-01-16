@@ -228,7 +228,6 @@ import android.sysprop.SurfaceFlingerProperties;
 import android.text.format.DateUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
-import android.util.BoostFramework;
 import android.util.DisplayMetrics;
 import android.util.EventLog;
 import android.util.MergedConfiguration;
@@ -325,6 +324,7 @@ import com.android.server.power.ShutdownThread;
 import com.android.server.utils.PriorityDump;
 
 import dalvik.annotation.optimization.NeverCompile;
+import ink.kaleidoscope.server.ParallelSpaceManagerService;
 
 import java.io.BufferedWriter;
 import java.io.DataInputStream;
@@ -363,8 +363,6 @@ public class WindowManagerService extends IWindowManager.Stub
     static final int LAYOUT_REPEAT_THRESHOLD = 4;
 
     static final boolean PROFILE_ORIENTATION = false;
-    static WindowState mFocusingWindow;
-    String mFocusingActivity;
 
     /** The maximum length we will accept for a loaded animation duration:
      * this is 10 seconds.
@@ -474,8 +472,6 @@ public class WindowManagerService extends IWindowManager.Stub
     final TransitionTracer mTransitionTracer;
 
     private final DisplayAreaPolicy.Provider mDisplayAreaPolicyProvider;
-
-    private BoostFramework mPerf = null;
 
     final private KeyguardDisableHandler mKeyguardDisableHandler;
 
@@ -3511,28 +3507,12 @@ public class WindowManagerService extends IWindowManager.Stub
         ValueAnimator.setDurationScale(scale);
     }
 
-    private float animationScalesCheck (int which) {
-        float value = -1.0f;
-        if (!mAnimationsDisabled) {
-            if (value == -1.0f) {
-                switch (which) {
-                    case WINDOW_ANIMATION_SCALE: value = mWindowAnimationScaleSetting; break;
-                    case TRANSITION_ANIMATION_SCALE: value = mTransitionAnimationScaleSetting; break;
-                    case ANIMATION_DURATION_SCALE: value = mAnimatorDurationScaleSetting; break;
-                }
-            }
-        } else {
-            value = 0;
-        }
-        return value;
-    }
-
     public float getWindowAnimationScaleLocked() {
-        return animationScalesCheck(WINDOW_ANIMATION_SCALE);
+        return mAnimationsDisabled ? 0 : mWindowAnimationScaleSetting;
     }
 
     public float getTransitionAnimationScaleLocked() {
-        return animationScalesCheck(TRANSITION_ANIMATION_SCALE);
+        return mAnimationsDisabled ? 0 : mTransitionAnimationScaleSetting;
     }
 
     @Override
@@ -3646,18 +3626,22 @@ public class WindowManagerService extends IWindowManager.Stub
 
     // Called by window manager policy.  Not exposed externally.
     @Override
-    public void reboot(boolean confirm, String reason) {
-        // Pass in the UI context, since ShutdownThread requires it (to show UI).
-        ShutdownThread.rebootCustom(ActivityThread.currentActivityThread().getSystemUiContext(),
-                reason, confirm);
-    }
-
-    // Called by window manager policy.  Not exposed externally.
-    @Override
     public void rebootSafeMode(boolean confirm) {
         // Pass in the UI context, since ShutdownThread requires it (to show UI).
         ShutdownThread.rebootSafeMode(ActivityThread.currentActivityThread().getSystemUiContext(),
                 confirm);
+    }
+
+    // Called by window manager policy.  Not exposed externally.
+    @Override
+    public void reboot(String reason, boolean confirm) {
+        ShutdownThread.reboot(ActivityThread.currentActivityThread().getSystemUiContext(), reason, confirm);
+    }
+
+    // Called by window manager policy.  Not exposed externally.
+    @Override
+    public void advancedReboot(String reason, boolean confirm) {
+        ShutdownThread.advancedReboot(ActivityThread.currentActivityThread().getSystemUiContext(), reason, confirm);
     }
 
     public void setCurrentProfileIds(final int[] currentProfileIds) {
@@ -3697,7 +3681,7 @@ public class WindowManagerService extends IWindowManager.Stub
         for (int i = 0; i < mCurrentProfileIds.length; i++) {
             if (mCurrentProfileIds[i] == userId) return true;
         }
-        return false;
+        return ParallelSpaceManagerService.isCurrentParallelUser(userId);
     }
 
     public void enableScreenAfterBoot() {
@@ -6250,12 +6234,6 @@ public class WindowManagerService extends IWindowManager.Stub
         }
 
         mLatencyTracker.onActionStart(ACTION_ROTATE_SCREEN);
-        if (mPerf == null) {
-            mPerf = new BoostFramework();
-        }
-        if (mPerf != null) {
-            mPerf.perfHint(BoostFramework.VENDOR_HINT_ROTATION_LATENCY_BOOST, null);
-        }
         mExitAnimId = exitAnim;
         mEnterAnimId = enterAnim;
 
@@ -6387,9 +6365,6 @@ public class WindowManagerService extends IWindowManager.Stub
         }
         mAtmService.endLaunchPowerMode(POWER_MODE_REASON_CHANGE_DISPLAY);
         mLatencyTracker.onActionEnd(ACTION_ROTATE_SCREEN);
-        if (mPerf != null) {
-            mPerf.perfLockRelease();
-        }
     }
 
     static int getPropertyInt(String[] tokens, int index, int defUnits, int defDps,
@@ -6567,6 +6542,11 @@ public class WindowManagerService extends IWindowManager.Stub
             }
             return dc.getDisplayPolicy().hasNavigationBar();
         }
+    }
+
+    @Override
+    public void sendCustomAction(Intent intent) {
+        mPolicy.sendCustomAction(intent);
     }
 
     @Override

@@ -32,6 +32,7 @@ import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.annotation.DrawableRes;
 import android.app.StatusBarManager;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
@@ -39,6 +40,7 @@ import android.graphics.Point;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.provider.Settings;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -61,7 +63,6 @@ import androidx.annotation.Nullable;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.settingslib.Utils;
-import com.android.systemui.Dependency;
 import com.android.systemui.Gefingerpoken;
 import com.android.systemui.R;
 import com.android.systemui.animation.Interpolators;
@@ -74,7 +75,6 @@ import com.android.systemui.navigationbar.buttons.KeyButtonDrawable;
 import com.android.systemui.navigationbar.buttons.NearestTouchFrame;
 import com.android.systemui.navigationbar.buttons.RotationContextButton;
 import com.android.systemui.navigationbar.gestural.EdgeBackGestureHandler;
-import com.android.systemui.navigationbar.gestural.NavigationHandle;
 import com.android.systemui.recents.Recents;
 import com.android.systemui.settings.DisplayTracker;
 import com.android.systemui.shade.NotificationPanelViewController;
@@ -85,8 +85,6 @@ import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.statusbar.phone.AutoHideController;
 import com.android.systemui.statusbar.phone.CentralSurfaces;
 import com.android.systemui.statusbar.phone.LightBarTransitionsController;
-import com.android.systemui.tuner.TunerService;
-import com.android.systemui.statusbar.policy.Offset;
 import com.android.wm.shell.back.BackAnimation;
 import com.android.wm.shell.pip.Pip;
 
@@ -97,12 +95,9 @@ import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
 /** */
-public class NavigationBarView extends FrameLayout implements TunerService.Tunable {
+public class NavigationBarView extends FrameLayout {
     final static boolean DEBUG = false;
     final static String TAG = "NavBarView";
-
-    private static final String NAVIGATION_BAR_MENU_ARROW_KEYS =
-            "customsystem:" + Settings.System.NAVIGATION_BAR_MENU_ARROW_KEYS;
 
     final static boolean ALTERNATE_CAR_MODE_UI = false;
 
@@ -127,8 +122,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
     private KeyButtonDrawable mHomeDefaultIcon;
     private KeyButtonDrawable mRecentIcon;
     private KeyButtonDrawable mDockedIcon;
-    private KeyButtonDrawable mCursorRightIcon;
-    private KeyButtonDrawable mCursorLeftIcon;
     private Context mLightContext;
     private int mLightIconColor;
     private int mDarkIconColor;
@@ -164,6 +157,8 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
     private FloatingRotationButton mFloatingRotationButton;
     private RotationButtonController mRotationButtonController;
 
+    private boolean mHomeHandleForceHidden;
+
     /**
      * Helper that is responsible for showing the right toast when a disallowed activity operation
      * occurred. In pinned mode, we show instructions on how to break out of this mode, whilst in
@@ -186,13 +181,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
     private boolean mOverviewProxyEnabled;
     private boolean mShowSwipeUpUi;
     private UpdateActiveTouchRegionsCallback mUpdateActiveTouchRegionsCallback;
-
-    private boolean mShowCursorKeys;
-    private boolean mImeVisible;
-    private boolean mBlockedGesturalNavigation;
-
-    @Nullable
-    private ViewGroup mNavigationBarContents = null;
 
     private class NavTransitionListener implements TransitionListener {
         private boolean mBackTransitioning;
@@ -305,10 +293,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         final ContextualButton accessibilityButton =
                 new ContextualButton(R.id.accessibility_button, mLightContext,
                         R.drawable.ic_sysbar_accessibility_button);
-        final ContextualButton cursorLeftButton = new ContextualButton(R.id.dpad_left,
-                mLightContext, R.drawable.ic_chevron_start);
-        final ContextualButton cursorRightButton = new ContextualButton(R.id.dpad_right,
-                mLightContext, R.drawable.ic_chevron_end);
         mContextualButtonGroup.addButton(imeSwitcherButton);
         mContextualButtonGroup.addButton(accessibilityButton);
         mRotationContextButton = new RotationContextButton(R.id.rotate_suggestion,
@@ -344,8 +328,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         mButtonDispatchers.put(R.id.ime_switcher, imeSwitcherButton);
         mButtonDispatchers.put(R.id.accessibility_button, accessibilityButton);
         mButtonDispatchers.put(R.id.menu_container, mContextualButtonGroup);
-        mButtonDispatchers.put(R.id.dpad_left, cursorLeftButton);
-        mButtonDispatchers.put(R.id.dpad_right, cursorRightButton);
         mDeadZone = new DeadZone(this);
     }
 
@@ -458,14 +440,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         return mButtonDispatchers.get(R.id.home_handle);
     }
 
-    public ButtonDispatcher getCursorLeftButton() {
-        return mButtonDispatchers.get(R.id.dpad_left);
-    }
-
-    public ButtonDispatcher getCursorRightButton() {
-        return mButtonDispatchers.get(R.id.dpad_right);
-    }
-
     public SparseArray<ButtonDispatcher> getButtonDispatchers() {
         return mButtonDispatchers;
     }
@@ -497,8 +471,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         }
         if (densityChange || dirChange) {
             mRecentIcon = getDrawable(R.drawable.ic_sysbar_recent);
-            mCursorLeftIcon = getDrawable(R.drawable.ic_chevron_start);
-            mCursorRightIcon = getDrawable(R.drawable.ic_chevron_end);
             mContextualButtonGroup.updateIcons(mLightIconColor, mDarkIconColor);
         }
         if (orientationChange || densityChange || dirChange) {
@@ -615,8 +587,8 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         if (!visible) {
             mTransitionListener.onBackAltCleared();
         }
-        mImeVisible = visible;
         mRotationButtonController.getRotationButton().setCanShowRotationButton(!visible);
+        mEdgeBackGestureHandler.setImeVisible(visible);
     }
 
     void setDisabledFlags(int disabledFlags, SysUiState sysUiState) {
@@ -644,25 +616,18 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         KeyButtonDrawable backIcon = mBackIcon;
         orientBackButton(backIcon);
         KeyButtonDrawable homeIcon = mHomeDefaultIcon;
-        KeyButtonDrawable cursorLeftIcon = mCursorLeftIcon;
-        KeyButtonDrawable cursorRightIcon = mCursorRightIcon;
         if (!mUseCarModeUi) {
             orientHomeButton(homeIcon);
         }
         getHomeButton().setImageDrawable(homeIcon);
         getBackButton().setImageDrawable(backIcon);
-        getCursorLeftButton().setImageDrawable(cursorLeftIcon);
-        getCursorRightButton().setImageDrawable(cursorRightIcon);
 
         updateRecentsIcon();
-
-        boolean disableCursorKeys = !mShowCursorKeys || !useAltBack ||
-                (QuickStepContract.isGesturalMode(mNavBarMode) && mImeVisible);
 
         // Update IME button visibility, a11y and rotate button always overrides the appearance
         boolean disableImeSwitcher =
                 (mNavigationIconHints & StatusBarManager.NAVIGATION_HINT_IME_SWITCHER_SHOWN) == 0
-                || isImeRenderingNavButtons() || !disableCursorKeys;
+                || isImeRenderingNavButtons();
         mContextualButtonGroup.setButtonVisibility(R.id.ime_switcher, !disableImeSwitcher);
 
         mBarTransitions.reapplyDarkIntensity();
@@ -707,10 +672,20 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         getBackButton().setVisibility(disableBack       ? View.INVISIBLE : View.VISIBLE);
         getHomeButton().setVisibility(disableHome       ? View.INVISIBLE : View.VISIBLE);
         getRecentsButton().setVisibility(disableRecent  ? View.INVISIBLE : View.VISIBLE);
-        getHomeHandle().setVisibility(disableHomeHandle ? View.INVISIBLE : View.VISIBLE);
-        getCursorLeftButton().setVisibility(disableCursorKeys  ? View.INVISIBLE : View.VISIBLE);
-        getCursorRightButton().setVisibility(disableCursorKeys ? View.INVISIBLE : View.VISIBLE);
+        getHomeHandle().setVisibility(disableHomeHandle || mHomeHandleForceHidden ? View.INVISIBLE : View.VISIBLE);
         notifyActiveTouchRegions();
+    }
+
+    public void hideHomeHandle(boolean hide) {
+        mHomeHandleForceHidden = hide;
+        boolean disableRecent = isRecentsButtonDisabled() | !QuickStepContract.isLegacyMode(mNavBarMode);
+        boolean disableHomeHandle = disableRecent
+                && ((mDisabledFlags & View.STATUS_BAR_DISABLE_HOME) != 0);
+        getHomeHandle().setVisibility(disableHomeHandle || hide ? View.INVISIBLE : View.VISIBLE);
+    }
+
+    public boolean isHomeHandleForceHidden() {
+        return mHomeHandleForceHidden;
     }
 
     /**
@@ -790,10 +765,8 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         sysUiState.setFlag(SYSUI_STATE_OVERVIEW_DISABLED,
                         (mDisabledFlags & View.STATUS_BAR_DISABLE_RECENT) != 0)
                 .setFlag(SYSUI_STATE_HOME_DISABLED,
-                        mBlockedGesturalNavigation ||
                         (mDisabledFlags & View.STATUS_BAR_DISABLE_HOME) != 0)
                 .setFlag(SYSUI_STATE_SEARCH_DISABLED,
-                        mBlockedGesturalNavigation ||
                         (mDisabledFlags & View.STATUS_BAR_DISABLE_SEARCH) != 0)
                 .commitUpdate(displayId);
     }
@@ -833,12 +806,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         mBgExecutor.execute(() -> setNavBarVirtualKeyHapticFeedbackEnabled(!mShowSwipeUpUi));
         getHomeButton().setAccessibilityDelegate(
                 mShowSwipeUpUi ? mQuickStepAccessibilityDelegate : null);
-    }
-
-    public void setBlockedGesturalNavigation(boolean blocked, SysUiState sysUiState) {
-        mBlockedGesturalNavigation = blocked;
-        mEdgeBackGestureHandler.setBlockedGesturalNavigation(blocked);
-        updateDisabledSystemUiStateFlags(sysUiState);
     }
 
     /**
@@ -901,20 +868,17 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         mContextualButtonGroup.setButtonVisibility(R.id.accessibility_button, visible);
     }
 
-    public void offsetNavBar(Offset offset) {
-        if (isGesturalMode(mNavBarMode)) {
-            final NavigationHandle handle = (NavigationHandle) getHomeHandle().getCurrentView();
-            if (handle != null) {
-                handle.setTranslationY(offset.getY());
-                handle.invalidate();
-            }
+    public void shiftNavigationBarItems(int horizontalShift, int verticalShift) {
+        ViewGroup navButtons = (ViewGroup) findViewById(R.id.nav_buttons);
+
+        if (navButtons == null) {
             return;
         }
-        if (mNavigationBarContents == null) {
-            return;
-        }
-        mNavigationBarContents.setTranslationX(offset.getX());
-        mNavigationBarContents.setTranslationY(offset.getY());
+
+        navButtons.setPaddingRelative(navButtons.getPaddingStart() + horizontalShift,
+                navButtons.getPaddingTop() + verticalShift,
+                navButtons.getPaddingEnd() + horizontalShift,
+                navButtons.getPaddingBottom() - verticalShift);
         invalidate();
     }
 
@@ -923,8 +887,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         super.onFinishInflate();
         mNavigationInflaterView = findViewById(R.id.navigation_inflater);
         mNavigationInflaterView.setButtonDispatchers(mButtonDispatchers);
-
-        mNavigationBarContents = (ViewGroup) findViewById(R.id.nav_buttons);
 
         updateOrientationViews();
         reloadNavIcons();
@@ -1027,6 +989,10 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         return mIsVertical;
     }
 
+    public NavigationBarFrame getNavbarFrame() {
+        return ((NavigationBarFrame) getRootView());
+    }
+
     public void reorient() {
         updateCurrentView();
         ((NavigationBarFrame) getRootView()).setDeadZone(mDeadZone);
@@ -1070,8 +1036,16 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
                             com.android.internal.R.dimen.navigation_bar_height_landscape)
                     : getResources().getDimensionPixelSize(
                             com.android.internal.R.dimen.navigation_bar_height);
-            int frameHeight = getResources().getDimensionPixelSize(
-                    com.android.internal.R.dimen.navigation_bar_frame_height);
+	    int frameHeight;
+            boolean IsHideIMESpaceEnabled = Settings.System.getIntForUser(getContext().getContentResolver(),
+                     Settings.System.HIDE_IME_SPACE_ENABLE , 0, UserHandle.USER_CURRENT) != 0;
+	    if (IsHideIMESpaceEnabled) {
+              frameHeight = getResources().getDimensionPixelSize(
+                      com.android.internal.R.dimen.navigation_bar_frame_height_hide_ime);
+	    } else {
+              frameHeight = getResources().getDimensionPixelSize(
+                      com.android.internal.R.dimen.navigation_bar_frame_height);	    
+	    }
             mBarTransitions.setBackgroundFrame(new Rect(0, frameHeight - height, w, h));
         } else {
             mBarTransitions.setBackgroundFrame(null);
@@ -1165,8 +1139,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         super.onAttachedToWindow();
         requestApplyInsets();
         reorient();
-        final TunerService tunerService = Dependency.get(TunerService.class);
-        tunerService.addTunable(this, NAVIGATION_BAR_MENU_ARROW_KEYS);
         if (mRotationButtonController != null) {
             mRotationButtonController.registerListeners(false /* registerRotationWatcher */);
         }
@@ -1183,14 +1155,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         if (mRotationButtonController != null) {
             mFloatingRotationButton.hide();
             mRotationButtonController.unregisterListeners();
-        }
-    }
-
-    @Override
-    public void onTuningChanged(String key, String newValue) {
-        if (NAVIGATION_BAR_MENU_ARROW_KEYS.equals(key)) {
-            mShowCursorKeys = TunerService.parseIntegerSwitch(newValue, false);
-            setNavigationIconHints(mNavigationIconHints);
         }
     }
 
@@ -1229,8 +1193,6 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
         dumpButton(pw, "rota", getRotateSuggestionButton());
         dumpButton(pw, "a11y", getAccessibilityButton());
         dumpButton(pw, "ime", getImeSwitchButton());
-        dumpButton(pw, "curl", getCursorLeftButton());
-        dumpButton(pw, "curr", getCursorRightButton());
 
         if (mNavigationInflaterView != null) {
             mNavigationInflaterView.dump(pw);

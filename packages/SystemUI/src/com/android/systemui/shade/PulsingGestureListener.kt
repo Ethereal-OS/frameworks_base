@@ -32,6 +32,7 @@ import com.android.systemui.plugins.statusbar.StatusBarStateController
 import com.android.systemui.settings.UserTracker
 import com.android.systemui.statusbar.phone.CentralSurfaces
 import com.android.systemui.statusbar.phone.dagger.CentralSurfacesComponent
+import com.android.systemui.statusbar.StatusBarState
 import com.android.systemui.tuner.TunerService
 import com.android.systemui.tuner.TunerService.Tunable
 import java.io.PrintWriter
@@ -67,7 +68,7 @@ class PulsingGestureListener @Inject constructor(
 
     companion object {
         internal val DOUBLE_TAP_SLEEP_GESTURE =
-            "customsystem:" + Settings.System.DOUBLE_TAP_SLEEP_GESTURE
+            "system:" + Settings.System.DOUBLE_TAP_SLEEP_GESTURE
     }
     private var doubleTapToSleepEnabled = false
     private val quickQsOffsetHeight: Int
@@ -78,13 +79,13 @@ class PulsingGestureListener @Inject constructor(
                 Settings.Secure.DOUBLE_TAP_TO_WAKE ->
                     doubleTapEnabledNative = TunerService.parseIntegerSwitch(value, false)
                 Settings.Secure.DOZE_DOUBLE_TAP_GESTURE ->
-                    doubleTapEnabled = ambientDisplayConfiguration.doubleTapGestureEnabled(
-                            userTracker.userId)
+                    doubleTapEnabled = Settings.Secure.getIntForUser(context.getContentResolver(),
+                            Settings.Secure.DOZE_DOUBLE_TAP_GESTURE, 1, userTracker.userId) == 1;
                 Settings.Secure.DOZE_TAP_SCREEN_GESTURE ->
                     singleTapEnabled = ambientDisplayConfiguration.tapGestureEnabled(
                             userTracker.userId)
                 DOUBLE_TAP_SLEEP_GESTURE ->
-                    doubleTapToSleepEnabled = TunerService.parseIntegerSwitch(value, false)
+                    doubleTapToSleepEnabled = TunerService.parseIntegerSwitch(value, true)
             }
         }
         tunerService.addTunable(tunable,
@@ -142,6 +143,12 @@ class PulsingGestureListener @Inject constructor(
             } else if (!statusBarStateController.isDozing &&
                 doubleTapToSleepEnabled &&
                 e.getY() < quickQsOffsetHeight
+            ) {
+                powerManager.goToSleep(e.getEventTime())
+                return true
+            } else if (!statusBarStateController.isDozing &&
+                doubleTapToSleepEnabled &&
+                statusBarStateController.getState() == StatusBarState.KEYGUARD
             ) {
                 powerManager.goToSleep(e.getEventTime())
                 return true

@@ -56,6 +56,7 @@ import android.annotation.NonNull;
 import android.app.ActivityTaskManager;
 import android.app.IActivityTaskManager;
 import android.app.StatusBarManager;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
@@ -70,6 +71,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.UserHandle;
+import android.provider.Settings;
 import android.provider.DeviceConfig;
 import android.telecom.TelecomManager;
 import android.text.TextUtils;
@@ -739,7 +742,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
             mDisabledFlags2 |= StatusBarManager.DISABLE2_ROTATE_SUGGESTIONS;
         }
         setDisabled2Flags(mDisabledFlags2);
-
         // Unfortunately, we still need it because status bar needs LightBarController
         // before notifications creation. We cannot directly use getLightBarController()
         // from NavigationBarFragment directly.
@@ -1111,7 +1113,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
 
         ButtonDispatcher homeButton = mView.getHomeButton();
         homeButton.setOnTouchListener(this::onHomeTouch);
-        homeButton.setLongClickable(true);
 
         reconfigureHomeLongClick();
 
@@ -1182,9 +1183,18 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         if (!mView.isRecentsButtonVisible() && mScreenPinningActive) {
             return onLongPressBackHome(v);
         }
-        KeyButtonView keyButtonView = (KeyButtonView) v;
-        keyButtonView.sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.FLAG_LONG_PRESS);
-        keyButtonView.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
+        if (shouldDisableNavbarGestures()) {
+            return false;
+        }
+        mMetricsLogger.action(MetricsEvent.ACTION_ASSIST_LONG_PRESS);
+        mUiEventLogger.log(NavBarActionEvent.NAVBAR_ASSIST_LONGPRESS);
+        Bundle args = new Bundle();
+        args.putInt(
+                AssistManager.INVOCATION_TYPE_KEY,
+                AssistManager.INVOCATION_TYPE_HOME_BUTTON_LONG_PRESS);
+        mAssistManagerLazy.get().startAssist(args);
+        mCentralSurfacesOptionalLazy.get().ifPresent(CentralSurfaces::awakenDreams);
+        mView.abortCurrentGesture();
         return true;
     }
 
@@ -1463,6 +1473,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         int insetsHeight = -1;
         int gravity = Gravity.BOTTOM;
         boolean navBarCanMove = true;
+        boolean IsHideIMESpaceEnabled = Settings.System.getIntForUser(mContext.getContentResolver(),
+                Settings.System.HIDE_IME_SPACE_ENABLE , 0, UserHandle.USER_CURRENT) != 0;
         final Context userContext = mUserContextProvider.createCurrentUserContext(mContext);
         if (mWindowManager != null && mWindowManager.getCurrentWindowMetrics() != null) {
             Rect displaySize = mWindowManager.getCurrentWindowMetrics().getBounds();
@@ -1471,8 +1483,13 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                     com.android.internal.R.bool.config_navBarCanMove);
         }
         if (!navBarCanMove) {
-            height = userContext.getResources().getDimensionPixelSize(
-                    com.android.internal.R.dimen.navigation_bar_frame_height);
+	    if (IsHideIMESpaceEnabled && isGesturalMode(mNavBarMode)) {
+              height = userContext.getResources().getDimensionPixelSize(
+                      com.android.internal.R.dimen.navigation_bar_frame_height_hide_ime);
+            } else {
+              height = userContext.getResources().getDimensionPixelSize(
+                      com.android.internal.R.dimen.navigation_bar_frame_height);
+	   }
             insetsHeight = userContext.getResources().getDimensionPixelSize(
                     com.android.internal.R.dimen.navigation_bar_height);
         } else {
@@ -1480,8 +1497,13 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                 case ROTATION_UNDEFINED:
                 case Surface.ROTATION_0:
                 case Surface.ROTATION_180:
-                    height = userContext.getResources().getDimensionPixelSize(
-                            com.android.internal.R.dimen.navigation_bar_frame_height);
+                    if (IsHideIMESpaceEnabled && isGesturalMode(mNavBarMode)) {
+                      height = userContext.getResources().getDimensionPixelSize(
+                              com.android.internal.R.dimen.navigation_bar_frame_height_hide_ime);
+                    } else {
+                      height = userContext.getResources().getDimensionPixelSize(
+                              com.android.internal.R.dimen.navigation_bar_frame_height);
+                    }
                     insetsHeight = userContext.getResources().getDimensionPixelSize(
                             com.android.internal.R.dimen.navigation_bar_height);
                     break;
@@ -1528,10 +1550,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         lp.setFitInsetsTypes(0 /* types */);
         lp.setTrustedOverlay();
         return lp;
-    }
-
-    private boolean canShowSecondaryHandle() {
-        return mNavBarMode == NAV_BAR_MODE_GESTURAL && mOrientationHandle != null;
     }
 
     private final UserTracker.Callback mUserChangedCallback =
@@ -1595,10 +1613,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                 useNearestRegion);
         updateButtonLocation(
                 region, touchRegionCache, mView.getAccessibilityButton(), inScreenSpace,
-                useNearestRegion);
-        updateButtonLocation(region, touchRegionCache, mView.getCursorLeftButton(), inScreenSpace,
-                useNearestRegion);
-        updateButtonLocation(region, touchRegionCache, mView.getCursorRightButton(), inScreenSpace,
                 useNearestRegion);
         if (includeFloatingButtons && mView.getFloatingRotationButton().isVisible()) {
             // Note: this button is floating so the nearest region doesn't apply

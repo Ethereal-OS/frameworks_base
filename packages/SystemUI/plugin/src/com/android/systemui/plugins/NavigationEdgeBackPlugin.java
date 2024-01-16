@@ -36,6 +36,9 @@ public interface NavigationEdgeBackPlugin extends Plugin {
     /** Specifies if the UI should be rendered on the left side of the screen. */
     void setIsLeftPanel(boolean isLeftPanel);
 
+    /** Specifies if the arrow animation is shown for back gesture. */
+    default void setBackArrowVisibility(boolean backArrowVisibility) {}
+
     /** Sets the insets for the gesture handling area. */
     void setInsets(int leftInset, int rightInset);
 
@@ -44,9 +47,6 @@ public interface NavigationEdgeBackPlugin extends Plugin {
 
     /** Sets the callback that should be invoked when a Back gesture is detected. */
     void setBackCallback(BackCallback callback);
-
-    /** Specifies if the long swipe should be enabled or not. */
-    default void setLongSwipeEnabled(boolean enabled) {}
 
     /** Sets the base LayoutParams for the UI. */
     void setLayoutParams(WindowManager.LayoutParams layoutParams);
@@ -57,10 +57,12 @@ public interface NavigationEdgeBackPlugin extends Plugin {
     /** Dumps info about the back gesture plugin. */
     void dump(PrintWriter pw);
 
+    default void setLongSwipeEnabled(boolean enabled) {}
+
     /** Callback to let the system react to the detected back gestures. */
     interface BackCallback {
         /** Indicates that a Back gesture was recognized and the system should go back. */
-        void triggerBack(boolean isLongPress);
+        void triggerBack();
 
         /** Indicates that the gesture was cancelled and the system should not go back. */
         void cancelBack();
@@ -71,12 +73,5 @@ public interface NavigationEdgeBackPlugin extends Plugin {
          * @param triggerBack if back will be triggered in current state.
          */
         void setTriggerBack(boolean triggerBack);
-
-        /**
-         * Indicates if long swipe will be triggered if committed in current state.
-         *
-         * @param triggerLongSwipe if long swipe will be triggered in current state.
-         */
-        void setTriggerLongSwipe(boolean triggerLongSwipe);
     }
 }

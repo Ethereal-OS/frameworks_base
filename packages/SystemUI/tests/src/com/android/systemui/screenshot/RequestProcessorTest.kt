@@ -27,13 +27,7 @@ import android.view.WindowManager.ScreenshotSource.SCREENSHOT_KEY_OTHER
 import android.view.WindowManager.ScreenshotSource.SCREENSHOT_OTHER
 import android.view.WindowManager.TAKE_SCREENSHOT_FULLSCREEN
 import android.view.WindowManager.TAKE_SCREENSHOT_PROVIDED_IMAGE
-<<<<<<< HEAD
-import com.android.internal.util.ScreenshotHelper.HardwareBitmapBundler
-import com.android.internal.util.ScreenshotHelper.HardwareBitmapBundler.bundleToHardwareBitmap
-import com.android.internal.util.ScreenshotHelper.ScreenshotRequest
-=======
 import com.android.internal.util.ScreenshotRequest
->>>>>>> 8bcec894e0ac (Merge tag 'android-13.0.0_r52' into staging/lineage-20.0_merge-android-13.0.0_r52)
 import com.android.systemui.flags.FakeFeatureFlags
 import com.android.systemui.flags.Flags
 import com.android.systemui.screenshot.ScreenshotPolicy.DisplayContentInfo

@@ -224,8 +224,6 @@ public interface AppStandbyInternal {
     void addActiveDeviceAdmin(String adminPkg, int userId);
 
     void setActiveAdminApps(Set<String> adminPkgs, int userId);
-    
-    void setAdminProtectedPackages(Set<String> packageNames, int userId);
 
     void setAdminProtectedPackages(Set<String> packageNames, int userId);
 

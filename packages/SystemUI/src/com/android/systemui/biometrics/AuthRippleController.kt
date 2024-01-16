@@ -23,6 +23,8 @@ import android.content.Context
 import android.graphics.Point
 import android.hardware.biometrics.BiometricFingerprintConstants
 import android.hardware.biometrics.BiometricSourceType
+import android.os.UserHandle
+import android.provider.Settings
 import androidx.annotation.VisibleForTesting
 import com.android.keyguard.KeyguardUpdateMonitor
 import com.android.keyguard.KeyguardUpdateMonitorCallback
@@ -89,7 +91,10 @@ class AuthRippleController @Inject constructor(
 
     private var udfpsController: UdfpsController? = null
     private var udfpsRadius: Float = -1f
-    private var unlockAnimationEnabled: Boolean = true
+
+    private val isRippleEnabled: Boolean
+        get() = Settings.System.getIntForUser(context.contentResolver,
+            Settings.System.ENABLE_RIPPLE_EFFECT, 1, UserHandle.USER_CURRENT) == 1
 
     @VisibleForTesting
     public override fun onViewAttached() {
@@ -121,7 +126,7 @@ class AuthRippleController @Inject constructor(
         val keyguardNotShowing = !keyguardStateController.isShowing
         val unlockNotAllowed = !keyguardUpdateMonitor
                 .isUnlockingWithBiometricAllowed(biometricSourceType)
-        if (keyguardNotShowing || unlockNotAllowed) {
+        if (keyguardNotShowing || !isRippleEnabled ||    unlockNotAllowed) {
             logger.notShowingUnlockRipple(keyguardNotShowing, unlockNotAllowed)
             return
         }
@@ -164,9 +169,8 @@ class AuthRippleController @Inject constructor(
     }
 
     private fun showUnlockedRipple() {
-        if (!unlockAnimationEnabled){
-            return
-        }
+    	if (!isRippleEnabled) return
+
         notificationShadeWindowController.setForcePluginOpen(true, this)
 
         // This code path is not used if the KeyguardTransitionRepository is managing the light
@@ -191,6 +195,14 @@ class AuthRippleController @Inject constructor(
     }
 
     override fun onKeyguardFadingAwayChanged() {
+        if (!isRippleEnabled) {
+            // reset and hide the scrim so it doesn't appears on
+            // the next notification shade usage
+            centralSurfaces.lightRevealScrim?.revealAmount = 1f
+            startLightRevealScrimOnKeyguardFadingAway = false
+            return
+        }
+
         if (featureFlags.isEnabled(Flags.LIGHT_REVEAL_MIGRATION)) {
             return
         }
@@ -206,6 +218,10 @@ class AuthRippleController @Inject constructor(
                     addUpdateListener { animator ->
                         if (lightRevealScrim.revealEffect != circleReveal) {
                             // if something else took over the reveal, let's cancel ourselves
+                            // When the animator is almost done, fully reveal the scrim.
+                            if (animator.animatedValue as Float >= 0.9999f) {
+                                lightRevealScrim.revealAmount = 1f
+                            }
                             cancel()
                             return@addUpdateListener
                         }
@@ -234,7 +250,7 @@ class AuthRippleController @Inject constructor(
      * Whether we're animating the light reveal scrim from a call to [onKeyguardFadingAwayChanged].
      */
     fun isAnimatingLightRevealScrim(): Boolean {
-        return lightRevealScrimAnimator?.isRunning ?: false
+        return if (!isRippleEnabled) false else (lightRevealScrimAnimator?.isRunning ?: false)
     }
 
     override fun onStartedGoingToSleep() {
@@ -311,11 +327,17 @@ class AuthRippleController @Inject constructor(
     private val udfpsControllerCallback =
         object : UdfpsController.Callback {
             override fun onFingerDown() {
-                showDwellRipple()
+                if (Settings.System.getInt(sysuiContext.contentResolver,
+                       Settings.System.UDFPS_ANIM, 0) == 0) {
+                    showDwellRipple()
+                }
             }
 
             override fun onFingerUp() {
+                if (Settings.System.getInt(sysuiContext.contentResolver,
+                        Settings.System.UDFPS_ANIM, 0) == 0) {
                 mView.retractDwellRipple()
+                }
             }
         }
 

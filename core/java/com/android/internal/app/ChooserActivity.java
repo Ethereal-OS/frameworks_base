@@ -24,7 +24,6 @@ import static android.app.admin.DevicePolicyResources.Strings.Core.RESOLVER_CROS
 import static android.content.ContentProvider.getUserIdFromUri;
 import static android.stats.devicepolicy.DevicePolicyEnums.RESOLVER_EMPTY_STATE_NO_SHARING_TO_PERSONAL;
 import static android.stats.devicepolicy.DevicePolicyEnums.RESOLVER_EMPTY_STATE_NO_SHARING_TO_WORK;
-import static android.content.ContentProvider.getUserIdFromUri;
 
 import static com.android.internal.util.LatencyTracker.ACTION_LOAD_SHARE_SHEET;
 
@@ -203,7 +202,7 @@ public class ChooserActivity extends ResolverActivity implements
     private static final String CHIP_LABEL_METADATA_KEY = "android.service.chooser.chip_label";
     private static final String CHIP_ICON_METADATA_KEY = "android.service.chooser.chip_icon";
 
-    private static final boolean DEBUG = true;
+    private static final boolean DEBUG = false;
 
     private static final boolean USE_PREDICTION_MANAGER_FOR_SHARE_ACTIVITIES = true;
     // TODO(b/123088566) Share these in a better way.
@@ -1620,24 +1619,6 @@ public class ChooserActivity extends ResolverActivity implements
             fileIconView.setVisibility(View.VISIBLE);
             fileIconView.setImageResource(R.drawable.chooser_file_generic);
         }
-    }
- 
-    /**
-     * Indicate if the incoming content URI should be allowed.
-     *
-     * @param uri the uri to test
-     * @return true if the URI is allowed for content preview
-     */
-    private static boolean validForContentPreview(Uri uri) throws SecurityException {
-        if (uri == null) {
-            return false;
-        }
-        int userId = getUserIdFromUri(uri, UserHandle.USER_CURRENT);
-        if (userId != UserHandle.USER_CURRENT && userId != UserHandle.myUserId()) {
-            Log.e(TAG, "dropped invalid content URI belonging to user " + userId);
-            return false;
-        }
-        return true;
     }
 
     /**

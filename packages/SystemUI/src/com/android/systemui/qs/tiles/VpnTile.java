@@ -37,32 +37,36 @@ import android.widget.TextView;
 import androidx.annotation.Nullable;
 
 import com.android.internal.logging.MetricsLogger;
-import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.net.VpnConfig;
 import com.android.internal.net.VpnProfile;
+import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.R;
-import com.android.systemui.dagger.qualifiers.Background;
-import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
-import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.qs.QSTile.BooleanState;
-import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.QSHost;
-import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.policy.SecurityController;
+import com.android.systemui.dagger.qualifiers.Background;
+import com.android.systemui.dagger.qualifiers.Main;
+import com.android.systemui.plugins.FalsingManager;
+import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.qs.logging.QSLogger;
 
 import java.util.List;
-
+import java.util.Set;
 import javax.inject.Inject;
 
 /** Quick settings tile: VPN **/
 public class VpnTile extends QSTileImpl<BooleanState> {
+
+    public static final String TILE_SPEC = "vpn";
+
     private final SecurityController mController;
     private final KeyguardStateController mKeyguard;
     private final Callback mCallback = new Callback();
+    private final ActivityStarter mActivityStarter;
 
     @Inject
     public VpnTile(
@@ -74,12 +78,14 @@ public class VpnTile extends QSTileImpl<BooleanState> {
             StatusBarStateController statusBarStateController,
             ActivityStarter activityStarter,
             QSLogger qsLogger,
-            SecurityController securityController,
-            KeyguardStateController keyguardStateController) {
+            KeyguardStateController keyguardStateController,
+            SecurityController securityController
+    ) {
         super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
         mController = securityController;
         mKeyguard = keyguardStateController;
+        mActivityStarter = activityStarter;
     }
 
     @Override
@@ -108,6 +114,11 @@ public class VpnTile extends QSTileImpl<BooleanState> {
     @Override
     public Intent getLongClickIntent() {
         return new Intent(Settings.ACTION_VPN_SETTINGS);
+    }
+
+    @Override
+    protected void handleSecondaryClick(@Nullable View view) {
+        handleClick(view);
     }
 
     @Override
@@ -246,7 +257,7 @@ public class VpnTile extends QSTileImpl<BooleanState> {
         private final EditText mUserNameEditor;
         private final EditText mPasswordEditor;
 
-        UsernameAndPasswordWatcher(EditText userName, EditText password, Button okButton) {
+        public UsernameAndPasswordWatcher(EditText userName, EditText password, Button okButton) {
             mUserNameEditor = userName;
             mPasswordEditor = password;
             mOkButton = okButton;

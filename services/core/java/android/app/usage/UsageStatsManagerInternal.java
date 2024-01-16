@@ -212,10 +212,7 @@ public abstract class UsageStatsManagerInternal {
     public abstract void setAdminProtectedPackages(@Nullable Set<String> packageNames,
             @UserIdInt int userId);
 
-    /**    
-=======
     /**
->>>>>>> 8bcec894e0ac (Merge tag 'android-13.0.0_r52' into staging/lineage-20.0_merge-android-13.0.0_r52)
      * Called by DevicePolicyManagerService during boot to inform that admin data is loaded and
      * pushed to UsageStatsService.
      */

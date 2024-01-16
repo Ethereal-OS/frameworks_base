@@ -81,6 +81,7 @@ import android.view.ScrollCaptureResponse;
 import android.view.View;
 import android.view.ViewRootImpl;
 import android.view.ViewTreeObserver;
+import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.WindowManagerGlobal;
@@ -253,6 +254,7 @@ public class ScreenshotController {
     static final String EXTRA_SMART_ACTIONS_ENABLED = "android:smart_actions_enabled";
     static final String EXTRA_OVERRIDE_TRANSITION = "android:screenshot_override_transition";
     static final String EXTRA_ACTION_INTENT = "android:screenshot_action_intent";
+    static final String EXTRA_ACTION_INTENT_FILLIN = "android:screenshot_action_intent_fillin";
 
     static final String SCREENSHOT_URI_ID = "android:screenshot_uri_id";
     static final String EXTRA_CANCEL_NOTIFICATION = "android:screenshot_cancel_notification";
@@ -261,7 +263,7 @@ public class ScreenshotController {
     // From WizardManagerHelper.java
     private static final String SETTINGS_SECURE_USER_SETUP_COMPLETE = "user_setup_complete";
 
-    private static final int SCREENSHOT_CORNER_DEFAULT_TIMEOUT_MILLIS = 3000;
+    private static final int SCREENSHOT_CORNER_DEFAULT_TIMEOUT_MILLIS = 6000;
 
     private final WindowContext mContext;
     private final FeatureFlags mFlags;
@@ -346,12 +348,13 @@ public class ScreenshotController {
     }
 
     private String getForegroundAppLabel() {
-        try {
-            final ActivityInfo ai = mPm.getActivityInfo(mTaskComponentName, 0);
-            return ai.applicationInfo.loadLabel(mPm).toString();
-        } catch (PackageManager.NameNotFoundException e) {
-             return null;
+        if (mTaskComponentName != null) {
+            try {
+                final ActivityInfo ai = mPm.getActivityInfo(mTaskComponentName, 0);
+                return ai.applicationInfo.loadLabel(mPm).toString();
+            } catch (PackageManager.NameNotFoundException e) {}
         }
+        return null;
     }
 
     @Inject
@@ -421,6 +424,10 @@ public class ScreenshotController {
 
         mWindow = FloatingWindowUtil.getFloatingWindow(mContext);
         mWindow.setWindowManager(mWindowManager, null, null);
+        mWindow.requestFeature(Window.FEATURE_NO_TITLE);
+        mWindow.requestFeature(Window.FEATURE_ACTIVITY_TRANSITIONS);
+        mWindow.setBackgroundDrawableResource(android.R.color.transparent);
+        mWindow.setDecorFitsSystemWindows(false);
 
         mConfigChanges.applyNewConfig(context.getResources());
         reloadAssets();
@@ -809,7 +816,7 @@ public class ScreenshotController {
     private Bitmap captureScreenshot() {
         DisplayMetrics displayMetrics = new DisplayMetrics();
         getDefaultDisplay().getRealMetrics(displayMetrics);
-        return mImageCapture.captureDisplay(DEFAULT_DISPLAY,
+        return mImageCapture.captureDisplay(mDisplayTracker.getDefaultDisplayId(),
                 new Rect(0, 0, displayMetrics.widthPixels, displayMetrics.heightPixels));
     }
 
@@ -963,9 +970,9 @@ public class ScreenshotController {
         mLongScreenshotHolder.setLongScreenshot(longScreenshot);
         mLongScreenshotHolder.setTransitionDestinationCallback(
                 (transitionDestination, onTransitionEnd) -> {
-                    mScreenshotView.startLongScreenshotTransition(
-                            transitionDestination, onTransitionEnd,
-                            longScreenshot);
+                        mScreenshotView.startLongScreenshotTransition(
+                                transitionDestination, onTransitionEnd,
+                                longScreenshot);
                     // TODO: Do this via ActionIntentExecutor instead.
                     mContext.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
                 }
@@ -994,7 +1001,6 @@ public class ScreenshotController {
         } catch (RemoteException e) {
             Log.e(TAG, "Error during collapsing panels", e);
         }
-
     }
 
     private void startPartialScreenshotActivity(UserHandle owner) {
@@ -1156,6 +1162,10 @@ public class ScreenshotController {
     }
 
     private void playCameraSound() {
+        if (Settings.System.getInt(mContext.getContentResolver(), Settings.System.SOUND_EFFECTS_ENABLED, 0) != 1) {
+            return;
+        }
+
         mCameraSound.addListener(() -> {
             try {
                 MediaPlayer player = mCameraSound.get();

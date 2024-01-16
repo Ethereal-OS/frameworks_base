@@ -37,6 +37,7 @@ import android.annotation.StringRes;
 import android.annotation.UserIdInt;
 import android.annotation.XmlRes;
 import android.app.admin.DevicePolicyManager;
+import android.app.compat.gms.GmsCompat;
 import android.app.role.RoleManager;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ComponentName;
@@ -119,6 +120,7 @@ import android.util.Log;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.Immutable;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.gmscompat.sysservice.GmcPackageManager;
 import com.android.internal.os.SomeArgs;
 import com.android.internal.util.UserIcons;
 
@@ -252,6 +254,7 @@ public class ApplicationPackageManager extends PackageManager {
         if (pi == null) {
             throw new NameNotFoundException(packageName);
         }
+        GmcPackageManager.maybeAdjustPackageInfo(pi);
         return pi;
     }
 
@@ -503,6 +506,9 @@ public class ApplicationPackageManager extends PackageManager {
         if (ai == null) {
             throw new NameNotFoundException(packageName);
         }
+
+        GmcPackageManager.maybeAdjustApplicationInfo(ai);
+
         return maybeAdjustApplicationInfo(ai);
     }
 
@@ -806,6 +812,16 @@ public class ApplicationPackageManager extends PackageManager {
                 }
             };
 
+    private static final String[] pTensorCodenames = {
+            "tangorpro",
+            "lynx",
+            "cheetah",
+            "panther",
+            "bluejay",
+            "oriole",
+            "raven"
+    };
+
     private static final String[] featuresPixel = {
             "com.google.android.apps.photos.PIXEL_2019_PRELOAD",
             "com.google.android.apps.photos.PIXEL_2019_MIDYEAR_PRELOAD",
@@ -822,12 +838,34 @@ public class ApplicationPackageManager extends PackageManager {
             "com.google.android.feature.GOOGLE_EXPERIENCE"
     };
 
-    private static final String[] featuresP22 = {
-            "com.google.android.feature.PIXEL_2022_EXPERIENCE",
-            "com.google.android.feature.PIXEL_2022_MIDYEAR_EXPERIENCE",
+    private static final String[] featuresPixelOthers = {
+            "com.google.android.feature.ASI",
+            "com.google.android.feature.ANDROID_ONE_EXPERIENCE",
+            "com.google.android.feature.GOOGLE_FI_BUNDLED",
+            "com.google.android.feature.LILY_EXPERIENCE",
+            "com.google.android.feature.TURBO_PRELOAD",
+            "com.google.android.feature.WELLBEING",
+            "com.google.lens.feature.IMAGE_INTEGRATION",
+            "com.google.lens.feature.CAMERA_INTEGRATION",
+            "com.google.photos.trust_debug_certs",
+            "com.google.android.feature.AER_OPTIMIZED",
+            "com.google.android.feature.NEXT_GENERATION_ASSISTANT",
+            "android.software.game_service",
+            "com.google.android.feature.EXCHANGE_6_2",
+            "com.google.android.apps.dialer.call_recording_audio",
+            "com.google.android.apps.dialer.SUPPORTED"
     };
 
-    private static final String[] featuresP21 = {
+    private static final String[] featuresP23 = {
+            "com.google.android.feature.PIXEL_2024_EXPERIENCE",
+            "com.google.android.feature.PIXEL_2024_MIDYEAR_EXPERIENCE",
+            "com.google.android.feature.PIXEL_2023_EXPERIENCE",
+            "com.google.android.feature.PIXEL_2023_MIDYEAR_EXPERIENCE"
+    };
+
+    private static final String[] featuresTensor = {
+            "com.google.android.feature.PIXEL_2022_EXPERIENCE",
+            "com.google.android.feature.PIXEL_2022_MIDYEAR_EXPERIENCE",
             "com.google.android.feature.PIXEL_2021_EXPERIENCE",
             "com.google.android.feature.PIXEL_2021_MIDYEAR_EXPERIENCE"
     };
@@ -844,13 +882,24 @@ public class ApplicationPackageManager extends PackageManager {
     public boolean hasSystemFeature(String name, int version) {
         String packageName = ActivityThread.currentPackageName();
         if (packageName != null &&
-                packageName.equals("com.google.android.apps.photos")) {
+                packageName.equals("com.google.android.apps.photos") &&
+                SystemProperties.getBoolean("persist.sys.pixelprops.gphotos", true)) {
             if (Arrays.asList(featuresPixel).contains(name)) return false;
-            if (Arrays.asList(featuresP22).contains(name)) return false;
-            if (Arrays.asList(featuresP21).contains(name)) return false;
+            if (Arrays.asList(featuresPixelOthers).contains(name)) return true;
+            if (Arrays.asList(featuresP23).contains(name)) return false;
+            if (Arrays.asList(featuresTensor).contains(name)) return false;
             if (Arrays.asList(featuresNexus).contains(name)) return true;
         }
+        if (Arrays.asList(featuresTensor).contains(name) &&
+                !Arrays.asList(pTensorCodenames).contains(SystemProperties.get("ro.product.device"))) {
+            return false;
+        } else if (packageName != null && Arrays.asList(featuresTensor).contains(name)) {
+            if (packageName.contains("com.google.android.apps.nexuslauncher")) {
+                return false;
+            }
+        }
         if (Arrays.asList(featuresPixel).contains(name)) return true;
+        if (Arrays.asList(featuresPixelOthers).contains(name)) return true;
         return mHasSystemFeatureCache.query(new HasSystemFeatureQuery(name, version));
     }
 
@@ -2145,8 +2194,8 @@ public class ApplicationPackageManager extends PackageManager {
     }
 
     @UnsupportedAppUsage
-    protected ApplicationPackageManager(ContextImpl context, IPackageManager pm) {
-        mContext = context;
+    protected ApplicationPackageManager(Context context, IPackageManager pm) {
+        mContext = (ContextImpl) context;
         mPM = pm;
     }
 
@@ -3883,6 +3932,27 @@ public class ApplicationPackageManager extends PackageManager {
             mPM.makeUidVisible(recipientUid, visibleUid);
         } catch (RemoteException e) {
             throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @UnsupportedAppUsage
+    public PackageInfo findPackage(String packageName, long minVersion, Bundle validSignaturesSha256) {
+        try {
+            return mPM.findPackage(packageName, minVersion, validSignaturesSha256);
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    @UnsupportedAppUsage
+    public boolean updateListOfBusyPackages(boolean locked, List<String> packageNames) {
+        // used for automatically removing packages after our process dies
+        android.os.Binder callerBinder = ActivityThread.currentActivityThread().getApplicationThread();
+
+        try {
+            return mPM.updateListOfBusyPackages(locked, packageNames, callerBinder);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
         }
     }
 }

@@ -177,6 +177,13 @@ public final class StrictMode {
     private static final String CLEARTEXT_PROPERTY = "persist.sys.strictmode.clear";
 
     /**
+     * The boolean system property containing the state of global cleartext restriction.
+     *
+     * @hide
+     */
+    public static final String GLOBAL_CLEARTEXT_PROPERTY = "persist.sys.global.cleartext";
+
+    /**
      * Quick feature-flag that can be used to disable the defaults provided by {@link
      * #initThreadDefaults(ApplicationInfo)} and {@link #initVmDefaults(ApplicationInfo)}.
      */
@@ -338,6 +345,8 @@ public final class StrictMode {
     /** @hide */
     public static final int PENALTY_ALL = 0xffff0000;
 
+    /** {@hide} */
+    public static final int NETWORK_POLICY_INVALID = -1;
     /** {@hide} */
     public static final int NETWORK_POLICY_ACCEPT = 0;
     /** {@hide} */
@@ -1452,24 +1461,17 @@ public final class StrictMode {
             builder.penaltyDeathOnNetwork();
         }
 
-        if (Build.IS_USER || DISABLE || SystemProperties.getBoolean(DISABLE_PROPERTY, false)) {
+        if (!Build.IS_ENG || DISABLE || SystemProperties.getBoolean(DISABLE_PROPERTY, false)) {
             // Detect nothing extra
-        } else if (Build.IS_USERDEBUG) {
-            // Detect everything in bundled apps
-            if (isBundledSystemApp(ai)) {
-                builder.detectAll();
-                builder.penaltyDropBox();
-                if (SystemProperties.getBoolean(VISUAL_PROPERTY, false)) {
-                    builder.penaltyFlashScreen();
-                }
-            }
-        } else if (Build.IS_ENG) {
+        } else {
             // Detect everything in bundled apps
             if (isBundledSystemApp(ai)) {
                 builder.detectAll();
                 builder.penaltyDropBox();
                 builder.penaltyLog();
-                builder.penaltyFlashScreen();
+                if (SystemProperties.getBoolean(VISUAL_PROPERTY, true)) {
+                    builder.penaltyFlashScreen();
+                }
             }
         }
 
@@ -1492,16 +1494,8 @@ public final class StrictMode {
             builder.penaltyDeathOnFileUriExposure();
         }
 
-        if (Build.IS_USER || DISABLE || SystemProperties.getBoolean(DISABLE_PROPERTY, false)) {
+        if (Build.IS_USER || Build.IS_USERDEBUG || DISABLE || SystemProperties.getBoolean(DISABLE_PROPERTY, false)) {
             // Detect nothing extra
-        } else if (Build.IS_USERDEBUG) {
-            // Detect everything in bundled apps (except activity leaks, which
-            // are expensive to track)
-            if (isBundledSystemApp(ai)) {
-                builder.detectAll();
-                builder.permitActivityLeaks();
-                builder.penaltyDropBox();
-            }
         } else if (Build.IS_ENG) {
             // Detect everything in bundled apps
             if (isBundledSystemApp(ai)) {
@@ -2071,7 +2065,7 @@ public final class StrictMode {
                 }
             }
 
-            int networkPolicy = NETWORK_POLICY_ACCEPT;
+            int networkPolicy = NETWORK_POLICY_INVALID;
             if ((sVmPolicy.mask & DETECT_VM_CLEARTEXT_NETWORK) != 0) {
                 if ((sVmPolicy.mask & PENALTY_DEATH) != 0
                         || (sVmPolicy.mask & PENALTY_DEATH_ON_CLEARTEXT_NETWORK) != 0) {
@@ -2085,11 +2079,18 @@ public final class StrictMode {
                     INetworkManagementService.Stub.asInterface(
                             ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE));
             if (netd != null) {
-                try {
-                    netd.setUidCleartextNetworkPolicy(android.os.Process.myUid(), networkPolicy);
-                } catch (RemoteException ignored) {
+                // If global cleartext penalty is set, do not allow apps to modify their state
+                if (SystemProperties.getInt(GLOBAL_CLEARTEXT_PROPERTY, NETWORK_POLICY_INVALID)
+                        <= NETWORK_POLICY_ACCEPT) {
+                    try {
+                        netd.setUidCleartextNetworkPolicy(Process.myUid(), networkPolicy);
+                    } catch (RemoteException ignored) {
+                    }
+                } else {
+                    Log.w(TAG, "Dropping requested network policy due to global cleartext" +
+                            " network policy");
                 }
-            } else if (networkPolicy != NETWORK_POLICY_ACCEPT) {
+            } else if (networkPolicy != NETWORK_POLICY_INVALID) {
                 Log.w(TAG, "Dropping requested network policy due to missing service!");
             }
 
@@ -2646,7 +2647,7 @@ public final class StrictMode {
      */
     @UnsupportedAppUsage
     public static Span enterCriticalSpan(String name) {
-        if (Build.IS_USER) {
+        if (Build.IS_USER || Build.IS_USERDEBUG) {
             return NO_OP_SPAN;
         }
         if (name == null || name.isEmpty()) {

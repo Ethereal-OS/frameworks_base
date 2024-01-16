@@ -54,6 +54,7 @@ import com.android.systemui.shade.NotificationShadeWindowViewController;
 import com.android.systemui.statusbar.LightRevealScrim;
 import com.android.systemui.statusbar.NotificationPresenter;
 import com.android.systemui.util.Compile;
+import com.android.systemui.statusbar.policy.GameSpaceManager;
 
 import java.io.PrintWriter;
 
@@ -67,7 +68,7 @@ public interface CentralSurfaces extends Dumpable, ActivityStarter, LifecycleOwn
     String TAG = "CentralSurfaces";
     boolean DEBUG = false;
     boolean SPEW = false;
-    boolean DUMPTRUCK = true; // extra dumpsys info
+    boolean DUMPTRUCK = false; // extra dumpsys info
     boolean DEBUG_GESTURES = false;
     boolean DEBUG_MEDIA_FAKE_ARTWORK = false;
     boolean DEBUG_CAMERA_LIFT = false;
@@ -77,8 +78,8 @@ public interface CentralSurfaces extends Dumpable, ActivityStarter, LifecycleOwn
     boolean CHATTY = DEBUG;
     boolean SHOW_LOCKSCREEN_MEDIA_ARTWORK = true;
     String ACTION_FAKE_ARTWORK = "fake_artwork";
-    int FADE_KEYGUARD_START_DELAY = 100;
-    int FADE_KEYGUARD_DURATION = 300;
+    int FADE_KEYGUARD_START_DELAY = 50;
+    int FADE_KEYGUARD_DURATION = 150;
     int FADE_KEYGUARD_DURATION_PULSING = 96;
     long[] CAMERA_LAUNCH_GESTURE_VIBRATION_TIMINGS =
             new long[]{20, 20, 20, 20, 100, 20};
@@ -539,6 +540,8 @@ public interface CentralSurfaces extends Dumpable, ActivityStarter, LifecycleOwn
     void extendDozePulse();
 
     boolean shouldDelayWakeUpAnimation();
+
+    GameSpaceManager getGameSpaceManager();
 
     public static class KeyboardShortcutsMessage {
         final int mDeviceId;

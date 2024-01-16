@@ -66,9 +66,11 @@ import com.android.systemui.statusbar.VibratorHelper;
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayoutController;
 import com.android.systemui.statusbar.phone.dagger.CentralSurfacesComponent;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
+import com.android.systemui.statusbar.policy.FlashlightController;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.policy.RemoteInputQuickSettingsDisabler;
+import com.android.systemui.statusbar.policy.SecureLockscreenQSDisabler;
 
 import java.util.Optional;
 
@@ -83,6 +85,7 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
     private final Context mContext;
     private final com.android.systemui.shade.ShadeController mShadeController;
     private final CommandQueue mCommandQueue;
+    private final FlashlightController mFlashlightController;
     private final NotificationPanelViewController mNotificationPanelViewController;
     private final RemoteInputQuickSettingsDisabler mRemoteInputQuickSettingsDisabler;
     private final MetricsLogger mMetricsLogger;
@@ -108,6 +111,7 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
     private final Lazy<CameraLauncher> mCameraLauncherLazy;
     private final QuickSettingsController mQsController;
     private final QSHost mQSHost;
+    private final SecureLockscreenQSDisabler mSecureLockscreenQSDisabler;
 
     private static final VibrationAttributes HARDWARE_FEEDBACK_VIBRATION_ATTRIBUTES =
             VibrationAttributes.createForUsage(VibrationAttributes.USAGE_HARDWARE_FEEDBACK);
@@ -120,6 +124,7 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
             @Main Resources resources,
             ShadeController shadeController,
             CommandQueue commandQueue,
+            FlashlightController flashlightController,
             NotificationPanelViewController notificationPanelViewController,
             RemoteInputQuickSettingsDisabler remoteInputQuickSettingsDisabler,
             MetricsLogger metricsLogger,
@@ -141,12 +146,14 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
             SystemBarAttributesListener systemBarAttributesListener,
             Lazy<CameraLauncher> cameraLauncherLazy,
             UserTracker userTracker,
-            QSHost qsHost) {
+            QSHost qsHost,
+            SecureLockscreenQSDisabler secureLockscreenQSDisabler) {
         mCentralSurfaces = centralSurfaces;
         mQsController = quickSettingsController;
         mContext = context;
         mShadeController = shadeController;
         mCommandQueue = commandQueue;
+        mFlashlightController = flashlightController;
         mNotificationPanelViewController = notificationPanelViewController;
         mRemoteInputQuickSettingsDisabler = remoteInputQuickSettingsDisabler;
         mMetricsLogger = metricsLogger;
@@ -168,6 +175,7 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
         mCameraLauncherLazy = cameraLauncherLazy;
         mUserTracker = userTracker;
         mQSHost = qsHost;
+        mSecureLockscreenQSDisabler = secureLockscreenQSDisabler;
 
         mVibrateOnOpening = resources.getBoolean(R.bool.config_vibrateOnIconAnimation);
         mCameraLaunchGestureVibrationEffect = getCameraGestureVibrationEffect(
@@ -263,6 +271,7 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
 
         int state2BeforeAdjustment = state2;
         state2 = mRemoteInputQuickSettingsDisabler.adjustDisableFlags(state2);
+        state2 = mSecureLockscreenQSDisabler.adjustDisableFlags(state2);
         Log.d(CentralSurfaces.TAG,
                 mDisableFlagsLogger.getDisableFlagsString(
                         /* old= */ new DisableFlagsLogger.DisableState(
@@ -368,7 +377,6 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
             mPowerManager.wakeUp(SystemClock.uptimeMillis(), PowerManager.WAKE_REASON_CAMERA_LAUNCH,
                     "com.android.systemui:CAMERA_GESTURE");
         }
-
         if (source != StatusBarManager.CAMERA_LAUNCH_SOURCE_SCREEN_GESTURE) {
             vibrateForCameraGesture();
         }
@@ -566,11 +574,6 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
         }
     }
 
-    @Override
-    public void setBlockedGesturalNavigation(boolean blocked) {
-        mCentralSurfaces.setBlockedGesturalNavigation(blocked);
-    }
-
     private boolean isGoingToSleep() {
         return mWakefulnessLifecycle.getWakefulness()
                 == WakefulnessLifecycle.WAKEFULNESS_GOING_TO_SLEEP;
@@ -612,5 +615,12 @@ public class CentralSurfacesCommandQueueCallbacks implements CommandQueue.Callba
             timings[i] = pattern[i];
         }
         return VibrationEffect.createWaveform(timings, /* repeat= */ -1);
+    }
+
+    @Override
+    public void toggleCameraFlash() {
+        if (mFlashlightController.isAvailable()) {
+            mFlashlightController.setFlashlight(!mFlashlightController.isEnabled());
+        }
     }
 }

@@ -133,6 +133,7 @@ android_library {
         "res-product",
         "res-keyguard",
         "res",
+        "res-hwkeys",
     ],
     static_libs: [
         "WifiTrackerLib",
@@ -161,7 +162,6 @@ android_library {
         "androidx.lifecycle_lifecycle-common-java8",
         "androidx.lifecycle_lifecycle-extensions",
         "androidx.lifecycle_lifecycle-runtime-ktx",
-        "androidx.lifecycle_lifecycle-service",
         "androidx.dynamicanimation_dynamicanimation",
         "androidx-constraintlayout_constraintlayout",
         "androidx.exifinterface_exifinterface",
@@ -178,11 +178,13 @@ android_library {
         "lottie",
         "LowLightDreamLib",
         "motion_tool_lib",
-        "vendor.lineage.powershare-V1.0-java",
         "faceunlock_framework",
     ],
     manifest: "AndroidManifest.xml",
-    additional_manifests: ["CustomManifest.xml"],
+
+    libs: [
+        "ims-common",
+    ],
 
     kotlincflags: ["-Xjvm-default=enable"],
 
@@ -315,7 +317,6 @@ android_library {
         "motion_tool_lib",
         "androidx.core_core-animation-testing-nodeps",
         "androidx.compose.ui_ui",
-        "vendor.lineage.powershare-V1.0-java",
     ],
 }
 
@@ -345,6 +346,7 @@ android_library {
         "android.test.runner",
         "android.test.base",
         "android.test.mock",
+        "ims-common",
     ],
     kotlincflags: ["-Xjvm-default=enable"],
     aaptflags: [
@@ -458,6 +460,10 @@ android_app {
     system_ext_specific: true,
     certificate: "platform",
     privileged: true,
+
+    libs: [
+        "ims-common",
+    ],
 
     kotlincflags: ["-Xjvm-default=enable"],
 

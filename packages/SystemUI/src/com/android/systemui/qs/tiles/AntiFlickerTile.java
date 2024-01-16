@@ -16,7 +16,7 @@
 
 package com.android.systemui.qs.tiles;
 
-import static com.android.internal.custom.hardware.LiveDisplayManager.FEATURE_ANTI_FLICKER;
+import static com.android.internal.lineage.hardware.LiveDisplayManager.FEATURE_ANTI_FLICKER;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -30,7 +30,7 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import com.android.internal.custom.hardware.LiveDisplayManager;
+import com.android.internal.lineage.hardware.LiveDisplayManager;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.R;
@@ -48,7 +48,10 @@ import javax.inject.Inject;
 
 
 public class AntiFlickerTile extends QSTileImpl<BooleanState> {
-    private boolean mAntiFlickerEnabled = true;
+
+    public static final String TILE_SPEC = "anti_flicker";
+
+    private boolean mAntiFlickerAvailable = true;
     private boolean mReceiverRegistered;
 
     private final Icon mIcon = ResourceIcon.get(R.drawable.ic_qs_anti_flicker);
@@ -66,13 +69,14 @@ public class AntiFlickerTile extends QSTileImpl<BooleanState> {
             MetricsLogger metricsLogger,
             StatusBarStateController statusBarStateController,
             ActivityStarter activityStarter,
-            QSLogger qsLogger) {
+            QSLogger qsLogger
+    ) {
         super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
         mLiveDisplay = LiveDisplayManager.getInstance(mContext);
         if (!updateConfig()) {
-            mContext.registerReceiver(mReceiver, new IntentFilter(
-                    "lineageos.intent.action.INITIALIZE_LIVEDISPLAY"));
+            mContext.registerReceiver(mReceiver,
+                    new IntentFilter("lineageos.intent.action.INITIALIZE_LIVEDISPLAY"));
             mReceiverRegistered = true;
         }
     }
@@ -92,7 +96,7 @@ public class AntiFlickerTile extends QSTileImpl<BooleanState> {
 
     private boolean updateConfig() {
         if (mLiveDisplay.getConfig() != null) {
-            mAntiFlickerEnabled = mLiveDisplay.getConfig().hasFeature(FEATURE_ANTI_FLICKER);
+            mAntiFlickerAvailable = mLiveDisplay.getConfig().hasFeature(FEATURE_ANTI_FLICKER);
             if (!isAvailable()) {
                 mHost.removeTile(getTileSpec());
             }
@@ -124,7 +128,7 @@ public class AntiFlickerTile extends QSTileImpl<BooleanState> {
 
     @Override
     public boolean isAvailable() {
-        return mAntiFlickerEnabled;
+        return mAntiFlickerAvailable;
     }
 
     @Override
@@ -147,12 +151,11 @@ public class AntiFlickerTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.CUSTOM_SETTINGS;
+        return MetricsEvent.VOLTAGE;
     }
 
     @Override
-    public void handleSetListening(boolean listening) {
-    }
+    public void handleSetListening(boolean listening) {}
 
     private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
         @Override

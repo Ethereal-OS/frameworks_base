@@ -2385,6 +2385,9 @@ class DatabaseHelper extends SQLiteOpenHelper {
             loadBooleanSetting(stmt, Settings.Secure.WAKE_GESTURE_ENABLED,
                     R.bool.def_wake_gesture_enabled);
 
+            loadIntegerSetting(stmt, Settings.Secure.VOLUME_PANEL_ON_LEFT,
+                    R.bool.def_volume_panel_on_left);
+
             loadIntegerSetting(stmt, Secure.LOCK_SCREEN_SHOW_NOTIFICATIONS,
                     R.integer.def_lock_screen_show_notifications);
 
@@ -2595,6 +2598,12 @@ class DatabaseHelper extends SQLiteOpenHelper {
             }
             loadSetting(stmt, Settings.Global.LID_BEHAVIOR, defaultLidBehavior);
 
+            loadIntegerSetting(stmt, Settings.Global.TETHER_DUN_REQUIRED,
+                    R.integer.def_tether_dun_required);
+
+            loadIntegerSetting(stmt, Settings.Global.OTA_DISABLE_AUTOMATIC_UPDATE,
+                    R.integer.def_ota_disable_automatic_update);
+
             /*
              * IMPORTANT: Do not add any more upgrade steps here as the global,
              * secure, and system settings are no longer stored in a database
@@ -2664,8 +2673,7 @@ class DatabaseHelper extends SQLiteOpenHelper {
     }
 
     private String getDefaultDeviceName() {
-        return mContext.getResources().getString(R.string.def_device_name_simple,
-            SystemProperties.get("ro.product.marketname", Build.MODEL));
+        return mContext.getResources().getString(R.string.def_device_name_simple, Build.MODEL);
     }
 
     private TelephonyManager getTelephonyManager() {

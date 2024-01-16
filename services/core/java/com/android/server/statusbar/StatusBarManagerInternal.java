@@ -109,7 +109,7 @@ public interface StatusBarManagerInternal {
      */
     void setTopAppHidesStatusBar(boolean hidesStatusBar);
 
-    boolean showShutdownUi(boolean isReboot, String requestString, boolean rebootCustom);
+    boolean showShutdownUi(boolean isReboot, String requestString, boolean advancedReboot);
 
     /**
      * Show a rotation suggestion that a user may approve to rotate the screen.
@@ -199,4 +199,9 @@ public interface StatusBarManagerInternal {
      * @see com.android.internal.statusbar.IStatusBar#showMediaOutputSwitcher
      */
     void showMediaOutputSwitcher(String packageName);
+
+    /**
+     * Window manager notifies SystemUI of navigation bar "left in landscape" changes
+     */
+    void leftInLandscapeChanged(boolean isLeft);
 }

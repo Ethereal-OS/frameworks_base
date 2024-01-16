@@ -79,6 +79,7 @@ import android.content.pm.ComponentInfo;
 import android.content.pm.DataLoaderType;
 import android.content.pm.FallbackCategoryProvider;
 import android.content.pm.FeatureInfo;
+import android.content.pm.GosPackageState;
 import android.content.pm.IDexModuleRegisterCallback;
 import android.content.pm.IOnChecksumsReadyListener;
 import android.content.pm.IPackageChangeObserver;
@@ -198,6 +199,8 @@ import com.android.server.Watchdog;
 import com.android.server.apphibernation.AppHibernationManagerInternal;
 import com.android.server.compat.CompatChange;
 import com.android.server.compat.PlatformCompat;
+import com.android.server.ext.PackageManagerHooks;
+import com.android.server.ext.SeInfoOverride;
 import com.android.server.pm.Installer.InstallerException;
 import com.android.server.pm.Settings.VersionInfo;
 import com.android.server.pm.dex.ArtManagerService;
@@ -214,6 +217,8 @@ import com.android.server.pm.permission.LegacyPermissionManagerInternal;
 import com.android.server.pm.permission.LegacyPermissionManagerService;
 import com.android.server.pm.permission.PermissionManagerService;
 import com.android.server.pm.permission.PermissionManagerServiceInternal;
+import com.android.server.pm.permission.SpecialRuntimePermUtils;
+import com.android.server.pm.pkg.GosPackageStatePm;
 import com.android.server.pm.pkg.PackageStateInternal;
 import com.android.server.pm.pkg.PackageUserState;
 import com.android.server.pm.pkg.PackageUserStateInternal;
@@ -241,6 +246,8 @@ import com.android.server.utils.WatchedSparseIntArray;
 import com.android.server.utils.Watcher;
 
 import dalvik.system.VMRuntime;
+
+import ink.kaleidoscope.server.ParallelSpaceManagerService;
 
 import libcore.util.HexEncoding;
 
@@ -275,6 +282,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * Keep track of all those APKs everywhere.
@@ -330,7 +338,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
     public static final boolean DEBUG_PACKAGE_SCANNING = false;
     static final boolean DEBUG_VERIFY = false;
     public static final boolean DEBUG_PERMISSIONS = false;
-    public static final boolean DEBUG_COMPRESSION = Build.IS_DEBUGGABLE;
+    public static final boolean DEBUG_COMPRESSION = Build.IS_ENG;
     public static final boolean TRACE_SNAPSHOTS = false;
     private static final boolean DEBUG_PER_UID_READ_TIMEOUTS = false;
 
@@ -340,7 +348,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
     public static final boolean DEBUG_DEXOPT = false;
 
     static final boolean DEBUG_ABI_SELECTION = false;
-    public static final boolean DEBUG_INSTANT = Build.IS_DEBUGGABLE;
+    public static final boolean DEBUG_INSTANT = Build.IS_ENG;
 
     static final boolean HIDE_EPHEMERAL_APIS = false;
 
@@ -859,10 +867,9 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
 
     private final PackageProperty mPackageProperty = new PackageProperty();
 
-    ArrayList<ComponentName> mDisabledComponentsList;
-    ArrayList<ComponentName> mForceEnabledComponentsList;
-
     final PendingPackageBroadcasts mPendingBroadcasts;
+
+    private final List<ComponentName> mDisabledComponentsList = new ArrayList<ComponentName>();
 
     static final int SEND_PENDING_BROADCAST = 1;
     static final int INIT_COPY = 5;
@@ -1535,6 +1542,8 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
         injector.getCompatibility().registerListener(SELinuxMMAC.SELINUX_R_CHANGES,
                 selinuxChangeListener);
 
+        m.selinuxChangeListener = selinuxChangeListener;
+
         m.installAllowlistedSystemPackages();
         IPackageManagerImpl iPackageManager = m.new IPackageManagerImpl();
         ServiceManager.addService("package", iPackageManager);
@@ -1550,38 +1559,6 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
                 mExistingPackages)) {
             scheduleWritePackageRestrictions(UserHandle.USER_ALL);
             scheduleWriteSettings();
-        }
-    }
-
-    private void loadForceEnabledComponents(){
-        String[] components = mContext.getResources().getStringArray(
-                    com.android.internal.R.array.config_forceEnabledComponents);
-        for (String name : components) {
-            ComponentName cn = ComponentName.unflattenFromString(name);
-            mForceEnabledComponentsList.add(cn);
-        }
-    }
-
-    private void enableComponents(String[] components, boolean enable) {
-        // Disable or enable components marked at build-time
-        for (String name : components) {
-            ComponentName cn = ComponentName.unflattenFromString(name);
-            if (!enable) {
-                mDisabledComponentsList.add(cn);
-            }
-            Slog.v(TAG, "Changing enabled state of " + name + " to " + enable);
-            String className = cn.getClassName();
-            PackageSetting pkgSetting = mSettings.mPackages.get(cn.getPackageName());
-            if (pkgSetting == null || pkgSetting.getPkg() == null
-                    || !AndroidPackageUtils.hasComponentClassName(pkgSetting.getPkg(), className)) {
-                Slog.w(TAG, "Unable to change enabled state of " + name + " to " + enable);
-                continue;
-            }
-            if (enable) {
-                pkgSetting.enableComponentLPw(className, UserHandle.USER_OWNER);
-            } else {
-                pkgSetting.disableComponentLPw(className, UserHandle.USER_OWNER);
-            }
         }
     }
 
@@ -2103,7 +2080,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             // allow...  it would be nice to have some better way to handle
             // this situation.
             if (mIsUpgrade) {
-                Slog.i(TAG, "Build fingerprint changed from " + ver.fingerprint + " to "
+                Slog.i(TAG, "Build incremental version changed from " + ver.fingerprint + " to "
                         + Build.VERSION.INCREMENTAL
                         + "; regranting permissions for internal storage");
             }
@@ -2121,17 +2098,14 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             }
 
             // Disable components marked for disabling at build-time
-            mDisabledComponentsList = new ArrayList<ComponentName>();
             enableComponents(mContext.getResources().getStringArray(
                     com.android.internal.R.array.config_deviceDisabledComponents), false);
             enableComponents(mContext.getResources().getStringArray(
                     com.android.internal.R.array.config_globallyDisabledComponents), false);
 
             // Enable components marked for forced-enable at build-time
-            mForceEnabledComponentsList = new ArrayList<ComponentName>();
             enableComponents(mContext.getResources().getStringArray(
                     com.android.internal.R.array.config_forceEnabledComponents), true);
-            loadForceEnabledComponents();
 
             // If this is first boot after an OTA, and a normal boot, then
             // we need to clear code cache directories.
@@ -2139,7 +2113,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             // across OTAs and are used to drive profile verification (post OTA) and
             // profile compilation (without waiting to collect a fresh set of profiles).
             if (mIsUpgrade && !mOnlyCore) {
-                Slog.i(TAG, "Build fingerprint changed; clearing code caches");
+                Slog.i(TAG, "Build incremental version changed; clearing code caches");
                 for (int i = 0; i < packageSettings.size(); i++) {
                     final PackageSetting ps = packageSettings.valueAt(i);
                     if (Objects.equals(StorageManager.UUID_PRIVATE_INTERNAL, ps.getVolumeUuid())) {
@@ -2305,6 +2279,29 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
         mServiceStartWithDelay = SystemClock.uptimeMillis() + (60 * 1000L);
 
         Slog.i(TAG, "Fix for b/169414761 is applied");
+    }
+
+    private void enableComponents(String[] components, boolean enable) {
+        // Disable or enable components marked at build-time
+        for (String name : components) {
+            ComponentName cn = ComponentName.unflattenFromString(name);
+            if (!enable) {
+                mDisabledComponentsList.add(cn);
+            }
+            Slog.v(TAG, "Changing enabled state of " + name + " to " + enable);
+            String className = cn.getClassName();
+            PackageSetting pkgSetting = mSettings.mPackages.get(cn.getPackageName());
+            if (pkgSetting == null || pkgSetting.getPkg() == null
+                    || !AndroidPackageUtils.hasComponentClassName(pkgSetting.getPkg(), className)) {
+                Slog.w(TAG, "Unable to change enabled state of " + name + " to " + enable);
+                continue;
+            }
+            if (enable) {
+                pkgSetting.enableComponentLPw(className, UserHandle.USER_OWNER);
+            } else {
+                pkgSetting.disableComponentLPw(className, UserHandle.USER_OWNER);
+            }
+        }
     }
 
     @GuardedBy("mLock")
@@ -2508,7 +2505,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
     @Nullable ComponentName getInstantAppResolver(@NonNull Computer snapshot) {
         final String[] packageArray =
                 mContext.getResources().getStringArray(R.array.config_ephemeralResolverPackage);
-        if (packageArray.length == 0 && !Build.IS_DEBUGGABLE) {
+        if (packageArray.length == 0 && !Build.IS_ENG) {
             if (DEBUG_INSTANT) {
                 Slog.d(TAG, "Ephemeral resolver NOT found; empty package list");
             }
@@ -2519,7 +2516,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
         final int resolveFlags =
                 MATCH_DIRECT_BOOT_AWARE
                 | MATCH_DIRECT_BOOT_UNAWARE
-                | (!Build.IS_DEBUGGABLE ? MATCH_SYSTEM_ONLY : 0);
+                | (!Build.IS_ENG ? MATCH_SYSTEM_ONLY : 0);
         final Intent resolverIntent = new Intent(Intent.ACTION_RESOLVE_INSTANT_APP_PACKAGE);
         List<ResolveInfo> resolvers = snapshot.queryIntentServicesInternal(resolverIntent, null,
                 resolveFlags, UserHandle.USER_SYSTEM, callingUid, false /*includeInstantApps*/);
@@ -2540,7 +2537,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             }
 
             final String packageName = info.serviceInfo.packageName;
-            if (!possiblePackages.contains(packageName) && !Build.IS_DEBUGGABLE) {
+            if (!possiblePackages.contains(packageName) && !Build.IS_ENG) {
                 if (DEBUG_INSTANT) {
                     Slog.d(TAG, "Ephemeral resolver not in allowed package list;"
                             + " pkg: " + packageName + ", info:" + info);
@@ -3103,15 +3100,24 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
                 callingMethod);
 
         final int packageUid = snapshot.getPackageUid(callingPackage, 0, userId);
-        final boolean allowedPackageUid = packageUid == callingUid;
-        // TODO(b/139383163): remove special casing for shell and enforce INTERACT_ACROSS_USERS_FULL
-        final boolean allowedShell = callingUid == SHELL_UID
-                && UserHandle.isSameApp(packageUid, callingUid);
-
-        if (!allowedShell && !allowedPackageUid) {
-            throw new SecurityException("Calling package " + callingPackage + " in user "
-                    + userId + " does not belong to calling uid " + callingUid);
+        if (packageUid == callingUid) {
+            return;
         }
+
+        final String callerMismatchMessage = "Calling package " + callingPackage + " in user "
+                + userId + " does not belong to calling uid " + callingUid;
+        if (!UserHandle.isSameApp(packageUid, callingUid)) {
+            throw new SecurityException(callerMismatchMessage);
+        }
+
+        final UserManagerService ums = UserManagerService.getInstance();
+        final UserInfo parent = ums != null ? ums.getProfileParent(userId) : null;
+
+        // If calling from a parent, we only need INTERACT_ACROSS_USERS, not full.
+        final boolean requireFullPermission = parent == null
+                || callingUid != snapshot.getPackageUid(callingPackage, 0, parent.id);
+        snapshot.enforceCrossUserPermission(callingUid, userId, requireFullPermission,
+                false /* checkShell */, callerMismatchMessage);
     }
 
     void unsuspendForSuspendingPackage(@NonNull Computer computer, String suspendingPackage,
@@ -3237,6 +3243,22 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             final IPackageDeleteObserver2 observer, final int userId, final int deleteFlags) {
         mDeletePackageHelper.deletePackageVersionedInternal(
                 versionedPackage, observer, userId, deleteFlags, false);
+
+        // Delete for parallel users if the package is deleted in their owner.
+        if (!ParallelSpaceManagerService.isCurrentParallelOwner(userId))
+            return;
+        final long token = Binder.clearCallingIdentity();
+        try {
+            for (int parallelUserId : ParallelSpaceManagerService.getCurrentParallelUserIds()) {
+                    mDeletePackageHelper.deletePackageVersionedInternal(versionedPackage,
+                    new PackageInstallerService.PackageDeleteObserverAdapter(
+                            mContext, null, versionedPackage.getPackageName(),
+                            false, parallelUserId)
+                    .getBinder(), parallelUserId, 0, true);
+            }
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
     }
 
     boolean isCallerVerifier(@NonNull Computer snapshot, int callingUid) {
@@ -3438,10 +3460,17 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
     public void addCrossProfileIntentFilter(@NonNull Computer snapshot,
             WatchedIntentFilter intentFilter, String ownerPackage, int sourceUserId,
             int targetUserId, int flags) {
+        modifyCrossProfileIntentFilter(snapshot, intentFilter, ownerPackage, sourceUserId,
+                targetUserId, flags, true);
+    }
+
+    private void modifyCrossProfileIntentFilter(Computer snapshot, WatchedIntentFilter intentFilter,
+            String ownerPackage, int sourceUserId, int targetUserId, int flags, boolean add) {
         mContext.enforceCallingOrSelfPermission(
-                        android.Manifest.permission.INTERACT_ACROSS_USERS_FULL, null);
+                android.Manifest.permission.INTERACT_ACROSS_USERS_FULL, null);
         int callingUid = Binder.getCallingUid();
-        enforceOwnerRights(snapshot, ownerPackage, callingUid);
+        enforceOwnerRights(snapshot != null ? snapshot : snapshotComputer(),
+                ownerPackage, callingUid);
         PackageManagerServiceUtils.enforceShellRestriction(mInjector.getUserManagerInternal(),
                 UserManager.DISALLOW_DEBUGGING_FEATURES, callingUid, sourceUserId);
         if (!intentFilter.checkDataPathAndSchemeSpecificParts()) {
@@ -3450,7 +3479,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
                     + " in the filter.");
         }
         if (intentFilter.countActions() == 0) {
-            Slog.w(TAG, "Cannot set a crossProfile intent filter with no filter actions");
+            Slog.w(TAG, "Cannot modify a crossProfile intent filter with no filter actions");
             return;
         }
         synchronized (mLock) {
@@ -3461,14 +3490,22 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             ArrayList<CrossProfileIntentFilter> existing = resolver.findFilters(intentFilter);
             // We have all those whose filter is equal. Now checking if the rest is equal as well.
             if (existing != null) {
-                int size = existing.size();
-                for (int i = 0; i < size; i++) {
-                    if (newFilter.equalsIgnoreFilter(existing.get(i))) {
-                        return;
+                if (add) {
+                    int size = existing.size();
+                    for (int i = 0; i < size; i++) {
+                        if (newFilter.equalsIgnoreFilter(existing.get(i))) {
+                            return;
+                        }
+                    }
+                } else {
+                    for (CrossProfileIntentFilter crossProfileIntentFilter : existing) {
+                        resolver.removeFilter(crossProfileIntentFilter);
                     }
                 }
             }
-            resolver.addFilter(snapshotComputer(), newFilter);
+            if (add) {
+                resolver.addFilter(snapshotComputer(), newFilter);
+            }
         }
         scheduleWritePackageRestrictions(sourceUserId);
     }
@@ -3836,7 +3873,8 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
                 final AndroidPackage pkg = pkgSettings.get(packageName).getPkg();
                 if (pkg == null || !AndroidPackageUtils.hasComponentClassName(pkg, className)) {
                     if (pkg != null
-                            && pkg.getTargetSdkVersion() >= Build.VERSION_CODES.JELLY_BEAN) {
+                            && pkg.getTargetSdkVersion() >= Build.VERSION_CODES.JELLY_BEAN
+                            && (setting.getEnabledFlags() & PackageManager.SKIP_IF_MISSING) == 0) {
                         throw new IllegalArgumentException("Component class " + className
                                 + " does not exist in " + packageName);
                     } else {
@@ -4228,6 +4266,8 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
 
         // Prune unused static shared libraries which have been cached a period of time
         schedulePruneUnusedStaticSharedLibraries(false /* delay */);
+
+        GosPackageStatePmHooks.init(this);
     }
 
     //TODO: b/111402650
@@ -4613,6 +4653,10 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             mHandler.post(new Runnable() {
                 public void run() {
                     mHandler.removeCallbacks(this);
+
+                    GosPackageStatePmHooks.onClearApplicationUserData(
+                            PackageManagerService.this, packageName, userId);
+
                     final boolean succeeded;
                     try (PackageFreezer freezer = freezePackage(packageName,
                             "clearApplicationUserData")) {
@@ -4653,6 +4697,13 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
                     } //end if observer
                 } //end run
             });
+        }
+
+        @Override
+        public void removeCrossProfileIntentFilter(IntentFilter intentFilter, String ownerPackage,
+                int sourceUserId, int targetUserId, int flags) {
+            modifyCrossProfileIntentFilter(null, new WatchedIntentFilter(intentFilter),
+                    ownerPackage, sourceUserId, targetUserId, flags, false);
         }
 
         @Override
@@ -4935,7 +4986,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
 
         @Override
         public IBinder getHoldLockToken() {
-            if (!Build.IS_DEBUGGABLE) {
+            if (!Build.IS_ENG) {
                 throw new SecurityException("getHoldLockToken requires a debuggable build");
             }
 
@@ -5647,21 +5698,12 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
         public void setComponentEnabledSetting(ComponentName componentName,
                 int newState, int flags, int userId) {
             if (!mUserManager.exists(userId)) return;
-
             // Don't allow to enable components marked for disabling at build-time
             if (mDisabledComponentsList.contains(componentName)) {
-                Slog.d(TAG, "Ignoring attempt to set enabled state of disabled component "
+                Slog.i(TAG, "Ignoring attempt to set enabled state of disabled component "
                         + componentName.flattenToString());
                 return;
             }
-
-            // Don't allow to control components forced enabled at build-time
-            if (mForceEnabledComponentsList.contains(componentName)) {
-                Slog.d(TAG, "Ignoring attempt to control forced enabled component "
-                        + componentName.flattenToString());
-                return;
-            }
-
             setEnabledSettings(List.of(new PackageManager.ComponentEnabledSetting(componentName, newState, flags)),
                     userId, null /* callingPackage */);
         }
@@ -5672,8 +5714,12 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
             if (settings == null || settings.isEmpty()) {
                 throw new IllegalArgumentException("The list of enabled settings is empty");
             }
-
-            setEnabledSettings(settings, userId, null /* callingPackage */);
+            final List<PackageManager.ComponentEnabledSetting> filteredSettings = settings.stream()
+                .filter(setting -> {
+                    return !mDisabledComponentsList.contains(setting.getComponentName());
+                })
+                .collect(Collectors.toList());
+            setEnabledSettings(filteredSettings, userId, null /* callingPackage */);
         }
 
         @Override
@@ -6094,6 +6140,96 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
                     getPerUidReadTimeouts(snapshot)
             ).doDump(snapshot, fd, pw, args);
         }
+
+        @Nullable
+        @Override
+        public Bundle getExtraAppBindArgs(String packageName) {
+            return PackageManagerHooks.getExtraAppBindArgs(PackageManagerService.this, packageName);
+        }
+
+        @Override
+        public void skipSpecialRuntimePermissionAutoGrantsForPackage(String packageName, int userId, List<String> permissions) {
+            mContext.enforceCallingPermission(Manifest.permission.INSTALL_PACKAGES, null);
+            SpecialRuntimePermUtils.skipAutoGrantsForPackage(packageName, userId, permissions);
+        }
+
+        @Override
+        public GosPackageState getGosPackageState(@NonNull String packageName, int userId) {
+            return GosPackageStatePmHooks.get(PackageManagerService.this, packageName, userId);
+        }
+
+        @Override
+        public boolean setGosPackageState(@NonNull String packageName, int userId,
+                                                  @NonNull GosPackageState updatedPs, int editorFlags) {
+            return GosPackageStatePmHooks.set(PackageManagerService.this, packageName, userId,
+                    updatedPs, editorFlags);
+        }
+
+        // Allow privileged installer to search for packages across all users to let it avoid
+        // redownloading APKs for packages that are already installed in other user profiles,
+        // and to avoid potential downgrade errors (when other user has a newer package version).
+
+        // Note that even without this method, package installers (including unprivileged ones) can
+        // detect the presence and version code of a package that is not installed for the current user
+        // by looking at error codes that PackageManager returns after attempt to install a package
+        // with the same package name. Such packages can be generated at runtime by the installer.
+        @Override
+        public PackageInfo findPackage(String packageName, long minVersion, Bundle validSignaturesSha256) {
+            mContext.enforceCallingPermission(Manifest.permission.INSTALL_PACKAGES, null);
+
+            AndroidPackage pkg = snapshot().getPackage(packageName);
+            if (pkg == null) {
+                return null;
+            }
+
+            long version = pkg.getLongVersionCode();
+
+            if (version < minVersion) {
+                return null;
+            }
+
+            // no simple way to pass byte[][] array directly due to AIDL limitation
+            final int numSignatures = validSignaturesSha256.getInt("len");
+
+            boolean signatureMatch = false;
+
+            for (int i = 0; i < numSignatures; ++i) {
+                byte[] signatureSha256 = validSignaturesSha256.getByteArray(Integer.toString(i));
+                if (pkg.getSigningDetails().hasSha256Certificate(signatureSha256)) {
+                    signatureMatch = true;
+                    break;
+                }
+            }
+
+            if (!signatureMatch) {
+                return null;
+            }
+
+            var pi = new PackageInfo();
+            pi.setLongVersionCode(version);
+            pi.versionName = pkg.getVersionName();
+            pi.applicationInfo = new ApplicationInfo();
+            pi.applicationInfo.setBaseCodePath(pkg.getBaseApkPath());
+            pi.applicationInfo.setSplitCodePaths(pkg.getSplitCodePaths());
+
+            if (pkg.isSystem()) {
+                pi.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;
+            }
+            return pi;
+        }
+
+        private final PrivilegedInstallerHelper privInstallerHelper =
+                new PrivilegedInstallerHelper(PackageManagerService.this);
+
+        @Override
+        public boolean updateListOfBusyPackages(boolean add, List<String> packageNames, IBinder callerBinder) {
+            return privInstallerHelper.updateListOfBusyPackages(add, packageNames, callerBinder);
+        }
+
+        @Override
+        public void updateSeInfo(String packageName) {
+            SeInfoOverride.updateSeInfo(PackageManagerService.this, packageName);
+        }
     }
 
     private class PackageManagerLocalImpl implements PackageManagerLocal {
@@ -6302,16 +6438,6 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
                 SparseArray<String> profileOwnerPackages) {
             mProtectedPackages.setDeviceAndProfileOwnerPackages(
                     deviceOwnerUserId, deviceOwnerPackage, profileOwnerPackages);
-            final ArraySet<Integer> usersWithPoOrDo = new ArraySet<>();
-            if (deviceOwnerPackage != null) {
-                usersWithPoOrDo.add(deviceOwnerUserId);
-            }
-            final int sz = profileOwnerPackages.size();
-            for (int i = 0; i < sz; i++) {
-                if (profileOwnerPackages.valueAt(i) != null) {
-                    removeAllNonSystemPackageSuspensions(profileOwnerPackages.keyAt(i));
-                }
-            }
         }
 
         @Override
@@ -6597,6 +6723,12 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
         public void onPackageProcessKilledForUninstall(String packageName) {
             mHandler.post(() -> PackageManagerService.this.notifyInstallObserver(packageName,
                     true /* killApp */));
+        }
+
+        @Nullable
+        @Override
+        public GosPackageStatePm getGosPackageState(String packageName, int userId) {
+            return GosPackageStatePm.get(PackageManagerService.this, packageName, userId);
         }
     }
 
@@ -6928,7 +7060,7 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
 
     @Override
     public void verifyHoldLockToken(IBinder token) {
-        if (!Build.IS_DEBUGGABLE) {
+        if (!Build.IS_ENG) {
             throw new SecurityException("holdLock requires a debuggable build");
         }
 
@@ -7367,5 +7499,12 @@ public class PackageManagerService implements PackageSender, TestUtilityService 
         synchronized (mLock) {
             mSettings.addInstallerPackageNames(installSource);
         }
+    }
+
+    private CompatChange.ChangeListener selinuxChangeListener;
+
+    public void updateSeInfo(String packageName) {
+        // use the same procedure that is used for SELinux compat changes
+        selinuxChangeListener.onCompatChange(packageName);
     }
 }

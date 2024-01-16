@@ -200,9 +200,7 @@ public class DreamTile extends QSTileImpl<QSTile.BooleanState> {
 
     @Override
     public boolean isAvailable() {
-        // Only enable for devices that have dreams for the user(s) that can dream.
         return mDreamSupported
-                // TODO(b/257333623): Allow the Dock User to be non-SystemUser user in HSUM.
                 && (!mDreamOnlyEnabledForDockUser || mUserTracker.getUserHandle().isSystem());
     }
 

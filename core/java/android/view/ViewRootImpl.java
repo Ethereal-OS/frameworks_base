@@ -405,8 +405,6 @@ public final class ViewRootImpl implements ViewParent,
     private boolean mUseBLASTAdapter;
     private boolean mForceDisableBLAST;
 
-    private boolean mFastScrollSoundEffectsEnabled;
-
     /**
      * Signals that compatibility booleans have been initialized according to
      * target SDK versions.
@@ -1000,8 +998,6 @@ public final class ViewRootImpl implements ViewParent,
 
         loadSystemProperties();
         mImeFocusController = new ImeFocusController(this);
-        AudioManager audioManager = mContext.getSystemService(AudioManager.class);
-        mFastScrollSoundEffectsEnabled = audioManager.areNavigationRepeatSoundEffectsEnabled();
 
         mScrollCaptureRequestTimeout = SCROLL_CAPTURE_REQUEST_TIMEOUT_MILLIS;
         mOnBackInvokedDispatcher = new WindowOnBackInvokedDispatcher(
@@ -1333,11 +1329,7 @@ public final class ViewRootImpl implements ViewParent,
                 }
                 if (DEBUG_LAYOUT) Log.v(mTag, "Added window " + mWindow);
                 if (res < WindowManagerGlobal.ADD_OKAY) {
-                    mAttachInfo.mRootView = null;
-                    mAdded = false;
                     mFallbackEventHandler.setView(null);
-                    unscheduleTraversals();
-                    setAccessibilityFocus(null, null);
                     switch (res) {
                         case WindowManagerGlobal.ADD_BAD_APP_TOKEN:
                         case WindowManagerGlobal.ADD_BAD_SUBWINDOW_TOKEN:
@@ -5378,7 +5370,9 @@ public final class ViewRootImpl implements ViewParent,
         // Make sure we free-up insets resources if view never received onWindowFocusLost()
         // because of a die-signal
         mInsetsController.onWindowFocusLost();
-        mFirstInputStage.onDetachedFromWindow();
+        if (mFirstInputStage != null) {
+            mFirstInputStage.onDetachedFromWindow();
+        }
         if (mView != null && mView.mAttachInfo != null) {
             mAttachInfo.mTreeObserver.dispatchOnWindowAttachedChange(false);
             mView.dispatchDetachedFromWindow();
@@ -6493,6 +6487,11 @@ public final class ViewRootImpl implements ViewParent,
         private int processPointerEvent(QueuedInputEvent q) {
             final MotionEvent event = (MotionEvent)q.mEvent;
 
+            if (event.getPointerCount() == 3 && isSwipeToScreenshotGestureActive()) {
+                event.setAction(MotionEvent.ACTION_CANCEL);
+                Log.d("teste", "canceling motionEvent because of threeGesture detecting");
+            }
+
             // Translate the pointer event for compatibility, if needed.
             if (mTranslator != null) {
                 mTranslator.translateEventInScreenToAppWindow(event);
@@ -6773,10 +6772,6 @@ public final class ViewRootImpl implements ViewParent,
             final MotionEvent event = (MotionEvent)q.mEvent;
             mHandwritingInitiator.onTouchEvent(event);
 
-            if (event.getPointerCount() == 3 && isSwipeToScreenshotGestureActive()) {
-                event.setAction(MotionEvent.ACTION_CANCEL);
-            }
-
             mAttachInfo.mUnbufferedDispatchRequested = false;
             mAttachInfo.mHandlingPointerEvent = true;
             boolean handled = mView.dispatchPointerEvent(event);
@@ -6858,7 +6853,6 @@ public final class ViewRootImpl implements ViewParent,
         }
         if (x < 0 || x >= mView.getWidth() || y < 0 || y >= mView.getHeight()) {
             // E.g. when moving window divider with mouse
-            Slog.d(mTag, "updatePointerIcon called with position out of bounds");
             return false;
         }
         final PointerIcon pointerIcon = mView.onResolvePointerIcon(event, pointerIndex);
@@ -8543,8 +8537,8 @@ public final class ViewRootImpl implements ViewParent,
         try {
             final AudioManager audioManager = getAudioManager();
 
-            if (mFastScrollSoundEffectsEnabled
-                    && SoundEffectConstants.isNavigationRepeat(effectId)) {
+            if (SoundEffectConstants.isNavigationRepeat(effectId)
+                    && audioManager.areNavigationRepeatSoundEffectsEnabled()) {
                 audioManager.playSoundEffect(
                         SoundEffectConstants.nextNavigationRepeatSoundEffectId());
                 return;
@@ -8817,6 +8811,14 @@ public final class ViewRootImpl implements ViewParent,
             mOnBackInvokedDispatcher.detachFromWindow();
             if (mAdded) {
                 dispatchDetachedFromWindow();
+            } else {
+                Log.w(mTag, "add view failed and remove related objects");
+
+                mAccessibilityManager.removeAccessibilityStateChangeListener(
+                        mAccessibilityInteractionConnectionManager);
+                mAccessibilityManager.removeHighTextContrastStateChangeListener(
+                        mHighContrastTextManager);
+                mDisplayManager.unregisterDisplayListener(mDisplayListener);
             }
 
             if (mAdded && !mFirst) {
@@ -11343,6 +11345,7 @@ public final class ViewRootImpl implements ViewParent,
         try {
             return ActivityManager.getService().isSwipeToScreenshotGestureActive();
         } catch (RemoteException e) {
+            Log.e("teste", "isSwipeToScreenshotGestureActive exception", e);
             return false;
         }
     }

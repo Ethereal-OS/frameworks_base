@@ -16,11 +16,8 @@
 
 package com.android.server.wm;
 
-import static android.app.WindowConfiguration.ACTIVITY_TYPE_RECENTS;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FREEFORM;
 import static android.app.WindowConfiguration.WINDOWING_MODE_MULTI_WINDOW;
-import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
-import static android.view.Display.INVALID_DISPLAY;
 import static android.view.Display.TYPE_INTERNAL;
 import static android.view.InsetsState.ITYPE_BOTTOM_MANDATORY_GESTURES;
 import static android.view.InsetsState.ITYPE_BOTTOM_TAPPABLE_ELEMENT;
@@ -93,14 +90,12 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.Px;
 import android.app.ActivityManager;
-import android.app.ActivityTaskManager;
 import android.app.ActivityThread;
 import android.app.LoadedApk;
 import android.app.ResourcesManager;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.graphics.Insets;
@@ -117,7 +112,6 @@ import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
-import android.util.BoostFramework;
 import android.util.ArraySet;
 import android.util.PrintWriterPrinter;
 import android.util.Slog;
@@ -153,6 +147,7 @@ import com.android.internal.statusbar.LetterboxDetails;
 import com.android.internal.util.ScreenshotHelper;
 import com.android.internal.util.ScreenshotRequest;
 import com.android.internal.util.function.TriConsumer;
+import com.android.internal.util.hwkeys.ActionUtils;
 import com.android.internal.view.AppearanceRegion;
 import com.android.internal.widget.PointerLocationView;
 import com.android.server.LocalServices;
@@ -169,8 +164,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.Consumer;
-
-import com.android.internal.util.custom.NavbarUtils;
 
 /**
  * The policy that provides the basic behaviors and states of a display to show UI.
@@ -215,19 +208,6 @@ public class DisplayPolicy {
     private final AccessibilityManager mAccessibilityManager;
     private final ImmersiveModeConfirmation mImmersiveModeConfirmation;
     private final ScreenshotHelper mScreenshotHelper;
-
-    private static boolean SCROLL_BOOST_SS_ENABLE = false;
-    private static boolean DRAG_PLH_ENABLE = false;
-    private static boolean isLowRAM = false;
-
-    /*
-     * @hide
-     */
-    BoostFramework mPerfBoostDrag = null;
-    BoostFramework mPerfBoostFling = null;
-    BoostFramework mPerfBoostPrefling = null;
-    BoostFramework mPerf = new BoostFramework();
-    private boolean mIsPerfBoostFlingAcquired;
 
     private final Object mServiceAcquireLock = new Object();
     private StatusBarManagerInternal mStatusBarManagerInternal;
@@ -453,7 +433,7 @@ public class DisplayPolicy {
 
             ContentResolver resolver = mContext.getContentResolver();
             resolver.registerContentObserver(Settings.System.getUriFor(
-                    Settings.System.NAVIGATION_BAR_SHOW), false, this,
+                    Settings.System.FORCE_SHOW_NAVBAR), false, this,
                     UserHandle.USER_ALL);
 
             updateSettings();
@@ -463,38 +443,6 @@ public class DisplayPolicy {
         public void onChange(boolean selfChange) {
             updateSettings();
         }
-    }
-
-    private String getAppPackageName() {
-        String currentPackage;
-        try {
-            ActivityManager.RunningTaskInfo rti = ActivityTaskManager.getService().getTasks(
-                1, false /* filterVisibleRecents */, false /*keepIntentExtra */, INVALID_DISPLAY /*don't filter display */).get(0);
-            currentPackage = rti.topActivity.getPackageName();
-        } catch (Exception e) {
-            currentPackage = null;
-        }
-        return currentPackage;
-    }
-
-    private boolean isTopAppGame(String currentPackage, BoostFramework BoostType) {
-        boolean isGame = false;
-        if (isLowRAM) {
-            try {
-                ApplicationInfo ai = mContext.getPackageManager().getApplicationInfo(currentPackage, 0);
-                if(ai != null) {
-                    isGame = (ai.category == ApplicationInfo.CATEGORY_GAME) ||
-                            ((ai.flags & ApplicationInfo.FLAG_IS_GAME) ==
-                                ApplicationInfo.FLAG_IS_GAME);
-                }
-            } catch (Exception e) {
-                return false;
-            }
-        } else {
-            isGame = (BoostType.perfGetFeedback(BoostFramework.VENDOR_FEEDBACK_WORKLOAD_TYPE,
-                      currentPackage) == BoostFramework.WorkloadType.GAME);
-        }
-        return isGame;
     }
 
     DisplayPolicy(WindowManagerService service, DisplayContent displayContent) {
@@ -526,12 +474,6 @@ public class DisplayPolicy {
             mScreenOnEarly = true;
             mScreenOnFully = true;
         }
-
-        if (mPerf != null) {
-            SCROLL_BOOST_SS_ENABLE = Boolean.parseBoolean(mPerf.perfGetProp("vendor.perf.gestureflingboost.enable", "true"));
-            DRAG_PLH_ENABLE = Boolean.parseBoolean(mPerf.perfGetProp("ro.vendor.perf.dplh", "false"));
-        }
-        isLowRAM = SystemProperties.getBoolean("ro.config.low_ram", false);
 
         final Looper looper = UiThread.getHandler().getLooper();
         mHandler = new PolicyHandler(looper);
@@ -614,100 +556,6 @@ public class DisplayPolicy {
                     }
 
                     @Override
-                    public void onVerticalFling(int duration) {
-                        String currentPackage = getAppPackageName();
-                        if (currentPackage == null) {
-                            Slog.e(TAG, "Error: package name null");
-                            return;
-                        }
-                        if (SCROLL_BOOST_SS_ENABLE) {
-                            if (mPerfBoostFling == null) {
-                                mPerfBoostFling = new BoostFramework();
-                                mIsPerfBoostFlingAcquired = false;
-                            }
-                            if (mPerfBoostFling == null) {
-                                Slog.e(TAG, "Error: boost object null");
-                                return;
-                            }
-                            boolean isGame = isTopAppGame(currentPackage, mPerfBoostFling);
-                            if (!isGame) {
-                                mPerfBoostFling.perfHint(BoostFramework.VENDOR_HINT_SCROLL_BOOST,
-                                    currentPackage, duration + 160, BoostFramework.Scroll.VERTICAL);
-                                mIsPerfBoostFlingAcquired = true;
-                           }
-                        }
-                    }
-
-                    @Override
-                    public void onHorizontalFling(int duration) {
-                        String currentPackage = getAppPackageName();
-                        if (currentPackage == null) {
-                            Slog.e(TAG, "Error: package name null");
-                            return;
-                        }
-                        if (SCROLL_BOOST_SS_ENABLE) {
-                            if (mPerfBoostFling == null) {
-                                mPerfBoostFling = new BoostFramework();
-                                mIsPerfBoostFlingAcquired = false;
-                            }
-                            if (mPerfBoostFling == null) {
-                                Slog.e(TAG, "Error: boost object null");
-                                return;
-                            }
-                            boolean isGame = isTopAppGame(currentPackage, mPerfBoostFling);
-                            if (!isGame) {
-                                mPerfBoostFling.perfHint(BoostFramework.VENDOR_HINT_SCROLL_BOOST,
-                                    currentPackage, duration + 160, BoostFramework.Scroll.HORIZONTAL);
-                                mIsPerfBoostFlingAcquired = true;
-                            }
-                        }
-                    }
-
-                    @Override
-                    public void onScroll(boolean started) {
-                        String currentPackage = getAppPackageName();
-                        if (currentPackage == null) {
-                            Slog.e(TAG, "Error: package name null");
-                            return;
-                        }
-                        boolean isGame;
-                        if (mPerfBoostDrag == null) {
-                            mPerfBoostDrag = new BoostFramework();
-                        }
-                        if (mPerfBoostDrag == null) {
-                            Slog.e(TAG, "Error: boost object null");
-                            return;
-                        }
-                        if (SCROLL_BOOST_SS_ENABLE) {
-                            if (mPerfBoostPrefling == null) {
-                                mPerfBoostPrefling = new BoostFramework();
-                            }
-                            if (mPerfBoostPrefling == null) {
-                                Slog.e(TAG, "Error: boost object null");
-                                return;
-                            }
-                            isGame = isTopAppGame(currentPackage, mPerfBoostPrefling);
-                            if (!isGame) {
-                                mPerfBoostPrefling.perfHint(BoostFramework.VENDOR_HINT_SCROLL_BOOST,
-                                        currentPackage, -1, BoostFramework.Scroll.PREFILING);
-                            }
-                        }
-                        isGame = isTopAppGame(currentPackage, mPerfBoostDrag);
-                        if (!isGame && started) {
-                            if (DRAG_PLH_ENABLE) {
-                                mPerfBoostDrag.perfEvent(BoostFramework.VENDOR_HINT_DRAG_START, currentPackage);
-                            }
-                            mPerfBoostDrag.perfHint(BoostFramework.VENDOR_HINT_DRAG_BOOST,
-                                            currentPackage, -1, 1);
-                        } else {
-                            if (DRAG_PLH_ENABLE) {
-                                mPerfBoostDrag.perfEvent(BoostFramework.VENDOR_HINT_DRAG_END, currentPackage);
-                            }
-                            mPerfBoostDrag.perfLockRelease();
-                        }
-                    }
-
-                    @Override
                     public void onDebug() {
                         // no-op
                     }
@@ -722,11 +570,6 @@ public class DisplayPolicy {
                         final WindowOrientationListener listener = getOrientationListener();
                         if (listener != null) {
                             listener.onTouchStart();
-                        }
-                        if(SCROLL_BOOST_SS_ENABLE && mPerfBoostFling!= null
-                                            && mIsPerfBoostFlingAcquired) {
-                            mPerfBoostFling.perfLockRelease();
-                            mIsPerfBoostFlingAcquired = false;
                         }
                     }
 
@@ -823,7 +666,7 @@ public class DisplayPolicy {
 
         if (mDisplayContent.isDefaultDisplay) {
             mHasStatusBar = true;
-            mHasNavigationBar = NavbarUtils.isEnabled(mContext);
+            mHasNavigationBar = ActionUtils.hasNavbarByDefault(mContext);
 
             // Register content observer only for main display
             mSettingsObserver = new SettingsObserver(mHandler);
@@ -904,7 +747,11 @@ public class DisplayPolicy {
     }
 
     public void updateSettings() {
-        mHasNavigationBar = NavbarUtils.isEnabled(mContext);
+        ContentResolver resolver = mContext.getContentResolver();
+
+        mForceNavbar = Settings.System.getIntForUser(resolver,
+                Settings.System.FORCE_SHOW_NAVBAR, mHasNavigationBar ? 1 : 0,
+                UserHandle.USER_CURRENT);
     }
 
     private int getDisplayId() {
@@ -1022,6 +869,11 @@ public class DisplayPolicy {
 
     public ScreenOnListener getScreenOnListener() {
         return mScreenOnListener;
+    }
+
+    public int getTopFullscreenOpaqueWindowStatePrivateFlags() {
+        return mTopFullscreenOpaqueWindowState != null ?
+                mTopFullscreenOpaqueWindowState.getAttrs().privateFlags : 0;
     }
 
     public void screenTurnedOn(ScreenOnListener screenOnListener) {
@@ -1757,7 +1609,13 @@ public class DisplayPolicy {
             // Keep mNavigationBarPosition updated to make sure the transient detection and bar
             // color control is working correctly.
             final DisplayFrames displayFrames = mDisplayContent.mDisplayFrames;
+            final int lastNavbarPosition = mNavigationBarPosition;
             mNavigationBarPosition = navigationBarPosition(displayFrames.mRotation);
+            if (lastNavbarPosition == NAV_BAR_LEFT && mNavigationBarPosition != NAV_BAR_LEFT) {
+                notifyLeftInLandscapeChanged(false);
+            } else if (lastNavbarPosition != NAV_BAR_LEFT && mNavigationBarPosition == NAV_BAR_LEFT) {
+                notifyLeftInLandscapeChanged(true);
+            }
         }
         final boolean affectsSystemUi = win.canAffectSystemUiFlags();
         if (DEBUG_LAYOUT) Slog.i(TAG, "Win " + win + ": affectsSystemUi=" + affectsSystemUi);
@@ -2021,6 +1879,11 @@ public class DisplayPolicy {
         final Resources res = getCurrentUserResources();
         final int portraitRotation = displayRotation.getPortraitRotation();
 
+        final InsetsPolicy policy = mDisplayContent.getInsetsPolicy();
+        if (policy != null) {
+            policy.updateLockedStatus();
+        }
+
         if (hasStatusBar()) {
             mDisplayCutoutTouchableRegionSize = res.getDimensionPixelSize(
                     R.dimen.display_cutout_touchable_region_size);
@@ -2280,6 +2143,15 @@ public class DisplayPolicy {
         return mDecorInsets.get(rotation, w, h);
     }
 
+    private void notifyLeftInLandscapeChanged(boolean isOnLeft) {
+        mHandler.post(() -> {
+            StatusBarManagerInternal statusBar = getStatusBarManagerInternal();
+            if (statusBar != null) {
+                statusBar.leftInLandscapeChanged(isOnLeft);
+            }
+        });
+    }
+
     @NavigationBarPosition
     int navigationBarPosition(int displayRotation) {
         if (mNavigationBar != null) {
@@ -2360,7 +2232,7 @@ public class DisplayPolicy {
         if (controlTarget.canShowTransient()) {
             // Show transient bars if they are hidden; restore position if they are visible.
             mDisplayContent.getInsetsPolicy().showTransient(SHOW_TYPES_FOR_SWIPE,
-                    isGestureOnSystemBar);
+                    isGestureOnSystemBar, swipeTarget == mStatusBar);
             controlTarget.showInsets(restorePositionTypes, false);
         } else {
             // Restore visibilities and positions of system bars.
@@ -3089,5 +2961,9 @@ public class DisplayPolicy {
      */
     boolean shouldAttachNavBarToAppDuringTransition() {
         return mShouldAttachNavBarToAppDuringTransition && mNavigationBar != null;
+    }
+
+    public Context getUiContext() {
+        return mUiContext;
     }
 }

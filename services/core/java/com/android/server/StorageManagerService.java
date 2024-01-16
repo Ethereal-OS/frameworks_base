@@ -67,6 +67,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.GosPackageState;
 import android.content.pm.IPackageManager;
 import android.content.pm.IPackageMoveObserver;
 import android.content.pm.PackageManager;
@@ -153,6 +154,7 @@ import com.android.internal.util.Preconditions;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.server.pm.Installer;
 import com.android.server.pm.UserManagerInternal;
+import com.android.server.pm.pkg.GosPackageStatePm;
 import com.android.server.storage.AppFuseBridge;
 import com.android.server.storage.StorageSessionController;
 import com.android.server.storage.StorageSessionController.ExternalStorageServiceException;
@@ -1616,9 +1618,7 @@ class StorageManagerService extends IStorageManager.Stub
 
             // Adoptable public disks are visible to apps, since they meet
             // public API requirement of being in a stable location.
-            if (vol.disk.isAdoptable()) {
-                vol.mountFlags |= VolumeInfo.MOUNT_FLAG_VISIBLE_FOR_WRITE;
-            } else if (vol.disk.isSd()) {
+            if ((vol.disk.isAdoptable()) || (vol.disk.isSd())) {
                 vol.mountFlags |= VolumeInfo.MOUNT_FLAG_VISIBLE_FOR_WRITE;
             }
 
@@ -2843,6 +2843,8 @@ class StorageManagerService extends IStorageManager.Stub
         enforcePermission(android.Manifest.permission.MOUNT_FORMAT_FILESYSTEMS);
 
         try {
+            int avgWriteAmount = 0;
+            int targetDirtyRatio = mTargetDirtyRatio;
             int latestWrite = mVold.getWriteAmount();
             if (latestWrite == -1) {
                 Slog.w(TAG, "Failed to get storage write record");
@@ -2855,10 +2857,11 @@ class StorageManagerService extends IStorageManager.Stub
             // (first boot after OTA), We skip the smart idle maintenance
             if (!needsCheckpoint() || !supportsBlockCheckpoint()) {
                 if (!refreshLifetimeConstraint() || !checkChargeStatus()) {
-                    return;
+                    Slog.i(TAG, "Turn off gc_urgent based on checking lifetime and charge status");
+                    targetDirtyRatio = 100;
+                } else {
+                    avgWriteAmount = getAverageWriteAmount();
                 }
-
-                int avgWriteAmount = getAverageWriteAmount();
 
                 Slog.i(TAG, "Set smart idle maintenance: " + "latest write amount: " +
                             latestWrite + ", average write amount: " + avgWriteAmount +
@@ -2867,10 +2870,10 @@ class StorageManagerService extends IStorageManager.Stub
                             ", segment reclaim weight: " + mSegmentReclaimWeight +
                             ", period(min): " + sSmartIdleMaintPeriod +
                             ", min gc sleep time(ms): " + mMinGCSleepTime +
-                            ", target dirty ratio: " + mTargetDirtyRatio);
+                            ", target dirty ratio: " + targetDirtyRatio);
                 mVold.setGCUrgentPace(avgWriteAmount, mMinSegmentsThreshold, mDirtyReclaimRate,
                                       mSegmentReclaimWeight, sSmartIdleMaintPeriod,
-                                      mMinGCSleepTime, mTargetDirtyRatio);
+                                      mMinGCSleepTime, targetDirtyRatio);
             } else {
                 Slog.i(TAG, "Skipping smart idle maintenance - block based checkpoint in progress");
             }
@@ -4516,6 +4519,10 @@ class StorageManagerService extends IStorageManager.Stub
                 return StorageManager.MOUNT_MODE_EXTERNAL_PASS_THROUGH;
             }
 
+            if (Arrays.asList(packagesForUid).contains("com.android.externalstorage")) {
+                return StorageManager.MOUNT_MODE_EXTERNAL_PASS_THROUGH;
+            }
+
             if ((mDownloadsAuthorityAppId == UserHandle.getAppId(uid)
                     || mExternalStorageAuthorityAppId == UserHandle.getAppId(uid))) {
                 // DownloadManager can write in app-private directories on behalf of apps;
@@ -4551,9 +4558,25 @@ class StorageManagerService extends IStorageManager.Stub
                     break;
                 }
             }
-            if (hasInstall || hasInstallOp) {
+            if (hasInstall) {
                 return StorageManager.MOUNT_MODE_EXTERNAL_INSTALLER;
             }
+
+            if (hasInstallOp) {
+                /*
+                Originally, previous check was `if (hasInstall || hasInstallOp)`.
+
+                Use a special flag to control access to just Android/obb directory instead.
+                Toggle for this flag is in ExternalSourcesDetails.java in Settings app
+                (same screen that grants the REQUEST_INSTALL_PACKAGES permission)
+                 */
+
+                GosPackageStatePm ps = mPmInternal.getGosPackageState(packageName, UserHandle.getUserId(uid));
+                if (ps != null && ps.hasFlags(GosPackageState.FLAG_ALLOW_ACCESS_TO_OBB_DIRECTORY)) {
+                    return StorageManager.MOUNT_MODE_EXTERNAL_INSTALLER;
+                }
+            }
+
             return StorageManager.MOUNT_MODE_EXTERNAL_DEFAULT;
         } catch (RemoteException e) {
             // Should not happen

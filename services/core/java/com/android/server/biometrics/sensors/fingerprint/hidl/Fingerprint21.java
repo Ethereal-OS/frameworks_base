@@ -352,7 +352,7 @@ public class Fingerprint21 implements IHwBinder.DeathRecipient, ServiceProvider 
         });
 
         mCleanup = context.getResources().getBoolean(
-                 com.android.internal.R.bool.config_cleanupUnusedFingerprints);
+                com.android.internal.R.bool.config_cleanupUnusedFingerprints);
 
         try {
             ActivityManager.getService().registerUserSwitchObserver(mUserSwitchObserver, TAG);
@@ -739,9 +739,7 @@ public class Fingerprint21 implements IHwBinder.DeathRecipient, ServiceProvider 
 
     private void scheduleInternalCleanup(int userId,
             @Nullable ClientMonitorCallback callback) {
-        if (!mCleanup) {
-            return;
-        }
+            if (mCleanup) {  
         mHandler.post(() -> {
             scheduleUpdateActiveUserWithoutHandler(userId);
 
@@ -756,6 +754,7 @@ public class Fingerprint21 implements IHwBinder.DeathRecipient, ServiceProvider 
                     FingerprintUtils.getLegacyInstance(mSensorId), mAuthenticatorIds);
             mScheduler.scheduleClientMonitor(client, callback);
         });
+        }
     }
 
     @Override

@@ -39,8 +39,6 @@ class NotifPipelineFlags @Inject constructor(
         featureFlags.isEnabled(Flags.FSI_REQUIRES_KEYGUARD)
 
     fun fsiOnDNDUpdate(): Boolean = featureFlags.isEnabled(Flags.FSI_ON_DND_UPDATE)
-    
-    fun disableFsi(): Boolean = featureFlags.isEnabled(Flags.DISABLE_FSI)
 
     fun disableFsi(): Boolean = featureFlags.isEnabled(Flags.DISABLE_FSI)
 

@@ -128,7 +128,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
     private static final String TAG = "PackageInstaller";
     private static final boolean LOGD = Log.isLoggable(TAG, Log.DEBUG);
 
-    private static final boolean DEBUG = Build.IS_DEBUGGABLE;
+    private static final boolean DEBUG = Build.IS_ENG;
 
     // TODO: remove outstanding sessions when installer package goes away
     // TODO: notify listeners in other users when package has been installed there
@@ -687,7 +687,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         }
 
-        if (Build.IS_DEBUGGABLE || isCalledBySystemOrShell(callingUid)) {
+        if (Build.IS_ENG || isCalledBySystemOrShell(callingUid)) {
             params.installFlags |= PackageManager.INSTALL_ALLOW_DOWNGRADE;
         } else {
             params.installFlags &= ~PackageManager.INSTALL_ALLOW_DOWNGRADE;
@@ -729,12 +729,8 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         }
 
-        if ((params.installFlags & PackageManager.INSTALL_INSTANT_APP) != 0
-                && !isCalledBySystemOrShell(callingUid)
-                && (snapshot.getFlagsForUid(callingUid) & ApplicationInfo.FLAG_SYSTEM)
-                == 0) {
-            throw new SecurityException(
-                    "Only system apps could use the PackageManager.INSTALL_INSTANT_APP flag.");
+        if ((params.installFlags & PackageManager.INSTALL_INSTANT_APP) != 0) {
+            throw new SecurityException("Installing instant apps is forbidden");
         }
 
         if (params.isStaged && !isCalledBySystemOrShell(callingUid)) {

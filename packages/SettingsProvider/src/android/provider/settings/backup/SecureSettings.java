@@ -109,8 +109,6 @@ public class SecureSettings {
         Settings.Secure.POWER_MENU_LOCKED_SHOW_CONTENT,
         Settings.Secure.DOZE_ENABLED,
         Settings.Secure.DOZE_ALWAYS_ON,
-        Settings.Secure.DOZE_ALWAYS_ON_AUTO_MODE,
-        Settings.Secure.DOZE_ALWAYS_ON_AUTO_TIME,
         Settings.Secure.DOZE_PICK_UP_GESTURE,
         Settings.Secure.DOZE_DOUBLE_TAP_GESTURE,
         Settings.Secure.DOZE_TAP_SCREEN_GESTURE,
@@ -225,6 +223,14 @@ public class SecureSettings {
         Settings.Secure.BLUETOOTH_LE_BROADCAST_CODE,
         Settings.Secure.BLUETOOTH_LE_BROADCAST_APP_SOURCE_NAME,
         Settings.Secure.LOCK_SCREEN_WEATHER_ENABLED,
-        Settings.Secure.ACCESSIBILITY_FONT_SCALING_HAS_BEEN_CHANGED
+        Settings.Secure.ACCESSIBILITY_FONT_SCALING_HAS_BEEN_CHANGED,
+        Settings.Secure.TETHERING_ALLOW_VPN_UPSTREAMS,
+        Settings.Secure.GESTURE_NAVBAR_LENGTH_MODE,
+        Settings.Secure.TORCH_DOUBLE_TAP_POWER_GESTURE_ENABLED,
+        Settings.Secure.TORCH_LONG_PRESS_POWER,
+        Settings.Secure.DOZE_ON_CHARGE,
+        Settings.Secure.EXTENDED_MONET_THEMES,
+        Settings.Secure.SECURE_LOCKSCREEN_QS_DISABLED,
+        Settings.Secure.SHOW_BACK_ARROW_GESTURE,
     };
 }

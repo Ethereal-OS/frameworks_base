@@ -261,6 +261,7 @@ import com.android.server.am.BaseErrorDialog;
 import com.android.server.am.PendingIntentController;
 import com.android.server.am.PendingIntentRecord;
 import com.android.server.am.UserState;
+import com.android.server.app.AppLockManagerServiceInternal;
 import com.android.server.firewall.IntentFirewall;
 import com.android.server.pm.UserManagerService;
 import com.android.server.policy.PermissionPolicyInternal;
@@ -269,7 +270,7 @@ import com.android.server.statusbar.StatusBarManagerInternal;
 import com.android.server.uri.NeededUriGrants;
 import com.android.server.uri.UriGrantsManagerInternal;
 
-import com.android.internal.util.custom.cutout.CutoutFullscreenController;
+import com.android.internal.util.ethereal.cutout.CutoutFullscreenController;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -379,7 +380,7 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
      * @see WindowManagerThreadPriorityBooster
      */
     final Object mGlobalLockWithoutBoost = mGlobalLock;
-    public ActivityTaskSupervisor mTaskSupervisor;
+    ActivityTaskSupervisor mTaskSupervisor;
     ActivityClientController mActivityClientController;
     RootWindowContainer mRootWindowContainer;
     WindowManagerService mWindowManager;
@@ -835,6 +836,8 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
             mAmInternal.updateOomAdj();
         }
     };
+
+    private AppLockManagerServiceInternal mAppLockManagerService = null;
 
     @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
     public ActivityTaskManagerService(Context context) {
@@ -1796,6 +1799,7 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
 
         final int callingPid = Binder.getCallingPid();
         final int callingUid = Binder.getCallingUid();
+
         final SafeActivityOptions safeOptions = SafeActivityOptions.fromBundle(bOptions);
         final long origId = Binder.clearCallingIdentity();
         try {
@@ -3580,7 +3584,7 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
                         null /* launchIntoPipHostActivity */, "enterPictureInPictureMode",
                         transition);
                 // Continue the pausing process after entering pip.
-                if (r.isState(PAUSING) && r.mPauseSchedulePendingForPip) {
+                if (r.isState(PAUSING)) {
                     r.getTask().schedulePauseActivity(r, false /* userLeaving */,
                             false /* pauseImmediately */, true /* autoEnteringPip */, "auto-pip");
                 }
@@ -3755,6 +3759,15 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
                     Slog.w(TAG, "takeTaskSnapshot: taskId=" + taskId + " not found or not visible");
                     return null;
                 }
+                final Task rootTask = task.getRootTask();
+                final String packageName =
+                    rootTask != null && rootTask.realActivity != null
+                        ? rootTask.realActivity.getPackageName()
+                        : null;
+                if (packageName != null && getAppLockManagerService().requireUnlock(
+                        packageName, task.mUserId)) {
+                    return null;
+                }
                 return mWindowManager.mTaskSnapshotController.captureTaskSnapshot(
                         task, false /* snapshotHome */);
             }
@@ -3774,6 +3787,19 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
                 return getCurrentUserId();
             }
             return mLastResumedActivity.mUserId;
+        }
+    }
+
+    /** Return the uid of the last resumed activity. */
+    @Override
+    public int getLastResumedActivityUid() {
+        mAmInternal.enforceCallingPermission(
+                Manifest.permission.INTERACT_ACROSS_USERS_FULL, "getLastResumedActivityUserId()");
+        synchronized (mGlobalLock) {
+            if (mLastResumedActivity == null) {
+                return 0;
+            }
+            return mLastResumedActivity.getUid();
         }
     }
 
@@ -5124,6 +5150,13 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
             mStatusBarManagerInternal = LocalServices.getService(StatusBarManagerInternal.class);
         }
         return mStatusBarManagerInternal;
+    }
+
+    AppLockManagerServiceInternal getAppLockManagerService() {
+        if (mAppLockManagerService == null) {
+            mAppLockManagerService = LocalServices.getService(AppLockManagerServiceInternal.class);
+        }
+        return mAppLockManagerService;
     }
 
     AppWarnings getAppWarningsLocked() {
@@ -6875,6 +6908,14 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
                 }
 
                 activity.restartProcessIfVisible();
+            }
+        }
+
+        @Override
+        public boolean isVisibleActivity(IBinder activityToken) {
+            synchronized (mGlobalLock) {
+                final ActivityRecord r = ActivityRecord.isInRootTaskLocked(activityToken);
+                return r != null && r.isInterestingToUserLocked();
             }
         }
     }

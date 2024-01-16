@@ -23,6 +23,7 @@ import static android.media.AudioManager.RINGER_MODE_VIBRATE;
 import static android.media.AudioManager.STREAM_SYSTEM;
 import static android.os.Process.FIRST_APPLICATION_UID;
 import static android.os.Process.INVALID_UID;
+import static android.provider.Settings.Secure.VOLUME_HUSH_CYCLE;
 import static android.provider.Settings.Secure.VOLUME_HUSH_MUTE;
 import static android.provider.Settings.Secure.VOLUME_HUSH_OFF;
 import static android.provider.Settings.Secure.VOLUME_HUSH_VIBRATE;
@@ -41,6 +42,7 @@ import android.annotation.SuppressLint;
 import android.annotation.UserIdInt;
 import android.app.ActivityManager;
 import android.app.ActivityManagerInternal;
+import android.app.ActivityThread;
 import android.app.AlarmManager;
 import android.app.AppGlobals;
 import android.app.AppOpsManager;
@@ -152,6 +154,7 @@ import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
+import android.provider.DeviceConfig;
 import android.provider.Settings;
 import android.provider.Settings.System;
 import android.service.notification.ZenModeConfig;
@@ -173,6 +176,7 @@ import android.widget.Toast;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
 import com.android.internal.util.DumpUtils;
 import com.android.internal.util.Preconditions;
 import com.android.server.EventLogTags;
@@ -232,6 +236,7 @@ public class AudioService extends IAudioService.Stub
             AudioSystemAdapter.OnVolRangeInitRequestListener {
 
     private static final String TAG = "AS.AudioService";
+    private static final boolean CONFIG_DEFAULT_VAL = false;
 
     private final AudioSystemAdapter mAudioSystem;
     private final SystemServerAdapter mSystemServer;
@@ -651,6 +656,7 @@ public class AudioService extends IAudioService.Stub
 
     // Devices for which the volume is fixed (volume is either max or muted)
     Set<Integer> mFixedVolumeDevices = new HashSet<>(Arrays.asList(
+            AudioSystem.DEVICE_OUT_ANLG_DOCK_HEADSET,
             AudioSystem.DEVICE_OUT_AUX_LINE));
     // Devices for which the volume is always max, no volume panel
     Set<Integer> mFullVolumeDevices = new HashSet<>(Arrays.asList(
@@ -839,6 +845,9 @@ public class AudioService extends IAudioService.Stub
         0.9f,   // Pre-scale for index 3
     };
 
+    private boolean mLinkNotificationWithVolume;
+    private final boolean mVoiceCapable;
+
     private NotificationManager mNm;
     private AudioManagerInternal.RingerModeDelegate mRingerModeDelegate;
     private VolumePolicy mVolumePolicy = VolumePolicy.DEFAULT;
@@ -891,6 +900,16 @@ public class AudioService extends IAudioService.Stub
     public static String makeAlsaAddressString(int card, int device) {
         return "card=" + card + ";device=" + device + ";";
     }
+
+    // only these packages are allowed to override Pulse visualizer lock
+    private static final String[] VISUALIZER_WHITELIST = new String[] {
+            "android",
+            "com.android.systemui",
+            "com.android.keyguard",
+            "com.google.android.googlequicksearchbox"
+    };
+
+    private boolean mVisualizerLocked;
 
     public static final class Lifecycle extends SystemService {
         private AudioService mService;
@@ -981,6 +1000,7 @@ public class AudioService extends IAudioService.Stub
      * @param looper Looper to use for the service's message handler. If this is null, an
      *               {@link AudioSystemThread} is created as the messaging thread instead.
      */
+    @RequiresPermission(Manifest.permission.READ_DEVICE_CONFIG)
     public AudioService(Context context, AudioSystemAdapter audioSystem,
             SystemServerAdapter systemServer, SettingsAdapter settings, @Nullable Looper looper,
             AppOpsManager appOps) {
@@ -1025,8 +1045,15 @@ public class AudioService extends IAudioService.Stub
         mUseVolumeGroupAliases = mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_handleVolumeAliasesUsingVolumeGroups);
 
-        mNotifAliasRing = mContext.getResources().getBoolean(
-                com.android.internal.R.bool.config_alias_ring_notif_stream_types);
+        mNotifAliasRing = !DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_SYSTEMUI,
+                SystemUiDeviceConfigFlags.VOLUME_SEPARATE_NOTIFICATION, false);
+
+        DeviceConfig.addOnPropertiesChangedListener(DeviceConfig.NAMESPACE_SYSTEMUI,
+                ActivityThread.currentApplication().getMainExecutor(),
+                this::onDeviceConfigChange);
+
+        mVoiceCapable = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_voice_capable);
 
         // Initialize volume
         // Priority 1 - Android Property
@@ -1194,6 +1221,10 @@ public class AudioService extends IAudioService.Stub
 
         mAlarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
 
+        // read this in before readPersistedSettings() because updateStreamVolumeAlias needs it
+        mLinkNotificationWithVolume = Settings.Secure.getInt(mContext.getContentResolver(),
+                Settings.Secure.VOLUME_LINK_NOTIFICATION, mNotifAliasRing ? 1 : 0) == 1;
+
         mUseFixedVolume = mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_useFixedVolume);
 
@@ -1254,6 +1285,22 @@ public class AudioService extends IAudioService.Stub
                         && sVolumeGroupStates.indexOfKey(groupId) >= 0) {
                     streamState.setVolumeGroupState(sVolumeGroupStates.get(groupId));
                 }
+            }
+        }
+    }
+
+    /**
+     * Separating notification volume from ring is NOT of aliasing the corresponding streams
+     * @param properties
+     */
+    private void onDeviceConfigChange(DeviceConfig.Properties properties) {
+        Set<String> changeSet = properties.getKeyset();
+        if (changeSet.contains(SystemUiDeviceConfigFlags.VOLUME_SEPARATE_NOTIFICATION)) {
+            boolean newNotifAliasRing = !properties.getBoolean(
+                    SystemUiDeviceConfigFlags.VOLUME_SEPARATE_NOTIFICATION, CONFIG_DEFAULT_VAL);
+            if (mNotifAliasRing != newNotifAliasRing) {
+                mNotifAliasRing = newNotifAliasRing;
+                updateStreamVolumeAlias(true, TAG);
             }
         }
     }
@@ -2267,6 +2314,15 @@ public class AudioService extends IAudioService.Stub
         mStreamVolumeAlias[AudioSystem.STREAM_ACCESSIBILITY] = a11yStreamAlias;
         mStreamVolumeAlias[AudioSystem.STREAM_ASSISTANT] = assistantStreamAlias;
 
+        if (mVoiceCapable) {
+            if (mLinkNotificationWithVolume) {
+                mStreamVolumeAlias[AudioSystem.STREAM_NOTIFICATION] = AudioSystem.STREAM_RING;
+            } else {
+                mStreamVolumeAlias[AudioSystem.STREAM_NOTIFICATION] =
+                        AudioSystem.STREAM_NOTIFICATION;
+            }
+        }
+
         if (updateVolumes && mStreamStates != null) {
             updateDefaultVolumes();
 
@@ -2722,6 +2778,9 @@ public class AudioService extends IAudioService.Stub
             resetActiveAssistantUidsLocked();
             AudioSystem.setRttEnabled(mRttEnabled);
         }
+
+        mLinkNotificationWithVolume = Settings.Secure.getInt(cr,
+                Settings.Secure.VOLUME_LINK_NOTIFICATION, mNotifAliasRing ? 1 : 0) == 1;
 
         mMuteAffectedStreams = mSettings.getSystemIntForUser(cr,
                 System.MUTE_STREAMS_AFFECTED, AudioSystem.DEFAULT_MUTE_STREAMS_AFFECTED,
@@ -5155,6 +5214,25 @@ public class AudioService extends IAudioService.Stub
                 ringerMode = AudioManager.RINGER_MODE_VIBRATE;
                 toastText = com.android.internal.R.string.volume_dialog_ringer_guidance_vibrate;
                 break;
+            case VOLUME_HUSH_CYCLE:
+                switch (mRingerMode) {
+                    case AudioManager.RINGER_MODE_NORMAL:
+                        effect = VibrationEffect.get(VibrationEffect.EFFECT_HEAVY_CLICK);
+                        ringerMode = AudioManager.RINGER_MODE_VIBRATE;
+                        toastText = com.android.internal.R.string.volume_dialog_ringer_guidance_vibrate;
+                        break;
+                    case AudioManager.RINGER_MODE_VIBRATE:
+                        effect = VibrationEffect.get(VibrationEffect.EFFECT_DOUBLE_CLICK);
+                        ringerMode = AudioManager.RINGER_MODE_SILENT;
+                        toastText = com.android.internal.R.string.volume_dialog_ringer_guidance_silent;
+                        break;
+                    case AudioManager.RINGER_MODE_SILENT:
+                        effect = VibrationEffect.get(VibrationEffect.EFFECT_HEAVY_CLICK);
+                        ringerMode = AudioManager.RINGER_MODE_NORMAL;
+                        toastText = com.android.internal.R.string.volume_dialog_ringer_guidance_normal;
+                        break;
+                }
+                break;
         }
         maybeVibrate(effect, reason);
         setRingerModeInternal(ringerMode, reason);
@@ -6671,6 +6749,27 @@ public class AudioService extends IAudioService.Stub
     @Override
     public boolean isStreamAffectedByMute(int streamType) {
         return (mMuteAffectedStreams & (1 << streamType)) != 0;
+    }
+
+    /** @hide */
+    @Override
+    public boolean isVisualizerLocked(String callingPackage) {
+        boolean isSystem = false;
+        for (int i = 0; i < VISUALIZER_WHITELIST.length; i++) {
+            if (TextUtils.equals(callingPackage, VISUALIZER_WHITELIST[i])) {
+                isSystem = true;
+                break;
+            }
+        }
+        return !isSystem && mVisualizerLocked;
+    }
+
+    /** @hide */
+    @Override
+    public void setVisualizerLocked(boolean doLock) {
+        if (mVisualizerLocked != doLock) {
+            mVisualizerLocked = doLock;
+        }
     }
 
     private void ensureValidDirection(int direction) {
@@ -8898,7 +8997,11 @@ public class AudioService extends IAudioService.Stub
                     break;
 
                 case MSG_PLAY_SOUND_EFFECT:
-                    mSfxHelper.playSoundEffect(msg.arg1, msg.arg2);
+                    if (isStreamMute(AudioSystem.STREAM_SYSTEM)) {
+                        Log.d(TAG, "Stream muted, skip playback");
+                    } else {
+                        mSfxHelper.playSoundEffect(msg.arg1, msg.arg2);
+                    }
                     break;
 
                 case MSG_SET_FORCE_USE:
@@ -9142,6 +9245,9 @@ public class AudioService extends IAudioService.Stub
 
             mContentResolver.registerContentObserver(Settings.Secure.getUriFor(
                     Settings.Secure.VOICE_INTERACTION_SERVICE), false, this);
+
+            mContentResolver.registerContentObserver(Settings.Secure.getUriFor(
+                    Settings.Secure.VOLUME_LINK_NOTIFICATION), false, this);
         }
 
         @Override
@@ -9165,6 +9271,13 @@ public class AudioService extends IAudioService.Stub
                 updateEncodedSurroundOutput();
                 sendEnabledSurroundFormats(mContentResolver, mSurroundModeChanged);
                 updateAssistantUIdLocked(/* forceUpdate= */ false);
+            }
+            boolean linkNotificationWithVolume = Settings.Secure.getInt(mContentResolver,
+                    Settings.Secure.VOLUME_LINK_NOTIFICATION, mNotifAliasRing ? 1 : 0) == 1;
+            if (linkNotificationWithVolume != mLinkNotificationWithVolume) {
+                mLinkNotificationWithVolume = linkNotificationWithVolume;
+                onInitStreamsAndVolumes();
+                updateStreamVolumeAlias(true, TAG);
             }
         }
 

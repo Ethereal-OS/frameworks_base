@@ -696,6 +696,9 @@ public class AppOpsService extends IAppOpsService.Stub {
         final @NonNull ArraySet<String> validAttributionTags = new ArraySet<>();
 
         Ops(String _packageName, UidState _uidState) {
+            if (_packageName == null) {
+                Slog.d(TAG, "Ops with invalid null packageName constructed", new Throwable());
+            }
             packageName = _packageName;
             uidState = _uidState;
         }
@@ -1819,6 +1822,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                     }
 
                     Ops removedOps = uidState.pkgOps.remove(pkgName);
+                    Slog.d(TAG_OP_RESET_DEBUG, "removed ops for " + pkgName + ", reason: ACTION_PACKAGE_REMOVED");
                     if (removedOps != null) {
                         scheduleFastWriteLocked();
                     }
@@ -1913,6 +1917,7 @@ public class AppOpsService extends IAppOpsService.Stub {
 
                 String[] pkgsInUid = getPackagesForUid(uidState.uid);
                 if (ArrayUtils.isEmpty(pkgsInUid)) {
+                    Slog.d(TAG_OP_RESET_DEBUG, "no pkgs in uid " + uidState.uid + ", clearing its state");
                     uidState.clear();
                     mUidStates.removeAt(uidNum);
                     scheduleFastWriteLocked();
@@ -2039,16 +2044,20 @@ public class AppOpsService extends IAppOpsService.Stub {
                 return;
             }
 
+            Slog.d(TAG_OP_RESET_DEBUG, "packageRemoved " + packageName + " uid " + uid);
+
             Ops ops = null;
 
             // Remove any package state if such.
             if (uidState.pkgOps != null) {
+                Slog.d(TAG_OP_RESET_DEBUG, "packageRemoved " + packageName + " uid " + uid + ", removing pkgOps");
                 ops = uidState.pkgOps.remove(packageName);
             }
 
             // If we just nuked the last package state check if the UID is valid.
             if (ops != null && uidState.pkgOps.isEmpty()
                     && getPackagesForUid(uid).length <= 0) {
+                Slog.d(TAG_OP_RESET_DEBUG, "packageRemoved " + packageName + " uid " + uid + ", removing uidState");
                 mUidStates.remove(uid);
             }
 
@@ -2082,6 +2091,7 @@ public class AppOpsService extends IAppOpsService.Stub {
     public void uidRemoved(int uid) {
         synchronized (this) {
             if (mUidStates.indexOfKey(uid) >= 0) {
+                Slog.d(TAG_OP_RESET_DEBUG, "uidRemoved " + uid);
                 mUidStates.remove(uid);
                 scheduleFastWriteLocked();
             }
@@ -2797,7 +2807,11 @@ public class AppOpsService extends IAppOpsService.Stub {
         try {
             pvr = verifyAndGetBypass(uid, packageName, null);
         } catch (SecurityException e) {
-            Slog.e(TAG, "Cannot setMode", e);
+            if (Process.isIsolated(uid)) {
+                Slog.e(TAG, "Cannot setMode: isolated process");
+            } else {
+                Slog.e(TAG, "Cannot setMode", e);
+            }
             return;
         }
 
@@ -2952,6 +2966,7 @@ public class AppOpsService extends IAppOpsService.Stub {
 
     @Override
     public void resetAllModes(int reqUserId, String reqPackageName) {
+        Slog.d(TAG, "resetAllModes for " + reqPackageName + " userId " + reqUserId, new Throwable());
         final int callingPid = Binder.getCallingPid();
         final int callingUid = Binder.getCallingUid();
         reqUserId = ActivityManager.handleIncomingUser(callingPid, callingUid, reqUserId,
@@ -3252,7 +3267,11 @@ public class AppOpsService extends IAppOpsService.Stub {
         try {
             pvr = verifyAndGetBypass(uid, packageName, null);
         } catch (SecurityException e) {
-            Slog.e(TAG, "checkOperation", e);
+            if (Process.isIsolated(uid)) {
+                Slog.e(TAG, "Cannot checkOperation: isolated process");
+            } else {
+                Slog.e(TAG, "Cannot checkOperation", e);
+            }
             return AppOpsManager.opToDefaultMode(code);
         }
 
@@ -3458,7 +3477,11 @@ public class AppOpsService extends IAppOpsService.Stub {
                 attributionTag = null;
             }
         } catch (SecurityException e) {
-            Slog.e(TAG, "noteOperation", e);
+            if (Process.isIsolated(uid)) {
+                Slog.e(TAG, "Cannot noteOperation: isolated process");
+            } else {
+                Slog.e(TAG, "Cannot noteOperation", e);
+            }
             return new SyncNotedAppOp(AppOpsManager.MODE_ERRORED, code, attributionTag,
                     packageName);
         }
@@ -3972,7 +3995,11 @@ public class AppOpsService extends IAppOpsService.Stub {
                 attributionTag = null;
             }
         } catch (SecurityException e) {
-            Slog.e(TAG, "startOperation", e);
+            if (Process.isIsolated(uid)) {
+                Slog.e(TAG, "Cannot startOperation: isolated process");
+            } else {
+                Slog.e(TAG, "Cannot startOperation", e);
+            }
             return new SyncNotedAppOp(AppOpsManager.MODE_ERRORED, code, attributionTag,
                     packageName);
         }
@@ -4144,7 +4171,11 @@ public class AppOpsService extends IAppOpsService.Stub {
                 attributionTag = null;
             }
         } catch (SecurityException e) {
-            Slog.e(TAG, "Cannot finishOperation", e);
+            if (Process.isIsolated(uid)) {
+                Slog.e(TAG, "Cannot finishOperation: isolated process");
+            } else {
+                Slog.e(TAG, "Cannot finishOperation", e);
+            }
             return;
         }
 
@@ -4626,7 +4657,7 @@ public class AppOpsService extends IAppOpsService.Stub {
         } else {
             pkgUid = resolveUid(packageName);
         }
-        if (pkgUid != Process.INVALID_UID) {
+        if (pkgUid != Process.INVALID_UID && attributionTag != null) {
             if (pkgUid != UserHandle.getAppId(uid)) {
                 Slog.e(TAG, "Bad call made by uid " + callingUid + ". "
                         + "Package \"" + packageName + "\" does not belong to uid " + uid + ".");
@@ -4685,7 +4716,7 @@ public class AppOpsService extends IAppOpsService.Stub {
             Binder.restoreCallingIdentity(ident);
         }
 
-        if (pkgUid != uid) {
+        if (pkgUid != uid && attributionTag != null) {
             Slog.e(TAG, "Bad call made by uid " + callingUid + ". "
                     + "Package \"" + packageName + "\" does not belong to uid " + uid + ".");
             String otherUidMessage = DEBUG ? " but it is really " + pkgUid : " but it is not";
@@ -4933,6 +4964,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                     Slog.w(TAG, "Failed parsing " + e);
                 } finally {
                     if (!success) {
+                        Slog.d(TAG_OP_RESET_DEBUG, "parsing failed, clearing uid states");
                         mUidStates.clear();
                     }
                     try {
@@ -5193,15 +5225,16 @@ public class AppOpsService extends IAppOpsService.Stub {
                     String lastPkg = null;
                     for (int i=0; i<allOps.size(); i++) {
                         AppOpsManager.PackageOps pkg = allOps.get(i);
-                        if (!Objects.equals(pkg.getPackageName(), lastPkg)) {
+                        if (pkg.getPackageName() == null) {
+                            continue;
+                        }
+                        if (!pkg.getPackageName().equals(lastPkg)) {
                             if (lastPkg != null) {
                                 out.endTag(null, "pkg");
                             }
                             lastPkg = pkg.getPackageName();
-                            if (lastPkg != null) {
-                                out.startTag(null, "pkg");
-                                out.attribute(null, "n", lastPkg);
-                            }
+                            out.startTag(null, "pkg");
+                            out.attribute(null, "n", lastPkg);
                         }
                         out.startTag(null, "uid");
                         out.attributeInt(null, "n", pkg.getUid());
@@ -6690,6 +6723,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                 ClientUserRestrictionState opRestrictions = mOpUserRestrictions.valueAt(i);
                 opRestrictions.removeUser(userHandle);
             }
+            Slog.d(TAG_OP_RESET_DEBUG, "removeUser " + userHandle, new Throwable());
             removeUidsForUserLocked(userHandle);
         }
     }
@@ -6772,6 +6806,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                 return;
             }
             Ops removedOps = uidState.pkgOps.remove(packageName);
+            Slog.d(TAG_OP_RESET_DEBUG, "removed ops for " + packageName, new Throwable());
             if (removedOps != null) {
                 scheduleFastWriteLocked();
             }
@@ -7127,6 +7162,8 @@ public class AppOpsService extends IAppOpsService.Stub {
         return -1;
     }
 
+    private static volatile Throwable prevThrowable;
+
     private static String[] getPackagesForUid(int uid) {
         String[] packageNames = null;
 
@@ -7137,6 +7174,13 @@ public class AppOpsService extends IAppOpsService.Stub {
                 packageNames = AppGlobals.getPackageManager().getPackagesForUid(uid);
             } catch (RemoteException e) {
                 /* ignore - local call */
+            }
+        } else {
+            var t = new Throwable();
+            var prev = prevThrowable;
+            if (prev == null || !Arrays.equals(prev.getStackTrace(), t.getStackTrace())) {
+                prevThrowable = t;
+                Slog.d(TAG_OP_RESET_DEBUG, "AppGlobals.getPackageManager() is null", t);
             }
         }
         if (packageNames == null) {
@@ -7811,4 +7855,6 @@ public class AppOpsService extends IAppOpsService.Stub {
             return null;
         }
     }
+
+    public static final String TAG_OP_RESET_DEBUG = "AppOpResetDebug";
 }

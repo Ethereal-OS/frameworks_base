@@ -75,15 +75,6 @@ public class NotificationInlineImageCache implements NotificationInlineImageReso
         Set<Uri> wantedSet = mResolver.getWantedUriSet();
         mCache.entrySet().removeIf(entry -> !wantedSet.contains(entry.getKey()));
     }
-    
-    @Override
-    public void cancelRunningTasks() {
-        mCache.forEach((key, value) -> {
-            if (value.getStatus() != AsyncTask.Status.FINISHED) {
-                value.cancel(true);
-            }
-        });
-    }
 
     @Override
     public void cancelRunningTasks() {

@@ -38,6 +38,7 @@ import android.annotation.UiContext;
 import android.annotation.UserIdInt;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.AppLockManager;
 import android.app.BroadcastOptions;
 import android.app.GameManager;
 import android.app.IApplicationThread;
@@ -6020,6 +6021,14 @@ public abstract class Context {
     public static final String DISPLAY_HASH_SERVICE = "display_hash";
 
     /**
+     * {@link AppLockManager}.
+     *
+     * @see #getSystemService(String)
+     * @hide
+     */
+    public static final String APP_LOCK_SERVICE = "app_lock";
+
+    /**
      * Use with {@link #getSystemService(String)} to retrieve a
      * {@link android.app.LocaleManager}.
      *
@@ -6062,13 +6071,13 @@ public abstract class Context {
 
     /**
      * Use with {@link #getSystemService} to retrieve a
-     * {@link com.oplus.os.LinearmotorVibrator} for accessing linear motor vibrator state.
+     * {@link android.os.PocketManager} for accessing and listening to device pocket state.
      *
      * @hide
      * @see #getSystemService
-     * @see com.oplus.os.LinearmotorVibrator
+     * @see android.os.PocketManager
      */
-    public static final String LINEARMOTOR_VIBRATOR_SERVICE = "linearmotor";
+    public static final String POCKET_SERVICE = "pocket";
 
     /**
      * Determine whether the given permission is allowed for a particular

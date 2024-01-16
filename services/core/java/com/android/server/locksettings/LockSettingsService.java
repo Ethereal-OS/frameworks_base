@@ -140,6 +140,7 @@ import com.android.internal.widget.LockSettingsInternal;
 import com.android.internal.widget.LockscreenCredential;
 import com.android.internal.widget.RebootEscrowListener;
 import com.android.internal.widget.VerifyCredentialResponse;
+import com.android.server.app.AppLockManagerServiceInternal;
 import com.android.server.LocalServices;
 import com.android.server.ServiceThread;
 import com.android.server.SystemService;
@@ -1306,6 +1307,17 @@ public class LockSettingsService extends ILockSettings.Stub {
     public int getCredentialType(int userId) {
         checkPasswordHavePermission(userId);
         return getCredentialTypeInternal(userId);
+    }
+
+    /**
+     * Returns the length of current credential.
+     * @return length of the current credential or -1, if the user hasn't authenticated yet.
+     */
+    @Override
+    public int getCredentialLength(int userId) {
+        checkPasswordHavePermission(userId);
+        final PasswordMetrics passwordMetrics = getUserPasswordMetrics(userId);
+        return passwordMetrics != null ? passwordMetrics.length : -1;
     }
 
     // TODO: this is a hot path, can we optimize it?
@@ -2475,6 +2487,7 @@ public class LockSettingsService extends ILockSettings.Stub {
                     PasswordMetrics.computeForCredential(newCredential),
                     userId);
             LocalServices.getService(WindowManagerInternal.class).reportPasswordChanged(userId);
+            LocalServices.getService(AppLockManagerServiceInternal.class).reportPasswordChanged(userId);
         });
     }
 

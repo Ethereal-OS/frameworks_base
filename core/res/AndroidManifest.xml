@@ -576,6 +576,7 @@
 
     <protected-broadcast android:name="NotificationManagerService.TIMEOUT" />
     <protected-broadcast android:name="NotificationHistoryDatabase.CLEANUP" />
+    <protected-broadcast android:name="NotificationManagerService.SWITCH_USER" />
     <protected-broadcast android:name="ScheduleConditionProvider.EVALUATE" />
     <protected-broadcast android:name="EventConditionProvider.EVALUATE" />
     <protected-broadcast android:name="SnoozeHelper.EVALUATE" />
@@ -819,12 +820,16 @@
     <protected-broadcast android:name="android.app.action.PROVISIONING_COMPLETED" />
     <protected-broadcast android:name="android.app.action.LOST_MODE_LOCATION_UPDATE" />
 
-    <!-- Used for long press power torch feature - automatic turn off on timeout -->
-    <protected-broadcast android:name="com.android.server.policy.PhoneWindowManager.ACTION_TORCH_OFF" />
-
     <!-- GameSpace -->
     <protected-broadcast android:name="io.chaldeaprjkt.gamespace.action.GAME_START" />
     <protected-broadcast android:name="io.chaldeaprjkt.gamespace.action.GAME_STOP" />
+
+    <!-- App lock -->
+    <protected-broadcast android:name="com.android.server.app.AppLockManagerService.APP_LOCK_TIMEOUT" />
+    <protected-broadcast android:name="android.app.action.UNLOCK_APP" />
+
+    <!-- Sleep Mode -->
+    <protected-broadcast android:name="android.intent.action.SLEEP_MODE_TURN_OFF" />
 
     <!-- ====================================================================== -->
     <!--                          RUNTIME PERMISSIONS                           -->
@@ -1240,7 +1245,7 @@
 
     <!-- Used for permissions that allow accessing the device location. -->
     <permission-group android:name="android.permission-group.LOCATION"
-        android:icon="@drawable/perm_group_location"
+        android:icon="@drawable/stat_sys_location"
         android:label="@string/permgrouplab_location"
         android:description="@string/permgroupdesc_location"
         android:priority="400" />
@@ -1762,6 +1767,18 @@
                 android:protectionLevel="dangerous|instant" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <permission-group android:name="android.permission-group.OTHER_SENSORS"
+        android:icon="@drawable/perm_group_location"
+        android:label="@string/permgrouplab_otherSensors"
+        android:description="@string/permgroupdesc_otherSensors"
+        android:priority="1000" />
+
+    <permission android:name="android.permission.OTHER_SENSORS"
+        android:permissionGroup="android.permission-group.UNDEFINED"
+        android:label="@string/permlab_otherSensors"
+        android:description="@string/permdesc_otherSensors"
+        android:protectionLevel="dangerous" />
+
     <!-- ====================================================================== -->
     <!-- REMOVED PERMISSIONS                                                    -->
     <!-- ====================================================================== -->
@@ -2001,13 +2018,21 @@
     <!-- ======================================= -->
     <eat-comment />
 
+    <!-- Network access -->
+    <permission-group android:name="android.permission-group.NETWORK"
+        android:icon="@drawable/perm_group_network"
+        android:label="@string/permgrouplab_network"
+        android:description="@string/permgroupdesc_network"
+        android:priority="900" />
+
     <!-- Allows applications to open network sockets.
          <p>Protection level: normal
     -->
     <permission android:name="android.permission.INTERNET"
+        android:permissionGroup="android.permission-group.UNDEFINED"
         android:description="@string/permdesc_createNetworkSockets"
         android:label="@string/permlab_createNetworkSockets"
-        android:protectionLevel="normal|instant" />
+        android:protectionLevel="dangerous|instant" />
 
     <!-- Allows applications to access information about networks.
          <p>Protection level: normal
@@ -3044,6 +3069,10 @@
     <permission android:name="android.permission.MANAGE_USERS"
         android:protectionLevel="signature|privileged" />
 
+    <!-- @hide Allow managing parallel spaces or receiving related broadcasts. -->
+    <permission android:name="android.permission.MANAGE_PARALLEL_SPACES"
+        android:protectionLevel="signature|privileged" />
+
     <!-- @SystemApi @hide Allows an application to create, remove users and get the list of
          users on the device. Applications holding this permission can create users (including
          normal, restricted, guest, managed, and demo users) and can optionally endow them with the
@@ -3575,6 +3604,21 @@
         android:label="@string/permlab_getPackageSize"
         android:description="@string/permdesc_getPackageSize"
         android:protectionLevel="normal" />
+
+    <!-- Dummy user-facing group for faking package signature -->
+    <permission-group android:name="android.permission-group.FAKE_PACKAGE"
+        android:label="@string/permgrouplab_fake_package_signature"
+        android:description="@string/permgroupdesc_fake_package_signature"
+        android:request="@string/permgrouprequest_fake_package_signature"
+        android:priority="100" />
+
+    <!-- Allows an application to change the package signature as
+         seen by applications -->
+    <permission android:name="android.permission.FAKE_PACKAGE_SIGNATURE"
+        android:permissionGroup="android.permission-group.UNDEFINED"
+        android:protectionLevel="dangerous"
+        android:label="@string/permlab_fakePackageSignature"
+        android:description="@string/permdesc_fakePackageSignature" />
 
     <!-- @deprecated No longer useful, see
          {@link android.content.pm.PackageManager#addPackageToPreferred}
@@ -5334,6 +5378,11 @@
     <permission android:name="android.permission.REGISTER_STATS_PULL_ATOM"
                 android:protectionLevel="signature|privileged" />
 
+    <!-- @hide Allows an application to reset the device battery statistics -->
+    <permission android:name="android.permission.RESET_BATTERY_STATS"
+        android:permissionGroup="android.permission-group.SYSTEM_TOOLS"
+        android:protectionLevel="signature|system|development" />
+
     <!-- @SystemApi Allows an application to control the backup and restore process.
     <p>Not for use by third-party applications.
          @hide pending API council -->
@@ -6421,7 +6470,7 @@
     <!-- @hide @SystemApi Allows a logical component within an application to
          temporarily renounce a set of otherwise granted permissions. -->
     <permission android:name="android.permission.RENOUNCE_PERMISSIONS"
-                android:protectionLevel="signature|privileged" />
+                android:protectionLevel="normal" />
 
     <!-- Allows an application to read nearby streaming policy. The policy controls
          whether to allow the device to stream its notifications and apps to nearby devices.
@@ -6567,6 +6616,11 @@
     <permission android:name="android.permission.MAKE_UID_VISIBLE"
                 android:protectionLevel="signature" />
 
+    <!-- Allows an application to manage app lock
+         @hide -->
+    <permission android:name="android.permission.MANAGE_APP_LOCK"
+                android:protectionLevel="signature|privileged" />
+
     <!-- Attribution for Geofencing service. -->
     <attribution android:tag="GeofencingService" android:label="@string/geofencing_service"/>
     <!-- Attribution for Country Detector. -->
@@ -6591,12 +6645,23 @@
     <attribution android:tag="DevicePolicyManagerService"
         android:label="@string/device_policy_manager_service"/>
 
+    <!-- LineageOS additions -->
+
+    <!-- Allows an application to override the power key action
+         @hide <p>Not for use by third-party applications.
+    -->
+    <permission android:name="android.permission.PREVENT_POWER_KEY"
+                android:protectionLevel="signature|privileged" />
+
     <!-- LineageHardware -->
     <protected-broadcast android:name="lineageos.intent.action.INITIALIZE_LINEAGE_HARDWARE" />
 
     <!-- Live display -->
     <protected-broadcast android:name="lineageos.platform.intent.action.UPDATE_TWILIGHT_STATE" />
     <protected-broadcast android:name="lineageos.intent.action.INITIALIZE_LIVEDISPLAY" />
+
+    <!-- LineageHealth -->
+    <protected-broadcast android:name="lineageos.platform.intent.action.CHARGING_CONTROL_CANCEL_ONCE" />
 
     <!-- @hide -->
     <permission android:name="lineageos.permission.HARDWARE_ABSTRACTION_ACCESS"

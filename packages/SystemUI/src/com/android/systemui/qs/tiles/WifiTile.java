@@ -59,6 +59,9 @@ import javax.inject.Inject;
 
 /** Quick settings tile: Wifi **/
 public class WifiTile extends SecureQSTile<SignalState> {
+
+    public static final String TILE_SPEC = "wifi";
+
     private static final Intent WIFI_SETTINGS = new Intent(Settings.ACTION_WIFI_SETTINGS);
 
     protected final NetworkController mController;
@@ -83,7 +86,8 @@ public class WifiTile extends SecureQSTile<SignalState> {
             KeyguardStateController keyguardStateController
     ) {
         super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
-                statusBarStateController, activityStarter, qsLogger, keyguardStateController);
+                statusBarStateController, activityStarter, qsLogger,
+                keyguardStateController);
         mController = networkController;
         mWifiController = accessPointController;
         mController.observe(getLifecycle(), mSignalCallback);
@@ -110,7 +114,6 @@ public class WifiTile extends SecureQSTile<SignalState> {
         if (checkKeyguard(view, keyguardShowing)) {
             return;
         }
-
         // Secondary clicks are header clicks, just toggle.
         mState.copyTo(mStateBeforeClick);
         boolean wifiEnabled = mState.value;

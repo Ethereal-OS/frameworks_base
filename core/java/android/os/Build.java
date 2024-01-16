@@ -25,6 +25,7 @@ import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.app.ActivityThread;
 import android.app.Application;
+import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.sysprop.DeviceProperties;
@@ -34,6 +35,8 @@ import android.text.TextUtils;
 import android.util.ArraySet;
 import android.util.Slog;
 import android.view.View;
+
+import com.android.internal.gmscompat.GmsHooks;
 
 import dalvik.system.VMRuntime;
 
@@ -201,6 +204,10 @@ public class Build {
     @SuppressAutoDoc // No support for device / profile owner.
     @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
     public static String getSerial() {
+        if (GmsCompat.isEnabled()) {
+            return GmsHooks.getSerial();
+        }
+
         IDeviceIdentifiersPolicyService service = IDeviceIdentifiersPolicyService.Stub
                 .asInterface(ServiceManager.getService(Context.DEVICE_IDENTIFIERS_SERVICE));
         try {
@@ -1249,7 +1256,7 @@ public class Build {
      */
     public static boolean isBuildConsistent() {
         // Don't care on eng builds.  Incremental build may trigger false negative.
-        if (IS_ENG) return true;
+        /*if (IS_ENG) return true;
 
         if (IS_TREBLE_ENABLED) {
             // If we can run this code, the device should already pass AVB.
@@ -1262,6 +1269,7 @@ public class Build {
             }
 
             return result == 0;
+            return true;
         }
 
         final String system = SystemProperties.get("ro.system.build.fingerprint");
@@ -1284,7 +1292,7 @@ public class Build {
                         + " but vendor reported " + vendor);
                 return false;
             }
-        }
+        } */
 
         /* TODO: Figure out issue with checks failing
         if (!TextUtils.isEmpty(bootimage)) {

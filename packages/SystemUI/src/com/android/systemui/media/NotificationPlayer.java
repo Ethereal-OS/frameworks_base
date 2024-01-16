@@ -75,12 +75,9 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
      */
     private final class CreationAndCompletionThread extends Thread {
         public Command mCmd;
-        public boolean mUseWakeLock;
-
-        CreationAndCompletionThread(Command cmd, boolean useWakeLock) {
+        public CreationAndCompletionThread(Command cmd) {
             super();
             mCmd = cmd;
-            mUseWakeLock = useWakeLock;
         }
 
         public void run() {
@@ -107,9 +104,6 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
                     player.setOnCompletionListener(NotificationPlayer.this);
                     player.setOnErrorListener(NotificationPlayer.this);
                     player.prepare();
-                    if (mUseWakeLock) {
-                        player.setWakeMode(mCmd.context, PowerManager.PARTIAL_WAKE_LOCK);
-                    }
                     if ((mCmd.uri != null) && (mCmd.uri.getEncodedPath() != null)
                             && (mCmd.uri.getEncodedPath().length() > 0)) {
                         if (!audioManager.isMusicActiveRemotely()) {
@@ -204,8 +198,7 @@ public class NotificationPlayer implements OnCompletionListener, OnErrorListener
                     if (DEBUG) { Log.d(mTag, "in startSound quitting looper " + mLooper); }
                     mLooper.quit();
                 }
-                boolean useWakeLock = mWakeLock != null;
-                mCompletionThread = new CreationAndCompletionThread(cmd, useWakeLock);
+                mCompletionThread = new CreationAndCompletionThread(cmd);
                 synchronized (mCompletionThread) {
                     mCompletionThread.start();
                     mCompletionThread.wait();

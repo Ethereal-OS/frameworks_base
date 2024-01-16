@@ -1076,8 +1076,8 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
      */
     void setOnBackInvokedCallbackInfo(
             @Nullable OnBackInvokedCallbackInfo callbackInfo) {
-        ProtoLog.d(WM_DEBUG_BACK_PREVIEW, "%s: Setting back callback %s",
-                this, callbackInfo);
+        //ProtoLog.d(WM_DEBUG_BACK_PREVIEW, "%s: Setting back callback %s",
+        //        this, callbackInfo);
         mOnBackInvokedCallbackInfo = callbackInfo;
     }
 
@@ -1219,7 +1219,7 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         // Make sure we initial all fields before adding to parentWindow, to prevent exception
         // during onDisplayChanged.
         if (mIsChildWindow) {
-            ProtoLog.v(WM_DEBUG_ADD_REMOVE, "Adding %s to %s", this, parentWindow);
+            //ProtoLog.v(WM_DEBUG_ADD_REMOVE, "Adding %s to %s", this, parentWindow);
             parentWindow.addChild(this, sWindowSubLayerComparator);
         }
 
@@ -3596,10 +3596,18 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
         // apps won't always be considered as foreground state.
         // Exclude private presentations as they can only be shown on private virtual displays and
         // shouldn't be the cause of an app be considered foreground.
-        if (mAttrs.type >= FIRST_SYSTEM_WINDOW && mAttrs.type != TYPE_TOAST
-                && mAttrs.type != TYPE_PRIVATE_PRESENTATION) {
+        // Exclude presentations on virtual displays as they are not actually visible.
+        if (mAttrs.type >= FIRST_SYSTEM_WINDOW
+                && mAttrs.type != TYPE_TOAST
+                && mAttrs.type != TYPE_PRIVATE_PRESENTATION
+                && !(mAttrs.type == TYPE_PRESENTATION && isOnVirtualDisplay())
+        ) {
             mWmService.mAtmService.mActiveUids.onNonAppSurfaceVisibilityChanged(mOwnerUid, shown);
         }
+    }
+
+    private boolean isOnVirtualDisplay() {
+        return getDisplayContent().mDisplay.getType() == Display.TYPE_VIRTUAL;
     }
 
     private void logExclusionRestrictions(int side) {

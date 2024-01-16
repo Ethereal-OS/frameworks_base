@@ -186,12 +186,12 @@ public class LockIcon extends KeyguardAffordanceView {
     private static int getIconForState(int state) {
         int iconRes;
         switch (state) {
-            case STATE_SCANNING_FACE:
-                iconRes = com.android.systemui.R.drawable.ic_lock_face;
-                break;
             case STATE_LOCKED:
             // Scanning animation is a pulsing padlock. This means that the resting state is
             // just a padlock.
+            case STATE_SCANNING_FACE:
+                iconRes = com.android.systemui.R.drawable.ic_lock_face;
+                break;
             case STATE_BIOMETRICS_ERROR:
                 iconRes = com.android.internal.R.drawable.ic_lock;
                 break;

@@ -17,8 +17,6 @@
 
 package com.android.systemui.qs.tiles;
 
-import static com.android.internal.logging.MetricsLogger.VIEW_UNKNOWN;
-
 import android.app.ActivityManager;
 import android.content.Intent;
 import android.os.Build;
@@ -34,6 +32,7 @@ import android.view.View;
 import androidx.annotation.Nullable;
 
 import com.android.internal.logging.MetricsLogger;
+
 import com.android.systemui.R;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
@@ -48,10 +47,14 @@ import com.android.systemui.qs.SettingObserver;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.util.settings.SecureSettings;
 
+import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+
 import javax.inject.Inject;
 
 /** Quick settings tile: Ambient Display **/
 public class AmbientDisplayTile extends QSTileImpl<BooleanState> {
+
+    public static final String TILE_SPEC = "ambient_display";
 
     private final Icon mIcon = ResourceIcon.get(R.drawable.ic_qs_ambient_display);
     private final SettingObserver mSetting;
@@ -148,6 +151,6 @@ public class AmbientDisplayTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return VIEW_UNKNOWN;
+        return MetricsEvent.VOLTAGE;
     }
 }

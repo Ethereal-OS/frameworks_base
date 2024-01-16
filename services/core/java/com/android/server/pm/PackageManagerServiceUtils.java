@@ -134,7 +134,7 @@ import java.util.zip.GZIPInputStream;
 public class PackageManagerServiceUtils {
     private static final long MAX_CRITICAL_INFO_DUMP_SIZE = 3 * 1000 * 1000; // 3MB
 
-    private static final boolean DEBUG = Build.IS_DEBUGGABLE;
+    private static final boolean DEBUG = Build.IS_ENG;
 
     public final static Predicate<PackageStateInternal> REMOVE_IF_NULL_PKG =
             pkgSetting -> pkgSetting.getPkg() == null;
@@ -161,7 +161,7 @@ public class PackageManagerServiceUtils {
     /**
      * The initial enabled state of the cache before other checks are done.
      */
-    private static final boolean DEFAULT_PACKAGE_PARSER_CACHE_ENABLED = true;
+    private static final boolean DEFAULT_PACKAGE_PARSER_CACHE_ENABLED = false;
 
     /**
      * Whether to skip all other checks and force the cache to be enabled.
@@ -933,7 +933,7 @@ public class PackageManagerServiceUtils {
         if (!downgradeRequested) {
             return false;
         }
-        final boolean isDebuggable = Build.IS_DEBUGGABLE || isAppDebuggable;
+        final boolean isDebuggable = Build.IS_ENG || isAppDebuggable;
         if (isDebuggable) {
             return true;
         }
@@ -1310,6 +1310,7 @@ public class PackageManagerServiceUtils {
             boolean isUserDebugBuild, String incrementalVersion, boolean isUpgrade) {
         if (!FORCE_PACKAGE_PARSED_CACHE_ENABLED) {
             if (!DEFAULT_PACKAGE_PARSER_CACHE_ENABLED) {
+                FileUtils.deleteContentsAndDir(Environment.getPackageCacheDirectory());
                 return null;
             }
 
@@ -1334,7 +1335,7 @@ public class PackageManagerServiceUtils {
         // identify cached items. In particular, changing the value of certain
         // feature flags should cause us to invalidate any caches.
         final String cacheName = FORCE_PACKAGE_PARSED_CACHE_ENABLED ? "debug"
-                : Build.VERSION.INCREMENTAL;
+                : PackagePartitions.FINGERPRINT;
 
         // Reconcile cache directories, keeping only what we'd actually use.
         for (File cacheDir : FileUtils.listFilesOrEmpty(cacheBaseDir)) {
@@ -1363,7 +1364,7 @@ public class PackageManagerServiceUtils {
         // NOTE: When no BUILD_NUMBER is set by the build system, it defaults to a build
         // that starts with "eng." to signify that this is an engineering build and not
         // destined for release.
-        if (isUpgrade || incrementalVersion.startsWith("eng.")) {
+        if (incrementalVersion.startsWith("eng.")) {
             Slog.w(TAG, "Wiping cache directory because the system partition changed.");
 
             // Heuristic: If the /system directory has been modified recently due to an "adb sync"

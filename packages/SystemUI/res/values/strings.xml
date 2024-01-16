@@ -223,10 +223,6 @@
     <string name="screenshot_edit_description">Edit screenshot</string>
     <!-- Content description indicating that tapping the element will allow sharing the screenshot [CHAR LIMIT=NONE] -->
     <string name="screenshot_share_description">Share screenshot</string>
-    <!-- Label for UI element which allows deleting the screenshot [CHAR LIMIT=30] -->
-    <string name="screenshot_delete_label">Delete</string>
-    <!-- Content description indicating that tapping the element will allow deleting the screenshot [CHAR LIMIT=NONE] -->
-    <string name="screenshot_delete_description">Delete screenshot</string>
     <!-- Label for UI element which allows the user to capture additional off-screen content in a screenshot. [CHAR LIMIT=30] -->
     <string name="screenshot_scroll_label">Capture more</string>
     <!-- Content description indicating that tapping a button will dismiss the screenshots UI [CHAR LIMIT=NONE] -->
@@ -984,6 +980,9 @@
 
     <!-- Media projection permission dialog warning text. [CHAR LIMIT=NONE] -->
     <string name="media_projection_dialog_text"><xliff:g id="app_seeking_permission" example="Hangouts">%s</xliff:g> will have access to all of the information that is visible on your screen or played from your device while recording or casting. This includes information such as passwords, payment details, photos, messages, and audio that you play.</string>
+
+    <!-- Media projection permission dialog warning text. [CHAR LIMIT=NONE] -->
+    <string name="media_projection_dialog_text_no_audio"><xliff:g id="app_seeking_permission" example="Hangouts">%s</xliff:g> will have access to all of the information that is visible on your screen while casting. This includes information such as passwords, payment details, photos, and messages.</string>
 
     <!-- Media projection permission dialog warning text for system services. [CHAR LIMIT=NONE] -->
     <string name="media_projection_dialog_service_text">The service providing this function will have access to all of the information that is visible on your screen or played from your device while recording or casting. This includes information such as passwords, payment details, photos, messages, and audio that you play.</string>
@@ -1795,7 +1794,7 @@
     <string name="right_icon">Right icon</string>
 
     <!-- Label for area where tiles can be dragged out of [CHAR LIMIT=60] -->
-    <string name="drag_to_add_tiles">Hold and drag to add tiles</string>
+    <string name="drag_to_add_tiles">Press on tiles to add or remove</string>
 
     <!-- Label for header of customize QS [CHAR LIMIT=60] -->
     <string name="drag_to_rearrange_tiles">Hold and drag to rearrange tiles</string>
@@ -2869,4 +2868,9 @@
 
     <!-- Content description for priority mode icon on dream [CHAR LIMIT=NONE] -->
     <string name="priority_mode_dream_overlay_content_description">Priority mode on</string>
+
+    <string name="error_report_title">Error in %1$s</string>
+    <string name="copy_to_clipboard">Copy to clipboard</string>
+    <string name="copied_to_clipboard">Copied to clipboard</string>
+    <string name="error_share">Share</string>
 </resources>

@@ -1045,7 +1045,7 @@ public class LockPatternUtils {
      * @return Whether enhanced pin privacy is enabled.
      */
     public boolean isPinEnhancedPrivacyEnabled(int userId) {
-        return getBoolean(LOCK_PIN_ENHANCED_PRIVACY, false, userId);
+        return getBoolean(LOCK_PIN_ENHANCED_PRIVACY, true, userId);
     }
 
     /**
@@ -1882,5 +1882,19 @@ public class LockPatternUtils {
         } catch (RemoteException re) {
             re.rethrowFromSystemServer();
         }
+    }
+
+    /**
+     * Returns the length of current credential.
+     *
+     * @return length of the current credential or -1, if the user hasn't authenticated yet.
+     */
+    public int getCredentialLength(int userId) {
+        try {
+            return getLockSettings().getCredentialLength(userId);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+        return -1;
     }
 }

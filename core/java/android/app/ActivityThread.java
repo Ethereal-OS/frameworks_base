@@ -78,6 +78,7 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ComponentInfo;
+import android.content.pm.GosPackageState;
 import android.content.pm.IPackageManager;
 import android.content.pm.InstrumentationInfo;
 import android.content.pm.PackageInfo;
@@ -160,7 +161,6 @@ import android.system.StructStat;
 import android.telephony.TelephonyFrameworkInitializer;
 import android.util.AndroidRuntimeException;
 import android.util.ArrayMap;
-import android.util.BoostFramework;
 import android.util.DisplayMetrics;
 import android.util.EventLog;
 import android.util.Log;
@@ -236,6 +236,7 @@ import java.io.PrintWriter;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -1520,7 +1521,7 @@ public final class ActivityThread extends ClientTransactionHandler
             if (dumpUnreachable) {
                 boolean showContents = ((mBoundApplication != null)
                     && ((mBoundApplication.appInfo.flags&ApplicationInfo.FLAG_DEBUGGABLE) != 0))
-                    || android.os.Build.IS_DEBUGGABLE;
+                    || android.os.Build.IS_ENG;
                 pw.println(" ");
                 pw.println(" Unreachable memory");
                 pw.print(Debug.getUnreachableMemory(100, showContents));
@@ -1646,7 +1647,7 @@ public final class ActivityThread extends ClientTransactionHandler
             if (dumpUnreachable) {
                 int flags = mBoundApplication == null ? 0 : mBoundApplication.appInfo.flags;
                 boolean showContents = (flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                        || android.os.Build.IS_DEBUGGABLE;
+                        || android.os.Build.IS_ENG;
                 proto.write(MemInfoDumpProto.AppData.UNREACHABLE_MEMORY,
                         Debug.getUnreachableMemory(100, showContents));
             }
@@ -1924,6 +1925,12 @@ public final class ActivityThread extends ClientTransactionHandler
             args.arg5 = viewIds;
             args.arg6 = uiTranslationSpec;
             sendMessage(H.UPDATE_UI_TRANSLATION_STATE, args);
+        }
+
+        @Override
+        public void onGosPackageStateChanged(@Nullable GosPackageState state) {
+            // this is a oneway method, caller (ActivityManager) will not be blocked
+            ActivityThreadHooks.onGosPackageStateChanged(mInitialApplication, state, false);
         }
     }
 
@@ -3422,6 +3429,10 @@ public final class ActivityThread extends ClientTransactionHandler
         }
     }
 
+    public int getProcessState() {
+        return mLastProcessState;
+    }
+
     @Override
     public void updateProcessState(int processState, boolean fromIpc) {
         synchronized (mAppThread) {
@@ -3804,7 +3815,7 @@ public final class ActivityThread extends ClientTransactionHandler
             return;
         }
         Configuration[] configurations = r.activity.getResources().getSizeConfigurations();
-        if (configurations == null) {
+        if (configurations == null || r.activity.mFinished) {
             return;
         }
         r.mSizeConfigurations = new SizeConfigurationBuckets(configurations);
@@ -4208,18 +4219,20 @@ public final class ActivityThread extends ClientTransactionHandler
 
     static void handleAttachStartupAgents(String dataDir) {
         try {
-            Path code_cache = ContextImpl.getCodeCacheDirBeforeBind(new File(dataDir)).toPath();
-            if (!Files.exists(code_cache)) {
+            Path codeCache = ContextImpl.getCodeCacheDirBeforeBind(new File(dataDir)).toPath();
+            if (!Files.exists(codeCache)) {
                 return;
             }
-            Path startup_path = code_cache.resolve("startup_agents");
-            if (Files.exists(startup_path)) {
-                for (Path p : Files.newDirectoryStream(startup_path)) {
-                    handleAttachAgent(
-                            p.toAbsolutePath().toString()
-                            + "="
-                            + dataDir,
-                            null);
+            Path startupPath = codeCache.resolve("startup_agents");
+            if (Files.exists(startupPath)) {
+                try (DirectoryStream<Path> startupFiles = Files.newDirectoryStream(startupPath)) {
+                    for (Path p : startupFiles) {
+                        handleAttachAgent(
+                                p.toAbsolutePath().toString()
+                                        + "="
+                                        + dataDir,
+                                null);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -4464,8 +4477,14 @@ public final class ActivityThread extends ClientTransactionHandler
             } else {
                 cl = packageInfo.getClassLoader();
             }
-            service = packageInfo.getAppFactory()
-                    .instantiateService(cl, data.info.name, data.intent);
+            {
+                String className = data.info.name;
+                service = ActivityThreadHooks.instantiateService(className);
+                if (service == null) {
+                    service = packageInfo.getAppFactory()
+                            .instantiateService(cl, className, data.intent);
+                }
+            }
             ContextImpl context = ContextImpl.getImpl(service
                     .createServiceBaseContext(this, packageInfo));
             if (data.info.splitName != null) {
@@ -4930,7 +4949,7 @@ public final class ActivityThread extends ClientTransactionHandler
         }
 
         if (r.isTopResumedActivity == onTop) {
-            if (!Build.IS_DEBUGGABLE) {
+            if (!Build.IS_ENG) {
                 Slog.w(TAG, "Activity top position already set to onTop=" + onTop);
                 return;
             }
@@ -6495,8 +6514,6 @@ public final class ActivityThread extends ClientTransactionHandler
 
     @UnsupportedAppUsage
     private void handleBindApplication(AppBindData data) {
-        long st_bindApp = SystemClock.uptimeMillis();
-        BoostFramework ux_perf = null;
         // Register the UI Thread as a sensitive thread to the runtime.
         VMRuntime.registerSensitiveThread();
         // In the case the stack depth property exists, pass it down to the runtime.
@@ -6615,17 +6632,10 @@ public final class ActivityThread extends ClientTransactionHandler
         /**
          * Switch this process to density compatibility mode if needed.
          */
-        if ((data.appInfo.flags & ApplicationInfo.FLAG_SUPPORTS_SCREEN_DENSITIES)
+        if ((data.appInfo.flags&ApplicationInfo.FLAG_SUPPORTS_SCREEN_DENSITIES)
                 == 0) {
             mDensityCompatMode = true;
             Bitmap.setDefaultDensity(DisplayMetrics.DENSITY_DEFAULT);
-        } else {
-            int overrideDensity = data.appInfo.getOverrideDensity();
-            if(overrideDensity != 0) {
-                Log.d(TAG, "override app density from " + DisplayMetrics.DENSITY_DEVICE + " to " + overrideDensity);
-                mDensityCompatMode = true;
-                Bitmap.setDefaultDensity(overrideDensity);
-            }
         }
         mConfigurationController.updateDefaultDensity(data.config.densityDpi);
 
@@ -6678,17 +6688,17 @@ public final class ActivityThread extends ClientTransactionHandler
         boolean isAppDebuggable = (data.appInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         boolean isAppProfileable = isAppDebuggable || data.appInfo.isProfileable();
         Trace.setAppTracingAllowed(isAppProfileable);
-        if ((isAppProfileable || Build.IS_DEBUGGABLE) && data.enableBinderTracking) {
+        if ((isAppProfileable || Build.IS_ENG) && data.enableBinderTracking) {
             Binder.enableStackTracking();
         }
 
         // Initialize heap profiling.
-        if (isAppProfileable || Build.IS_DEBUGGABLE) {
+        if (isAppProfileable || Build.IS_ENG) {
             nInitZygoteChildHeapProfiling();
         }
 
         // Allow renderer debugging features if we're debuggable.
-        HardwareRenderer.setDebuggingEnabled(isAppDebuggable || Build.IS_DEBUGGABLE);
+        HardwareRenderer.setDebuggingEnabled(isAppDebuggable || Build.IS_ENG);
         HardwareRenderer.setPackageName(data.appInfo.packageName);
 
         // Pass the current context to HardwareRenderer
@@ -6705,6 +6715,7 @@ public final class ActivityThread extends ClientTransactionHandler
 
         final ContextImpl appContext = ContextImpl.createAppContext(this, data.info);
         mConfigurationController.updateLocaleListFromAppContext(appContext);
+        final Bundle extraAppBindArgs = ActivityThreadHooks.onBind(appContext);
 
         // Initialize the default http proxy in this process.
         Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "Setup proxies");
@@ -6721,15 +6732,6 @@ public final class ActivityThread extends ClientTransactionHandler
             }
         } finally {
             Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
-        }
-
-        if (!Process.isIsolated()) {
-            final int old_mask = StrictMode.allowThreadDiskWritesMask();
-            try {
-                ux_perf = new BoostFramework(appContext);
-            } finally {
-                 StrictMode.setThreadPolicyMask(old_mask);
-            }
         }
 
         if (!Process.isIsolated()) {
@@ -6771,6 +6773,10 @@ public final class ActivityThread extends ClientTransactionHandler
             // Small heap, clamp to the current growth limit and let the heap release
             // pages after the growth limit to the non growth limit capacity. b/18387825
             dalvik.system.VMRuntime.getRuntime().clampGrowthLimit();
+        }
+
+        if (extraAppBindArgs != null) {
+            ActivityThreadHooks.onBind2(appContext, extraAppBindArgs);
         }
 
         // Allow disk access during application and provider setup. This could
@@ -6856,33 +6862,6 @@ public final class ActivityThread extends ClientTransactionHandler
                 }
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
-            }
-        }
-        long end_bindApp = SystemClock.uptimeMillis();
-        int bindApp_dur = (int) (end_bindApp - st_bindApp);
-        String pkg_name = null;
-        if (appContext != null) {
-            pkg_name = appContext.getPackageName();
-        }
-        if (ux_perf != null && !Process.isIsolated() && pkg_name != null) {
-            String pkgDir = null;
-            try
-            {
-                String codePath = appContext.getPackageCodePath();
-                pkgDir =  codePath.substring(0, codePath.lastIndexOf('/'));
-            }
-            catch(Exception e)
-            {
-                Slog.e(TAG, "HeavyGameThread () : Exception_1 = " + e);
-            }
-            if (ux_perf.board_first_api_lvl < BoostFramework.VENDOR_T_API_LEVEL &&
-                ux_perf.board_api_lvl < BoostFramework.VENDOR_T_API_LEVEL) {
-                ux_perf.perfUXEngine_events(BoostFramework.UXE_EVENT_BINDAPP, 0,
-                                               pkg_name,
-                                               bindApp_dur,
-                                               pkgDir);
-            } else {
-                ux_perf.perfEvent(BoostFramework.VENDOR_HINT_BINDAPP, pkg_name, 2, bindApp_dur, 0);
             }
         }
     }

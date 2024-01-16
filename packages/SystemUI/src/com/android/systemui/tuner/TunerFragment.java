@@ -51,6 +51,9 @@ public class TunerFragment extends PreferenceFragment {
             "nav_bar",
             "lockscreen",
             "picture_in_picture",
+            "volume_and_do_not_disturb",
+            "doze",
+            KEY_PLUGINS,
     };
 
     private static final int MENU_REMOVE = Menu.FIRST + 1;
@@ -70,7 +73,13 @@ public class TunerFragment extends PreferenceFragment {
 
         setHasOptionsMenu(true);
     }
-
+/*
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+        super.onActivityCreated(savedInstanceState);
+        getActivity().getActionBar().setDisplayHomeAsUpEnabled(true);
+    }
+*/
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
         addPreferencesFromResource(R.xml.tuner_prefs);
@@ -80,7 +89,7 @@ public class TunerFragment extends PreferenceFragment {
         if (!alwaysOnAvailable()) {
             getPreferenceScreen().removePreference(findPreference(KEY_DOZE));
         }
-        if (!Build.IS_DEBUGGABLE) {
+        if (!Build.IS_ENG) {
             for (int i = 0; i < DEBUG_ONLY.length; i++) {
                 Preference preference = findPreference(DEBUG_ONLY[i]);
                 if (preference != null) getPreferenceScreen().removePreference(preference);
@@ -105,11 +114,6 @@ public class TunerFragment extends PreferenceFragment {
         super.onPause();
 
         MetricsLogger.visibility(getContext(), MetricsEvent.TUNER, false);
-    }
-
-    @Override
-    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
-        menu.add(Menu.NONE, MENU_REMOVE, Menu.NONE, R.string.remove_from_settings);
     }
 
     @Override

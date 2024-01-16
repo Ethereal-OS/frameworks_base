@@ -90,7 +90,7 @@ import javax.crypto.Mac;
 @RequiresFeature(PackageManager.FEATURE_FINGERPRINT)
 public class FingerprintManager implements BiometricAuthenticator, BiometricFingerprintConstants {
     private static final String TAG = "FingerprintManager";
-    private static final boolean DEBUG = true;
+    private static final boolean DEBUG = false;
     private static final int MSG_ENROLL_RESULT = 100;
     private static final int MSG_ACQUIRED = 101;
     private static final int MSG_AUTHENTICATION_SUCCEEDED = 102;
@@ -1102,7 +1102,7 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
                 throw e.rethrowFromSystemServer();
             }
         } else {
-            Slog.w(TAG, "isFingerprintHardwareDetected(): Service not connected!");
+            if (DEBUG) Slog.w(TAG, "isFingerprintHardwareDetected(): Service not connected!");
         }
         return false;
     }
@@ -1131,7 +1131,10 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
      */
     public boolean isPowerbuttonFps() {
         final FingerprintSensorPropertiesInternal sensorProps = getFirstFingerprintSensor();
-        return sensorProps.sensorType == TYPE_POWER_BUTTON;
+        if (sensorProps != null) {
+            return sensorProps.sensorType == TYPE_POWER_BUTTON;
+        }
+        return false;
     }
 
     /**
@@ -1507,13 +1510,15 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
      * @hide
      */
     public static String getErrorString(Context context, int errMsg, int vendorCode) {
+        final String retry = context.getString(
+                    com.android.internal.R.string.fingerprint_error_unable_to_process);
+
         switch (errMsg) {
             case FINGERPRINT_ERROR_HW_UNAVAILABLE:
                 return context.getString(
                         com.android.internal.R.string.fingerprint_error_hw_not_available);
             case FINGERPRINT_ERROR_UNABLE_TO_PROCESS:
-                return context.getString(
-                    com.android.internal.R.string.fingerprint_error_unable_to_process);
+                return retry;
             case FINGERPRINT_ERROR_TIMEOUT:
                 return context.getString(com.android.internal.R.string.fingerprint_error_timeout);
             case FINGERPRINT_ERROR_NO_SPACE:
@@ -1557,8 +1562,7 @@ public class FingerprintManager implements BiometricAuthenticator, BiometricFing
         // It should not happen for anything other than FINGERPRINT_ERROR_VENDOR, but
         // warn and use the default if all else fails.
         Slog.w(TAG, "Invalid error message: " + errMsg + ", " + vendorCode);
-        return context.getString(
-                com.android.internal.R.string.fingerprint_error_vendor_unknown);
+        return retry;
     }
 
     /**

@@ -53,6 +53,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.UserInfo;
+import android.ext.settings.ExtSettings;
 import android.graphics.Matrix;
 import android.hardware.biometrics.BiometricSourceType;
 import android.media.AudioAttributes;
@@ -77,6 +78,7 @@ import android.provider.DeviceConfig;
 import android.provider.Settings;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
+import android.util.DisplayUtils;
 import android.util.EventLog;
 import android.util.Log;
 import android.util.Slog;
@@ -104,6 +106,7 @@ import com.android.internal.policy.IKeyguardExitCallback;
 import com.android.internal.policy.IKeyguardStateCallback;
 import com.android.internal.policy.ScreenDecorationsUtils;
 import com.android.internal.statusbar.IStatusBarService;
+import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.LatencyTracker;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.keyguard.KeyguardConstants;
@@ -206,6 +209,8 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
 
     private final static String TAG = "KeyguardViewMediator";
 
+    private static final String DELAYED_REBOOT_ACTION =
+        "com.android.internal.policy.impl.PhoneWindowManager.DELAYED_REBOOT";
     private static final String DELAYED_KEYGUARD_ACTION =
         "com.android.internal.policy.impl.PhoneWindowManager.DELAYED_KEYGUARD";
     private static final String DELAYED_LOCK_PROFILE_ACTION =
@@ -355,6 +360,11 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
      */
     private int mDelayedProfileShowingSequence;
 
+    /**
+     * Same as {@link #mDelayedProfileShowingSequence}, but used for our reboot implementation
+     */
+    private int mDelayedRebootSequence;
+
     private final DismissCallbackRegistry mDismissCallbackRegistry;
 
     // the properties of the keyguard
@@ -406,6 +416,7 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
     private boolean mHideAnimationRun = false;
     private boolean mHideAnimationRunning = false;
 
+    private long mLastTimeSoundWasPlayed = 0;
     private SoundPool mLockSounds;
     private int mLockSoundId;
     private int mUnlockSoundId;
@@ -718,6 +729,13 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
                 synchronized (KeyguardViewMediator.this) {
                     notifyTrustedChangedLocked(mUpdateMonitor.getUserHasTrust(userId));
                 }
+            }
+        }
+
+        @Override
+        public void onStrongAuthStateChanged(int userId) {
+            if (mLockPatternUtils.isUserInLockdown(KeyguardUpdateMonitor.getCurrentUser())) {
+                doKeyguardLocked(null);
             }
         }
     };
@@ -1256,8 +1274,11 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
         mActivityLaunchAnimator = activityLaunchAnimator;
         mScrimControllerLazy = scrimControllerLazy;
 
-        mPowerButtonY = context.getResources().getDimensionPixelSize(
-                R.dimen.physical_power_button_center_screen_location_y);
+        final float scaleFactor = DisplayUtils.getScaleFactor(mContext);
+        int positionY = (int) (scaleFactor * mContext.getResources().getDimensionPixelSize(
+                R.dimen.physical_power_button_center_screen_location_y));
+
+        mPowerButtonY = positionY;
         mWindowCornerRadius = ScreenDecorationsUtils.getWindowCornerRadius(context);
 
         mDreamOpenAnimationDuration = (int) DREAMING_ANIMATION_DURATION_MS;
@@ -1284,6 +1305,7 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
         final IntentFilter delayedActionFilter = new IntentFilter();
         delayedActionFilter.addAction(DELAYED_KEYGUARD_ACTION);
         delayedActionFilter.addAction(DELAYED_LOCK_PROFILE_ACTION);
+        delayedActionFilter.addAction(DELAYED_REBOOT_ACTION);
         delayedActionFilter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
         mContext.registerReceiver(mDelayedLockBroadcastReceiver, delayedActionFilter,
                 SYSTEMUI_PERMISSION, null /* scheduler */,
@@ -1424,7 +1446,11 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
         // explicitly DO NOT want to call
         // mKeyguardViewControllerLazy.get().setKeyguardGoingAwayState(false)
         // here, since that will mess with the device lock state.
-        mUpdateMonitor.dispatchKeyguardGoingAway(false);
+        int[] udfpsProps = mContext.getResources().getIntArray(
+                com.android.internal.R.array.config_udfps_sensor_props);
+        if (ArrayUtils.isEmpty(udfpsProps)) {
+            mUpdateMonitor.dispatchKeyguardGoingAway(false);
+        }
 
         notifyStartedGoingToSleep();
     }
@@ -1546,9 +1572,9 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
         final ContentResolver cr = mContext.getContentResolver();
 
         // From SecuritySettings
-        final long lockAfterTimeout = Settings.Secure.getInt(cr,
+        final long lockAfterTimeout = Settings.Secure.getIntForUser(cr,
                 Settings.Secure.LOCK_SCREEN_LOCK_AFTER_TIMEOUT,
-                KEYGUARD_LOCK_AFTER_DELAY_DEFAULT);
+                KEYGUARD_LOCK_AFTER_DELAY_DEFAULT, userId);
 
         // From DevicePolicyAdmin
         final long policyTimeout = mLockPatternUtils.getDevicePolicyManager()
@@ -1560,8 +1586,8 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
             timeout = lockAfterTimeout;
         } else {
             // From DisplaySettings
-            long displayTimeout = Settings.System.getInt(cr, SCREEN_OFF_TIMEOUT,
-                    KEYGUARD_DISPLAY_TIMEOUT_DELAY_DEFAULT);
+            long displayTimeout = Settings.System.getIntForUser(cr, SCREEN_OFF_TIMEOUT,
+                    KEYGUARD_DISPLAY_TIMEOUT_DELAY_DEFAULT, userId);
 
             // policy in effect. Make sure we don't go beyond policy limit.
             displayTimeout = Math.max(displayTimeout, 0); // ignore negative values
@@ -1619,6 +1645,18 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
         }
     }
 
+    private void doRebootForOwnerAfterTimeoutIfEnabled(long rebootAfterTimeout) {
+        long when = SystemClock.elapsedRealtime() + rebootAfterTimeout;
+        Intent rebootIntent = new Intent(DELAYED_REBOOT_ACTION);
+        rebootIntent.putExtra("seq", mDelayedRebootSequence);
+        rebootIntent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+        PendingIntent sender = PendingIntent.getBroadcast(mContext,
+                0, rebootIntent, PendingIntent.FLAG_CANCEL_CURRENT |  PendingIntent.FLAG_IMMUTABLE);
+        mAlarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, sender);
+        if (DEBUG) Log.d(TAG, "setting alarm to reboot device, timeout = "
+                         + String.valueOf(rebootAfterTimeout));
+    }
+
     private void doKeyguardForChildProfilesLocked() {
         UserManager um = UserManager.get(mContext);
         for (int profileId : um.getEnabledProfileIds(UserHandle.myUserId())) {
@@ -1634,6 +1672,10 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
 
     private void cancelDoKeyguardForChildProfilesLocked() {
         mDelayedProfileShowingSequence++;
+    }
+
+    private void cancelDoRebootForOwnerAfterTimeoutIfEnabled() {
+        mDelayedRebootSequence++;
     }
 
     /**
@@ -1926,7 +1968,8 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
      */
     private void doKeyguardLocked(Bundle options) {
         // if another app is disabling us, don't show
-        if (!mExternallyEnabled) {
+        if (!mExternallyEnabled
+            && !mLockPatternUtils.isUserInLockdown(KeyguardUpdateMonitor.getCurrentUser())) {
             if (DEBUG) Log.d(TAG, "doKeyguard: not showing because externally disabled");
 
             mNeedToReshowWhenReenabled = true;
@@ -1979,12 +2022,18 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
             if (mLockPatternUtils.isLockScreenDisabled(KeyguardUpdateMonitor.getCurrentUser())
                     && !lockedOrMissing && !forceShow) {
                 if (DEBUG) Log.d(TAG, "doKeyguard: not showing because lockscreen is off");
+                setShowingLocked(false, mAodShowing);
+                hideLocked();
                 return;
             }
         }
 
         if (DEBUG) Log.d(TAG, "doKeyguard: showing the lock screen");
         showLocked(options);
+        final long rebootAfterTimeout = ExtSettings.AUTO_REBOOT_TIMEOUT.get(mContext);
+        if (rebootAfterTimeout >= 1) {
+            doRebootForOwnerAfterTimeoutIfEnabled(rebootAfterTimeout);
+        }
     }
 
     private void lockProfile(int userId) {
@@ -2169,6 +2218,12 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
                         }
                     }
                 }
+            } else if (DELAYED_REBOOT_ACTION.equals(intent.getAction())) {
+                final int sequence = intent.getIntExtra("seq", 0);
+                if (sequence == mDelayedRebootSequence) {
+                    PowerManager pm = mContext.getSystemService(PowerManager.class);
+                    pm.reboot(null);
+                }
             }
         }
     };
@@ -2249,6 +2304,7 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
                 case KEYGUARD_TIMEOUT:
                     synchronized (KeyguardViewMediator.this) {
                         doKeyguardLocked((Bundle) msg.obj);
+                        notifyDefaultDisplayCallbacks(mShowing);
                     }
                     break;
                 case DISMISS:
@@ -2388,7 +2444,12 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
     private void playSound(int soundId) {
         if (soundId == 0) return;
         final ContentResolver cr = mContext.getContentResolver();
-        if (Settings.System.getInt(cr, Settings.System.LOCKSCREEN_SOUNDS_ENABLED, 1) == 1) {
+        int lockscreenSoundsEnabled = Settings.System.getIntForUser(cr,
+                Settings.System.LOCKSCREEN_SOUNDS_ENABLED, 1,
+                KeyguardUpdateMonitor.getCurrentUser());
+        if (lockscreenSoundsEnabled == 1) {
+            if (SystemClock.elapsedRealtime() - mLastTimeSoundWasPlayed < 300) return;
+            mLastTimeSoundWasPlayed = SystemClock.elapsedRealtime();
 
             mLockSounds.stop(mLockSoundStreamId);
             // Init mAudioManager
@@ -2769,6 +2830,7 @@ public class KeyguardViewMediator implements CoreStartable, Dumpable,
         mHideAnimationRun = false;
         adjustStatusBarLocked();
         sendUserPresentBroadcast();
+        cancelDoRebootForOwnerAfterTimeoutIfEnabled();
     }
 
     private Configuration.Builder createInteractionJankMonitorConf(int cuj) {

@@ -33,7 +33,6 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackagePartitions;
 import android.content.pm.UserInfo;
 import android.content.pm.VersionedPackage;
-import android.os.Build;
 import android.os.Environment;
 import android.os.FileUtils;
 import android.os.UserHandle;
@@ -167,7 +166,7 @@ public final class StorageEventHelper extends StorageEventListener {
                     Slog.w(TAG, "Failed to scan " + ps.getPath() + ": " + e.getMessage());
                 }
 
-                if (!Build.VERSION.INCREMENTAL.equals(ver.fingerprint)) {
+                if (!PackagePartitions.FINGERPRINT.equals(ver.fingerprint)) {
                     appDataHelper.clearAppDataLIF(
                             ps.getPkg(), UserHandle.USER_ALL, FLAG_STORAGE_DE | FLAG_STORAGE_CE
                             | FLAG_STORAGE_EXTERNAL | Installer.FLAG_CLEAR_CODE_CACHE_ONLY
@@ -198,17 +197,20 @@ public final class StorageEventHelper extends StorageEventListener {
                     appDataHelper.reconcileAppsDataLI(volumeUuid, user.id, flags,
                             true /* migrateAppData */);
                 }
-            } catch (IllegalStateException e) {
-                // Device was probably ejected, and we'll process that event momentarily
+            } catch (RuntimeException e) {
+                // The volume was probably already unmounted.  We'll probably process the unmount
+                // event momentarily.  TODO(b/256909937): ignoring errors from prepareUserStorage()
+                // is very dangerous.  Instead, we should fix the race condition that allows this
+                // code to run on an unmounted volume in the first place.
                 Slog.w(TAG, "Failed to prepare storage: " + e);
             }
         }
 
         synchronized (mPm.mLock) {
-            final boolean isUpgrade = !Build.VERSION.INCREMENTAL.equals(ver.fingerprint);
+            final boolean isUpgrade = !PackagePartitions.FINGERPRINT.equals(ver.fingerprint);
             if (isUpgrade) {
                 logCriticalInfo(Log.INFO, "Build fingerprint changed from " + ver.fingerprint
-                        + " to " + Build.VERSION.INCREMENTAL + "; regranting permissions for "
+                        + " to " + PackagePartitions.FINGERPRINT + "; regranting permissions for "
                         + volumeUuid);
             }
             mPm.mPermissionManager.onStorageVolumeMounted(volumeUuid, isUpgrade);

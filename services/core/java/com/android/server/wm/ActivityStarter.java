@@ -136,6 +136,8 @@ import com.android.server.wm.BackgroundActivityStartController.BalCode;
 import com.android.server.wm.LaunchParamsController.LaunchParams;
 import com.android.server.wm.TaskFragment.EmbeddingCheckResult;
 
+import ink.kaleidoscope.server.ParallelSpaceManagerService;
+
 import java.io.PrintWriter;
 import java.text.DateFormat;
 import java.util.Date;
@@ -228,8 +230,6 @@ class ActivityStarter {
 
     private IVoiceInteractionSession mVoiceSession;
     private IVoiceInteractor mVoiceInteractor;
-
-    public BoostFramework mPerf = null;
 
     // Last activity record we attempted to start
     private ActivityRecord mLastStartActivityRecord;
@@ -583,7 +583,6 @@ class ActivityStarter {
         mSupervisor = supervisor;
         mInterceptor = interceptor;
         reset(true);
-        mPerf = new BoostFramework();
     }
 
     /**
@@ -649,6 +648,12 @@ class ActivityStarter {
      */
     int execute() {
         try {
+            if (ParallelSpaceManagerService.isCurrentParallelUser(mRequest.userId) &&
+                    Intent.ACTION_MAIN.equals(mRequest.intent.getAction()) &&
+                    mRequest.intent.hasCategory(Intent.CATEGORY_HOME)) {
+                mRequest.userId = ParallelSpaceManagerService.getCurrentParallelOwnerId();
+            }
+
             onExecutionStarted();
 
             // Refuse possible leaked file descriptors
@@ -740,6 +745,13 @@ class ActivityStarter {
                     res = waitResultIfNeeded(mRequest.waitResult, mLastStartActivityRecord,
                             launchingState);
                 }
+
+                if (res == START_ABORTED) {
+                    if (android.app.compat.gms.GmsCompat.isGmsApp(mRequest.callingPackage, mRequest.userId)) {
+                        return START_ABORTED;
+                    }
+                }
+
                 return getExternalResult(res);
             }
         } finally {
@@ -1403,6 +1415,12 @@ class ActivityStarter {
                         intentGrants);
             } finally {
                 Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+
+                if (ActivityManager.isStartResultSuccessful(result) &&
+                        mService.mWindowManager.getRecentsAnimationController() != null) {
+                        mService.mWindowManager.getRecentsAnimationController().notifyActivityStarting();
+                }
+
                 startedActivityRootTask = handleStartResult(r, options, result, newTransition,
                         remoteTransition);
             }
@@ -1712,7 +1730,8 @@ class ActivityStarter {
         // If Activity's launching into PiP, move the mStartActivity immediately to pinned mode.
         // Note that mStartActivity and source should be in the same Task at this point.
         if (mOptions != null && mOptions.isLaunchIntoPip()
-                && sourceRecord != null && sourceRecord.getTask() == mStartActivity.getTask()) {
+                && sourceRecord != null && sourceRecord.getTask() == mStartActivity.getTask()
+                && balCode != BAL_BLOCK) {
             mRootWindowContainer.moveActivityToPinnedRootTask(mStartActivity,
                     sourceRecord, "launch-into-pip");
         }
@@ -2721,26 +2740,6 @@ class ActivityStarter {
 
     /** Places {@link #mStartActivity} in {@code task} or an embedded {@link TaskFragment}. */
     private void addOrReparentStartingActivity(@NonNull Task task, String reason) {
-        String packageName= mService.mContext.getPackageName();
-        if (mPerf != null) {
-            if (mPerf.getPerfHalVersion() >= BoostFramework.PERF_HAL_V23) {
-                    int pkgType =
-                        mPerf.perfGetFeedback(BoostFramework.VENDOR_FEEDBACK_WORKLOAD_TYPE,
-                                                    packageName);
-                    mStartActivity.perfActivityBoostHandler =
-                        mPerf.perfHintAcqRel(mStartActivity.perfActivityBoostHandler,
-                                        BoostFramework.VENDOR_HINT_FIRST_LAUNCH_BOOST, packageName,
-                                        -1, BoostFramework.Launch.ACTIVITY_LAUNCH_BOOST, 1, pkgType);
-            } else {
-                    if (mStartActivity.perfActivityBoostHandler > 0) {
-                       Slog.i(TAG, "Activity boosted, release it firstly");
-                       mPerf.perfLockReleaseHandler(mStartActivity.perfActivityBoostHandler);
-                    }
-                mStartActivity.perfActivityBoostHandler =
-                    mPerf.perfHint(BoostFramework.VENDOR_HINT_FIRST_LAUNCH_BOOST,
-                                    packageName, -1, BoostFramework.Launch.BOOST_V1);
-            }
-        }
         TaskFragment newParent = task;
         if (mInTaskFragment != null) {
             int embeddingCheckResult = canEmbedActivity(mInTaskFragment, mStartActivity, task);

@@ -20,7 +20,6 @@ import static android.Manifest.permission.HIDE_NON_SYSTEM_OVERLAY_WINDOWS;
 import static android.Manifest.permission.HIDE_OVERLAY_WINDOWS;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 import static android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
-import static android.view.WindowManager.LayoutParams.FLAG_SECURE;
 import static android.view.WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS;
 
 import android.annotation.ColorInt;
@@ -51,7 +50,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
-import android.provider.Settings;
 import android.transition.Scene;
 import android.transition.Transition;
 import android.transition.TransitionManager;
@@ -1261,6 +1259,11 @@ public abstract class Window {
         setFlags(0, flags);
     }
 
+    /** @hide */
+    public void clearPrivateFlags(int flags) {
+        setPrivateFlags(0, flags);
+    }
+
     /**
      * Set the flags of the window, as per the
      * {@link WindowManager.LayoutParams WindowManager.LayoutParams}
@@ -1281,10 +1284,6 @@ public abstract class Window {
      * @see #clearFlags
      */
     public void setFlags(int flags, int mask) {
-        if ((mask & FLAG_SECURE) != 0 && Settings.Secure.getInt(mContext.getContentResolver(),
-                Settings.Secure.WINDOW_IGNORE_SECURE, 0) == 1) {
-            mask &= ~FLAG_SECURE;
-        }
         final WindowManager.LayoutParams attrs = getAttributes();
         attrs.flags = (attrs.flags&~mask) | (flags&mask);
         mForcedWindowFlags |= mask;
@@ -1292,6 +1291,10 @@ public abstract class Window {
     }
 
     private void setPrivateFlags(int flags, int mask) {
+        if ((flags & mask & WindowManager.LayoutParams.PRIVATE_FLAG_PREVENT_POWER_KEY) != 0) {
+            mContext.enforceCallingOrSelfPermission("android.permission.PREVENT_POWER_KEY",
+                    "No permission to prevent power key");
+        }
         final WindowManager.LayoutParams attrs = getAttributes();
         attrs.privateFlags = (attrs.privateFlags & ~mask) | (flags & mask);
         dispatchWindowAttributesChanged(attrs);

@@ -26,10 +26,12 @@ import android.app.ActivityThread;
 import android.app.AppOpsManager;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.ImageFormat;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraManager;
 import android.media.AudioAttributes;
 import android.media.IAudioService;
 import android.os.Build;
@@ -40,6 +42,7 @@ import android.os.Message;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
 import android.renderscript.Allocation;
 import android.renderscript.Element;
 import android.renderscript.RSIllegalArgumentException;
@@ -285,15 +288,23 @@ public class Camera {
          * if the package name does not falls in this bucket
          */
         String packageName = ActivityThread.currentOpPackageName();
-	if (packageName == null) {
+        if (packageName == null) {
             return true;
         }
-        List<String> packageList = Arrays.asList(
-                SystemProperties.get("vendor.camera.aux.packagelist", packageName).split(","));
-        List<String> packageExcludelist = Arrays.asList(
-                SystemProperties.get("vendor.camera.aux.packageexcludelist", "").split(","));
+        List<String> packageList = new ArrayList<>(Arrays.asList(
+                SystemProperties.get("vendor.camera.aux.packagelist", ",").split(",")));
+        List<String> packageExcludelist = new ArrayList<>(Arrays.asList(
+                SystemProperties.get("vendor.camera.aux.packageexcludelist", ",").split(",")));
 
-        return packageList.contains(packageName) && !packageExcludelist.contains(packageName);
+        // Append packages from framework resources
+        Resources res = ActivityThread.currentApplication().getResources();
+        packageList.addAll(Arrays.asList(res.getStringArray(
+                com.android.internal.R.array.config_cameraAuxPackageAllowList)));
+        packageExcludelist.addAll(Arrays.asList(res.getStringArray(
+                com.android.internal.R.array.config_cameraAuxPackageExcludeList)));
+
+        return (packageList.isEmpty() || packageList.contains(packageName)) &&
+                !packageExcludelist.contains(packageName);
     }
 
     /**
@@ -335,12 +346,12 @@ public class Camera {
      *    low-level failure).
      */
     public static void getCameraInfo(int cameraId, CameraInfo cameraInfo) {
-        if (cameraId >= getNumberOfCameras()) {
-            throw new RuntimeException("Unknown camera ID");
-        }
         boolean overrideToPortrait = CameraManager.shouldOverrideToPortrait(
                 ActivityThread.currentApplication().getApplicationContext());
 
+        if (cameraId >= getNumberOfCameras()) {
+            throw new RuntimeException("Unknown camera ID");
+        }
         _getCameraInfo(cameraId, overrideToPortrait, cameraInfo);
         IBinder b = ServiceManager.getService(Context.AUDIO_SERVICE);
         IAudioService audioService = IAudioService.Stub.asInterface(b);
@@ -354,7 +365,8 @@ public class Camera {
             Log.e(TAG, "Audio service is unavailable for queries");
         }
     }
-    private native static void _getCameraInfo(int cameraId, CameraInfo cameraInfo);
+    private native static void _getCameraInfo(int cameraId, boolean overrideToPortrait,
+            CameraInfo cameraInfo);
 
     /**
      * Information about a camera
@@ -1826,11 +1838,7 @@ public class Camera {
                     } catch (RemoteException e) {
                         Log.e(TAG, "Audio service is unavailable for queries");
                     }
-                    try {
-                        _enableShutterSound(false);
-                    } catch (Exception e) {
-                        Log.e(TAG, "Couldn't disable shutter sound");
-                    }
+                    _enableShutterSound(false);
                 } else {
                     enableShutterSound(mShutterSoundEnabledFromApp);
                 }

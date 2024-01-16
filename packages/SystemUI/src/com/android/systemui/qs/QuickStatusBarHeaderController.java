@@ -30,9 +30,6 @@ class QuickStatusBarHeaderController extends ViewController<QuickStatusBarHeader
     private final QuickQSPanelController mQuickQSPanelController;
     private boolean mListening;
 
-    private SysuiColorExtractor mColorExtractor;
-    private ColorExtractor.OnColorsChangedListener mOnColorsChangedListener;
-
     @Inject
     QuickStatusBarHeaderController(QuickStatusBarHeader view,
             QuickQSPanelController quickQSPanelController

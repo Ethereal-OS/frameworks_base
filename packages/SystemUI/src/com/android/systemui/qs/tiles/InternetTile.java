@@ -54,6 +54,7 @@ import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.systemui.qs.tiles.dialog.InternetDialogFactory;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.connectivity.AccessPointController;
 import com.android.systemui.statusbar.connectivity.IconState;
 import com.android.systemui.statusbar.connectivity.MobileDataIndicators;
@@ -68,7 +69,7 @@ import java.io.PrintWriter;
 import javax.inject.Inject;
 
 /** Quick settings tile: Internet **/
-public class InternetTile extends QSTileImpl<SignalState> {
+public class InternetTile extends SecureQSTile<SignalState> {
 
     public static final String TILE_SPEC = "internet";
 
@@ -313,15 +314,12 @@ public class InternetTile extends QSTileImpl<SignalState> {
             if (DEBUG) {
                 Log.d(TAG, "setWifiIndicators: " + indicators);
             }
-            if (!indicators.isDefault) {
-                return;
-            }
             synchronized (mWifiInfo) {
                 mWifiInfo.mEnabled = indicators.enabled;
                 mWifiInfo.mSsid = indicators.description;
                 mWifiInfo.mIsTransient = indicators.isTransient;
                 mWifiInfo.mStatusLabel = indicators.statusLabel;
-                if (indicators.qsIcon != null) {
+                if (indicators.qsIcon != null|| !indicators.isDefault) {
                     mWifiInfo.mConnected = indicators.qsIcon.visible;
                     mWifiInfo.mWifiSignalIconId = indicators.qsIcon.icon;
                     mWifiInfo.mWifiSignalContentDescription = indicators.qsIcon.contentDescription;
@@ -331,7 +329,7 @@ public class InternetTile extends QSTileImpl<SignalState> {
                     mWifiInfo.mWifiSignalContentDescription = null;
                 }
             }
-            if (indicators.qsIcon != null) {
+            if (indicators.qsIcon != null|| !indicators.isDefault) {
                 refreshState(mWifiInfo);
             }
         }

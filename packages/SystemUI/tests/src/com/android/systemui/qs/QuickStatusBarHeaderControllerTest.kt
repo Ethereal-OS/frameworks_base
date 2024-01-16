@@ -38,6 +38,7 @@ class QuickStatusBarHeaderControllerTest : SysuiTestCase() {
     private lateinit var view: QuickStatusBarHeader
     @Mock
     private lateinit var quickQSPanelController: QuickQSPanelController
+
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
     private lateinit var context: Context
 
@@ -49,6 +50,7 @@ class QuickStatusBarHeaderControllerTest : SysuiTestCase() {
         `when`(view.resources).thenReturn(mContext.resources)
         `when`(view.isAttachedToWindow).thenReturn(true)
         `when`(view.context).thenReturn(context)
+
         controller = QuickStatusBarHeaderController(view, quickQSPanelController)
     }
 

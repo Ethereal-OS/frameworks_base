@@ -309,6 +309,7 @@ public class NotificationShadeWindowControllerImpl implements NotificationShadeW
     private void applyKeyguardFlags(NotificationShadeWindowState state) {
         final boolean keyguardOrAod = state.keyguardShowing
                 || (state.dozing && mDozeParameters.getAlwaysOn());
+        boolean wasKeyguardRateSet = false;
         if ((keyguardOrAod && !state.mediaBackdropShowing && !state.lightRevealScrimOpaque)
                 || mKeyguardViewMediator.isAnimatingBetweenKeyguardAndSurfaceBehind()) {
             // Show the wallpaper if we're on keyguard/AOD and the wallpaper is not occluded by a
@@ -334,6 +335,7 @@ public class NotificationShadeWindowControllerImpl implements NotificationShadeW
                 // both max and min display refresh rate must be set to take effect:
                 mLpChanged.preferredMaxDisplayRefreshRate = mKeyguardPreferredRefreshRate;
                 mLpChanged.preferredMinDisplayRefreshRate = mKeyguardPreferredRefreshRate;
+                wasKeyguardRateSet = true;
             } else {
                 mLpChanged.preferredMaxDisplayRefreshRate = 0;
                 mLpChanged.preferredMinDisplayRefreshRate = 0;
@@ -354,6 +356,19 @@ public class NotificationShadeWindowControllerImpl implements NotificationShadeW
                     (long) mLpChanged.preferredMaxDisplayRefreshRate);
         }
 
+        if (mAODMaxRefreshRate > 0) {
+            if (state.dozing) {
+                // limit on AOD & ambient if we have that set
+                // overrides set max keyguard rate
+                mLpChanged.preferredMaxDisplayRefreshRate = mAODMaxRefreshRate;
+            } else if (!wasKeyguardRateSet) {
+                // un-limit when out, but only if max keyguard rate wasn't set
+                mLpChanged.preferredMaxDisplayRefreshRate = 0;
+            }
+            Trace.setCounter("display_max_refresh_rate",
+                        (long) mLpChanged.preferredMaxDisplayRefreshRate);
+        }
+
         if (state.bouncerShowing && !isDebuggable()) {
             mLpChanged.flags |= LayoutParams.FLAG_SECURE;
         } else {
@@ -362,12 +377,12 @@ public class NotificationShadeWindowControllerImpl implements NotificationShadeW
     }
 
     protected boolean isDebuggable() {
-        return Build.IS_DEBUGGABLE;
+        return Build.IS_ENG;
     }
 
     private void adjustScreenOrientation(NotificationShadeWindowState state) {
         if (state.bouncerShowing || state.isKeyguardShowingAndNotOccluded() || state.dozing) {
-            if (shouldEnableKeyguardScreenRotation()) {
+            if (mKeyguardStateController.isKeyguardScreenRotationAllowed()) {
                 mLpChanged.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_USER;
             } else {
                 mLpChanged.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_NOSENSOR;

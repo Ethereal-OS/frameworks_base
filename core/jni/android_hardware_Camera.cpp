@@ -614,9 +614,8 @@ static jint android_hardware_Camera_getNumberOfCameras(JNIEnv *env, jobject thiz
     return Camera::getNumberOfCameras();
 }
 
-static void android_hardware_Camera_getCameraInfo(JNIEnv *env, jobject thiz,
-    jint cameraId, jobject info_obj)
-{
+static void android_hardware_Camera_getCameraInfo(JNIEnv *env, jobject thiz, jint cameraId,
+                                                  jboolean overrideToPortrait, jobject info_obj) {
     CameraInfo cameraInfo;
     if (cameraId >= Camera::getNumberOfCameras() || cameraId < 0) {
         ALOGE("%s: Unknown camera ID %d", __FUNCTION__, cameraId);
@@ -624,7 +623,7 @@ static void android_hardware_Camera_getCameraInfo(JNIEnv *env, jobject thiz,
         return;
     }
 
-    status_t rc = Camera::getCameraInfo(cameraId, &cameraInfo);
+    status_t rc = Camera::getCameraInfo(cameraId, overrideToPortrait, &cameraInfo);
     if (rc != NO_ERROR) {
         jniThrowRuntimeException(env, "Fail to get camera info");
         return;
@@ -683,7 +682,7 @@ static jint android_hardware_Camera_native_setup(JNIEnv *env, jobject thiz, jobj
 
     // Update default display orientation in case the sensor is reverse-landscape
     CameraInfo cameraInfo;
-    status_t rc = Camera::getCameraInfo(cameraId, &cameraInfo);
+    status_t rc = Camera::getCameraInfo(cameraId, overrideToPortrait, &cameraInfo);
     if (rc != NO_ERROR) {
         ALOGE("%s: getCameraInfo error: %d", __FUNCTION__, rc);
         return rc;
@@ -1188,6 +1187,10 @@ static const JNINativeMethod camMethods[] = {
         {"native_autoFocus", "()V", (void *)android_hardware_Camera_autoFocus},
         {"native_cancelAutoFocus", "()V", (void *)android_hardware_Camera_cancelAutoFocus},
         {"native_takePicture", "(I)V", (void *)android_hardware_Camera_takePicture},
+        {"native_setHistogramMode", "(Z)V", (void *)android_hardware_Camera_setHistogramMode },
+        {"native_setMetadataCb", "(Z)V", (void *)android_hardware_Camera_setMetadataCb },
+        {"native_sendHistogramData", "()V", (void *)android_hardware_Camera_sendHistogramData },
+        {"native_setLongshot", "(Z)V", (void *)android_hardware_Camera_setLongshot },
         {"native_setParameters", "(Ljava/lang/String;)V",
          (void *)android_hardware_Camera_setParameters},
         {"native_getParameters", "()Ljava/lang/String;",
@@ -1205,6 +1208,7 @@ static const JNINativeMethod camMethods[] = {
          (void *)android_hardware_Camera_enableFocusMoveCallback},
         {"setAudioRestriction", "(I)V", (void *)android_hardware_Camera_setAudioRestriction},
         {"getAudioRestriction", "()I", (void *)android_hardware_Camera_getAudioRestriction},
+        { "_sendVendorCommand", "(III)V", (void *)android_hardware_Camera_sendVendorCommand },
 };
 
 struct field {

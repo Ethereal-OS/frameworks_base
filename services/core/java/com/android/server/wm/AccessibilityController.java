@@ -211,7 +211,7 @@ final class AccessibilityController {
                 final String errorMessage = "Windows for accessibility callback of display "
                         + displayId + " already set!";
                 Slog.e(TAG, errorMessage);
-                if (Build.IS_DEBUGGABLE) {
+                if (Build.IS_ENG) {
                     throw new IllegalStateException(errorMessage);
                 }
                 mWindowsForAccessibilityObserver.remove(displayId);
@@ -228,7 +228,7 @@ final class AccessibilityController {
                 final String errorMessage = "Windows for accessibility callback of display "
                         + displayId + " already cleared!";
                 Slog.e(TAG, errorMessage);
-                if (Build.IS_DEBUGGABLE) {
+                if (Build.IS_ENG) {
                     throw new IllegalStateException(errorMessage);
                 }
             }
@@ -420,7 +420,7 @@ final class AccessibilityController {
         if (mAccessibilityTracing.isTracingEnabled(FLAGS_WINDOWS_FOR_ACCESSIBILITY_CALLBACK)) {
             mAccessibilityTracing.logTrace(TAG + ".onSomeWindowResizedOrMoved",
                     FLAGS_WINDOWS_FOR_ACCESSIBILITY_CALLBACK,
-                    "displayIds={" + displayIds.toString() + "}", "".getBytes(), callingUid);
+                    "displayIds={" + Arrays.toString(displayIds) + "}", "".getBytes(), callingUid);
         }
         // Not relevant for the display magnifier.
         for (int i = 0; i < displayIds.length; i++) {

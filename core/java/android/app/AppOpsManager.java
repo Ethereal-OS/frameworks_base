@@ -28,6 +28,7 @@ import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
+import android.app.compat.gms.GmsCompat;
 import android.app.usage.UsageStatsManager;
 import android.compat.Compatibility;
 import android.compat.annotation.ChangeId;
@@ -37,6 +38,7 @@ import android.content.AttributionSource;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.pm.AppPermissionUtils;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
@@ -61,6 +63,7 @@ import android.os.UserManager;
 import android.provider.DeviceConfig;
 import android.util.ArrayMap;
 import android.util.ArraySet;
+import android.util.Log;
 import android.util.LongSparseArray;
 import android.util.LongSparseLongArray;
 import android.util.Pools;
@@ -7849,6 +7852,9 @@ public class AppOpsManager {
     @RequiresPermission(android.Manifest.permission.MANAGE_APP_OPS_MODES)
     public void setMode(@NonNull String op, int uid, @Nullable String packageName,
             @Mode int mode) {
+        if (packageName == null) {
+            Log.d("AppOpsClient", "null packageName passed", new Throwable());
+        }
         try {
             mService.setMode(strOpToOp(op), uid, packageName, mode);
         } catch (RemoteException e) {
@@ -8363,7 +8369,13 @@ public class AppOpsManager {
      */
     public int unsafeCheckOpRawNoThrow(int op, int uid, @NonNull String packageName) {
         try {
-            return mService.checkOperationRaw(op, uid, packageName, null);
+            final int mode = mService.checkOperationRaw(op, uid, packageName, null);
+            if (mode != MODE_ALLOWED && uid == Process.myUid()) {
+                if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
+                    return MODE_ALLOWED;
+                }
+            }
+            return mode;
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -8514,6 +8526,10 @@ public class AppOpsManager {
      */
     public int noteOpNoThrow(int op, int uid, @Nullable String packageName,
             @Nullable String attributionTag, @Nullable String message) {
+        if (GmsCompat.isEnabled() && uid != Process.myUid()) {
+            return noteProxyOpNoThrow(opToPublicName(op), packageName, uid, attributionTag, message);
+        }
+
         try {
             collectNoteOpCallsForValidation(op);
             int collectionMode = getNotedOpCollectionMode(uid, packageName, op);
@@ -8537,7 +8553,15 @@ public class AppOpsManager {
                 }
             }
 
-            return syncOp.getOpMode();
+            final int mode = syncOp.getOpMode();
+
+            if (mode != MODE_ALLOWED && uid == Process.myUid()) {
+                if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
+                    return MODE_ALLOWED;
+                }
+            }
+
+            return mode;
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -8711,7 +8735,21 @@ public class AppOpsManager {
                 }
             }
 
-            return syncOp.getOpMode();
+            final int mode = syncOp.getOpMode();
+
+            if (mode != MODE_ALLOWED) {
+                int uid = attributionSource.getUid();
+                int nextUid = attributionSource.getNextUid();
+                boolean selfCheck = (uid == myUid) && (nextUid == myUid || nextUid == Process.INVALID_UID);
+
+                if (selfCheck) {
+                    if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
+                        return MODE_ALLOWED;
+                    }
+                }
+            }
+
+            return mode;
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -8787,6 +8825,13 @@ public class AppOpsManager {
     public int checkOpNoThrow(int op, int uid, String packageName) {
         try {
             int mode = mService.checkOperation(op, uid, packageName);
+
+            if (mode != MODE_ALLOWED && uid == Process.myUid()) {
+                if (AppPermissionUtils.shouldSpoofSelfAppOpCheck(op)) {
+                    return MODE_ALLOWED;
+                }
+            }
+
             return mode == AppOpsManager.MODE_FOREGROUND ? AppOpsManager.MODE_ALLOWED : mode;
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
@@ -9019,6 +9064,10 @@ public class AppOpsManager {
     public int startOpNoThrow(@NonNull IBinder token, int op, int uid, @NonNull String packageName,
             boolean startIfModeDefault, @Nullable String attributionTag, @Nullable String message,
             @AttributionFlags int attributionFlags, int attributionChainId) {
+        if (GmsCompat.isEnabled() && uid != Process.myUid()) {
+            return startProxyOpNoThrow(opToPublicName(op), uid, packageName, attributionTag, message);
+        }
+
         try {
             collectNoteOpCallsForValidation(op);
             int collectionMode = getNotedOpCollectionMode(uid, packageName, op);
@@ -9244,6 +9293,11 @@ public class AppOpsManager {
      */
     public void finishOp(IBinder token, int op, int uid, @NonNull String packageName,
             @Nullable String attributionTag) {
+        if (GmsCompat.isEnabled() && uid != Process.myUid()) {
+            finishProxyOp(opToPublicName(op), uid, packageName, attributionTag);
+            return;
+        }
+
         try {
             mService.finishOperation(token, op, uid, packageName, attributionTag);
         } catch (RemoteException e) {

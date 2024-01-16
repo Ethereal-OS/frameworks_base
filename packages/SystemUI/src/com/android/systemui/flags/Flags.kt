@@ -136,7 +136,7 @@ object Flags {
 
     // TODO(b/254512676): Tracking Bug
     @JvmField
-    val LOCKSCREEN_CUSTOM_CLOCKS = unreleasedFlag(207, "lockscreen_custom_clocks")
+    val LOCKSCREEN_CUSTOM_CLOCKS = releasedFlag(207, "lockscreen_custom_clocks")
 
     /**
      * Whether the clock on a wide lock screen should use the new "stepping" animation for moving
@@ -166,7 +166,7 @@ object Flags {
     // TODO(b/255618149): Tracking Bug
     @JvmField
     val CUSTOMIZABLE_LOCK_SCREEN_QUICK_AFFORDANCES =
-        unreleasedFlag(216, "customizable_lock_screen_quick_affordances", teamfood = true)
+        releasedFlag(216, "customizable_lock_screen_quick_affordances")
 
     /**
      * Migrates control of the LightRevealScrim's reveal effect and amount from legacy code to the
@@ -332,7 +332,7 @@ object Flags {
 
     // TODO(b/265892345): Tracking Bug
     val PLUG_IN_STATUS_BAR_CHIP =
-            unreleasedFlag(265892345, "plug_in_status_bar_chip", teamfood = true)
+            releasedFlag(265892345, "plug_in_status_bar_chip")
 
     // 700 - dialer/calls
     // TODO(b/254512734): Tracking Bug
@@ -363,7 +363,7 @@ object Flags {
     val MEDIA_TAP_TO_TRANSFER = releasedFlag(900, "media_tap_to_transfer")
 
     // TODO(b/254512502): Tracking Bug
-    val MEDIA_SESSION_ACTIONS = unreleasedFlag(901, "media_session_actions")
+    val MEDIA_SESSION_ACTIONS = releasedFlag(901, "media_session_actions", teamfood = true)
 
     // TODO(b/254512726): Tracking Bug
     val MEDIA_NEARBY_DEVICES = releasedFlag(903, "media_nearby_devices")
@@ -543,7 +543,8 @@ object Flags {
         sysPropBooleanFlag(1202, "persist.wm.debug.predictive_back_always_enforce", default = false)
 
     // TODO(b/254512728): Tracking Bug
-    @JvmField val NEW_BACK_AFFORDANCE = unreleasedFlag(1203, "new_back_affordance", teamfood = true)
+    @JvmField
+    val NEW_BACK_AFFORDANCE = releasedFlag(1203, "new_back_affordance", teamfood = false)
 
     // TODO(b/255854141): Tracking Bug
     @JvmField

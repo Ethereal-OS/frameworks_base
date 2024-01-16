@@ -348,6 +348,7 @@ public class BluetoothControllerImpl implements BluetoothController, BluetoothCa
         }
     }
 
+    @Override
     public void onBluetoothStateChanged(@AdapterState int bluetoothState) {
         mLogger.logStateChange(BluetoothAdapter.nameForState(bluetoothState));
         mEnabled = bluetoothState == BluetoothAdapter.STATE_ON

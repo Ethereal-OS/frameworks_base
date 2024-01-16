@@ -65,6 +65,7 @@ import android.os.Message;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.text.format.Formatter;
 import android.view.View;
@@ -187,7 +188,7 @@ public class KeyguardIndicationController {
     private boolean mBatteryOverheated;
     private boolean mEnableBatteryDefender;
     private int mChargingSpeed;
-    private int mChargingWattage;
+    private double mChargingWattage;
     private int mBatteryLevel;
     private boolean mBatteryPresent = true;
     private long mChargingTimeRemaining;
@@ -195,7 +196,11 @@ public class KeyguardIndicationController {
     private final Set<Integer> mCoExFaceAcquisitionMsgIdsToShow;
     private final FaceHelpMessageDeferral mFaceAcquiredMessageDeferral;
     private boolean mInited;
-    private boolean mFaceDetectionRunning;
+
+    private int mChargingCurrent;
+    private int mBatteryCurrentDivider;
+    private double mChargingVoltage;
+    private float mTemperature;
 
     private KeyguardUpdateMonitorCallback mUpdateMonitorCallback;
 
@@ -213,15 +218,6 @@ public class KeyguardIndicationController {
                 // We want to keep this message around in case the screen was off
                 hideBiometricMessageDelayed(DEFAULT_HIDE_DELAY_MS);
                 mBiometricErrorMessageToShowOnScreenOn = null;
-            }
-        }
-
-        @Override
-        public void onScreenTurnedOff() {
-            if (mFaceDetectionRunning) {
-                mFaceDetectionRunning = false;
-                mBiometricErrorMessageToShowOnScreenOn = null;
-                hideFaceUnlockRecognizingMessage();
             }
         }
     };
@@ -283,6 +279,8 @@ public class KeyguardIndicationController {
         mKeyguardLogger = keyguardLogger;
         mScreenLifecycle.addObserver(mScreenObserver);
         mAlternateBouncerInteractor = alternateBouncerInteractor;
+        mBatteryCurrentDivider = mContext.getResources()
+                .getInteger(R.integer.config_battCurrentDivider);
 
         mFaceAcquiredMessageDeferral = faceHelpMessageDeferral;
         mCoExFaceAcquisitionMsgIdsToShow = new HashSet<>();
@@ -299,11 +297,6 @@ public class KeyguardIndicationController {
                     showActionToUnlock();
                 } else if (msg.what == MSG_RESET_ERROR_MESSAGE_ON_SCREEN_ON) {
                     mBiometricErrorMessageToShowOnScreenOn = null;
-                } else if (msg.what == MSG_SHOW_RECOGNIZING_FACE){
-                    mBiometricErrorMessageToShowOnScreenOn = null;
-                    showFaceUnlockRecognizingMessage();
-                } else if (msg.what == MSG_HIDE_RECOGNIZING_FACE){
-                    hideFaceUnlockRecognizingMessage();
                 }
             }
         };
@@ -838,47 +831,6 @@ public class KeyguardIndicationController {
         }
     }
 
-    private void showFaceUnlockRecognizingMessage() {
-        if (mKeyguardUpdateMonitor.getFaceUnlockBehavior() == FACE_UNLOCK_BEHAVIOR_SWIPE){
-            return;
-        }
-
-        String faceUnlockMessage = mContext.getResources().getString(
-                                    R.string.face_unlock_recognizing);
-        mBiometricMessage = faceUnlockMessage;
-
-        mHandler.removeMessages(MSG_SHOW_ACTION_TO_UNLOCK);
-        mHandler.removeMessages(MSG_HIDE_BIOMETRIC_MESSAGE);
-
-        mRotateTextViewController.updateIndication(
-                INDICATION_TYPE_BIOMETRIC_MESSAGE,
-                new KeyguardIndication.Builder()
-                        .setMessage(mBiometricMessage)
-                        .setMinVisibilityMillis(6000L) // 6 seconds
-                        .setTextColor(mInitialTextColorState)
-                        .build(),
-                true
-        );
-
-        if (mDozing) {
-            updateDeviceEntryIndication(false);
-        }
-    }
-
-    private void hideFaceUnlockRecognizingMessage() {
-        if (mKeyguardUpdateMonitor.getFaceUnlockBehavior() == FACE_UNLOCK_BEHAVIOR_SWIPE){
-            return;
-        }
-
-        String faceUnlockMessage = mContext.getResources().getString(
-            R.string.face_unlock_recognizing);
-        if (mBiometricMessage != null && mBiometricMessage == faceUnlockMessage) {
-            mBiometricMessage = null;
-            mHandler.removeMessages(MSG_HIDE_BIOMETRIC_MESSAGE);
-            updateBiometricMessage();
-        }
-    }
-
     /**
      * Hides transient indication.
      */
@@ -914,10 +866,14 @@ public class KeyguardIndicationController {
             mTopIndicationView.setTextColor(Color.WHITE);
 
             CharSequence newIndication;
+            boolean setWakelock = false;
+
             if (!TextUtils.isEmpty(mBiometricMessage)) {
                 newIndication = mBiometricMessage; // note: doesn't show mBiometricMessageFollowUp
+                setWakelock = true;
             } else if (!TextUtils.isEmpty(mTransientIndication)) {
                 newIndication = mTransientIndication;
+                setWakelock = true;
             } else if (!mBatteryPresent) {
                 // If there is no battery detected, hide the indication and bail
                 mIndicationArea.setVisibility(GONE);
@@ -925,17 +881,25 @@ public class KeyguardIndicationController {
             } else if (!TextUtils.isEmpty(mAlignmentIndication)) {
                 newIndication = mAlignmentIndication;
                 mTopIndicationView.setTextColor(mContext.getColor(R.color.misalignment_text_color));
+                setWakelock = false;
             } else if (mPowerPluggedIn || mEnableBatteryDefender) {
                 newIndication = computePowerIndication();
+                setWakelock = animate;
             } else {
                 newIndication = NumberFormat.getPercentInstance()
                         .format(mBatteryLevel / 100f);
+                setWakelock = false;
             }
 
             if (!TextUtils.equals(mTopIndicationView.getText(), newIndication)) {
-                mWakeLock.setAcquired(true);
-                mTopIndicationView.switchIndication(newIndication, null,
-                        true, () -> mWakeLock.setAcquired(false));
+                if (setWakelock) {
+                    mWakeLock.setAcquired(true);
+                    mTopIndicationView.switchIndication(newIndication, null,
+                            animate, () -> mWakeLock.setAcquired(false));
+                } else {
+                    mTopIndicationView.switchIndication(newIndication, null,
+                            false /* animate */, null /* onAnimationEndCallback */);
+                }
             }
             return;
         }
@@ -963,10 +927,30 @@ public class KeyguardIndicationController {
         final boolean hasChargingTime = mChargingTimeRemaining > 0;
         if (mPowerPluggedInWired) {
             switch (mChargingSpeed) {
+                case BatteryStatus.CHARGING_DASH:
+                    chargingId = hasChargingTime
+                            ? R.string.keyguard_indication_dash_charging_time
+                            : R.string.keyguard_plugged_in_dash_charging;
+                    break;
                 case BatteryStatus.CHARGING_FAST:
                     chargingId = hasChargingTime
                             ? R.string.keyguard_indication_charging_time_fast
                             : R.string.keyguard_plugged_in_charging_fast;
+                    break;
+                case BatteryStatus.CHARGING_WARP:
+                    chargingId = hasChargingTime
+                            ? R.string.keyguard_indication_warp_charging_time
+                            : R.string.keyguard_plugged_in_warp_charging;
+                    break;
+                case BatteryStatus.CHARGING_VOOC:
+                    chargingId = hasChargingTime
+                            ? R.string.keyguard_indication_vooc_charging_time
+                            : R.string.keyguard_plugged_in_vooc_charging;
+                    break;
+                case BatteryStatus.CHARGING_TURBO_POWER:
+                    chargingId = hasChargingTime
+                            ? R.string.keyguard_indication_turbo_power_time
+                            : R.string.keyguard_plugged_in_turbo_charging;
                     break;
                 case BatteryStatus.CHARGING_SLOWLY:
                     chargingId = hasChargingTime
@@ -993,14 +977,44 @@ public class KeyguardIndicationController {
                     : R.string.keyguard_plugged_in;
         }
 
+        String batteryInfo = "";
+        int current = 0;
+        double voltage = 0;
+        boolean showbatteryInfo = Settings.System.getIntForUser(mContext.getContentResolver(),
+            Settings.System.LOCKSCREEN_BATTERY_INFO, 1, UserHandle.USER_CURRENT) == 1;
+        if (showbatteryInfo) {
+            if (mChargingCurrent > 0) {
+                current = (mChargingCurrent / mBatteryCurrentDivider);
+                batteryInfo = batteryInfo + current + "mA";
+            }
+            if (mChargingVoltage > 0 && mChargingCurrent > 0) {
+                voltage = mChargingVoltage / 1000 / 1000;
+                batteryInfo = (batteryInfo == "" ? "" : batteryInfo + " · ") +
+                        String.format("%.1f" , ((double) current / 1000) * voltage) + "W";
+            }
+            if (mChargingVoltage > 0) {
+                batteryInfo = (batteryInfo == "" ? "" : batteryInfo + " · ") +
+                        String.format("%.1f" , voltage) + "V";
+            }
+            if (mTemperature > 0) {
+                batteryInfo = (batteryInfo == "" ? "" : batteryInfo + " · ") +
+                        mTemperature / 10 + "°C";
+            }
+            if (batteryInfo != "") {
+                batteryInfo = "\n" + batteryInfo;
+            }
+        }
+
         String percentage = NumberFormat.getPercentInstance().format(mBatteryLevel / 100f);
         if (hasChargingTime) {
             String chargingTimeFormatted = Formatter.formatShortElapsedTimeRoundingUpToMinutes(
                     mContext, mChargingTimeRemaining);
-            return mContext.getResources().getString(chargingId, chargingTimeFormatted,
+            String chargingText = mContext.getResources().getString(chargingId, chargingTimeFormatted,
                     percentage);
+            return chargingText + batteryInfo;
         } else {
-            return mContext.getResources().getString(chargingId, percentage);
+            String chargingText =  mContext.getResources().getString(chargingId, percentage);
+            return chargingText + batteryInfo;
         }
     }
 
@@ -1116,8 +1130,11 @@ public class KeyguardIndicationController {
             mPowerPluggedInDock = status.isPluggedInDock() && isChargingOrFull;
             mPowerPluggedIn = status.isPluggedIn() && isChargingOrFull;
             mPowerCharged = status.isCharged();
+            mChargingCurrent = status.maxChargingCurrent;
+            mChargingVoltage = status.maxChargingVoltage;
             mChargingWattage = status.maxChargingWattage;
             mChargingSpeed = status.getChargingSpeed(mContext);
+            mTemperature = status.temperature;
             mBatteryLevel = status.level;
             mBatteryPresent = status.present;
             mBatteryOverheated = status.isOverheated();
@@ -1337,17 +1354,11 @@ public class KeyguardIndicationController {
         @Override
         public void onBiometricRunningStateChanged(boolean running,
                 BiometricSourceType biometricSourceType) {
-            if (biometricSourceType == BiometricSourceType.FACE) {
-                mFaceDetectionRunning = running;
-                if (running) {
-                    mHandler.removeMessages(MSG_HIDE_RECOGNIZING_FACE);
-                    mHandler.removeMessages(MSG_SHOW_RECOGNIZING_FACE);
-                    mHandler.sendEmptyMessageDelayed(MSG_SHOW_RECOGNIZING_FACE, 100);
-                }else{
-                    mHandler.removeMessages(MSG_SHOW_RECOGNIZING_FACE);
-                    mHandler.removeMessages(MSG_HIDE_RECOGNIZING_FACE);
-                    mHandler.sendEmptyMessageDelayed(MSG_HIDE_RECOGNIZING_FACE, 100);
-                }
+            if (running && biometricSourceType == FACE) {
+                // Let's hide any previous messages when authentication starts, otherwise
+                // multiple auth attempts would overlap.
+                hideBiometricMessage();
+                mBiometricErrorMessageToShowOnScreenOn = null;
             }
         }
 

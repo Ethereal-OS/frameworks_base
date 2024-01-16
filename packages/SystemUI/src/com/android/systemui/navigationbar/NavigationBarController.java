@@ -19,9 +19,9 @@ package com.android.systemui.navigationbar;
 import static android.provider.Settings.Secure.ACCESSIBILITY_BUTTON_MODE_FLOATING_MENU;
 import static android.provider.Settings.Secure.ACCESSIBILITY_BUTTON_MODE_GESTURE;
 import static android.provider.Settings.Secure.ACCESSIBILITY_BUTTON_MODE_NAVIGATION_BAR;
+import static android.view.Display.DEFAULT_DISPLAY;
 
 import static com.android.systemui.navigationbar.gestural.EdgeBackGestureHandler.DEBUG_MISSING_GESTURE_TAG;
-import static com.android.systemui.shared.recents.utilities.Utilities.isTablet;
 
 import android.content.Context;
 import android.content.pm.ActivityInfo;
@@ -45,6 +45,7 @@ import androidx.annotation.Nullable;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.statusbar.RegisterStatusBarResult;
+import com.android.internal.util.hwkeys.ActionUtils;
 import com.android.settingslib.applications.InterestingConfigChanges;
 import com.android.systemui.Dumpable;
 import com.android.systemui.dagger.SysUISingleton;
@@ -72,14 +73,13 @@ import java.util.Optional;
 
 import javax.inject.Inject;
 
-import com.android.internal.util.custom.NavbarUtils;
-
 /** A controller to handle navigation bars. */
 @SysUISingleton
 public class NavigationBarController implements
         Callbacks,
         ConfigurationController.ConfigurationListener,
         NavigationModeController.ModeChangedListener,
+        OverviewProxyService.OverviewProxyListener,
         Dumpable {
 
     private static final String TAG = NavigationBarController.class.getSimpleName();
@@ -94,7 +94,7 @@ public class NavigationBarController implements
     private final TaskbarDelegate mTaskbarDelegate;
     private final NavBarHelper mNavBarHelper;
     private int mNavMode;
-    @VisibleForTesting boolean mIsTablet;
+    private boolean mTaskbarShowing;
 
     /** A displayId - nav bar maps. */
     @VisibleForTesting
@@ -148,10 +148,9 @@ public class NavigationBarController implements
 
     @Override
     public void onConfigChanged(Configuration newConfig) {
-        boolean isOldConfigTablet = mIsTablet;
-        mIsTablet = isTablet(mContext);
+        boolean oldShouldShowTaskbar = shouldShowTaskbar();
         boolean willApplyConfig = mConfigChanges.applyNewConfig(mContext.getResources());
-        boolean largeScreenChanged = mIsTablet != isOldConfigTablet;
+        boolean largeScreenChanged = shouldShowTaskbar() != oldShouldShowTaskbar;
         // TODO(b/243765256): Disable this logging once b/243765256 is fixed.
         Log.i(DEBUG_MISSING_GESTURE_TAG, "NavbarController: newConfig=" + newConfig
                 + " mTaskbarDelegate initialized=" + mTaskbarDelegate.isInitialized()
@@ -200,6 +199,16 @@ public class NavigationBarController implements
         });
     }
 
+    @Override
+    public void onTaskbarEnabled(boolean enabled) {
+        boolean oldShouldShowTaskbar = shouldShowTaskbar();
+        mTaskbarShowing = enabled;
+        boolean largeScreenChanged = shouldShowTaskbar() != oldShouldShowTaskbar;
+        if (largeScreenChanged) {
+            updateNavbarForTaskbar();
+        }
+    }
+
     private void updateAccessibilityButtonModeIfNeeded() {
         final int mode = mSecureSettings.getIntForUser(
                 Settings.Secure.ACCESSIBILITY_BUTTON_MODE,
@@ -239,10 +248,7 @@ public class NavigationBarController implements
 
     /** @return {@code true} if taskbar is enabled, false otherwise */
     private boolean initializeTaskbarIfNecessary() {
-        // Enable for tablet or (phone AND flag is set); assuming phone = !mIsTablet
-        boolean taskbarEnabled = mIsTablet || mFeatureFlags.isEnabled(Flags.HIDE_NAVBAR_WINDOW);
-
-        if (taskbarEnabled) {
+        if (shouldShowTaskbar()) {
             Trace.beginSection("NavigationBarController#initializeTaskbarIfNecessary");
             final int displayId = mContext.getDisplayId();
             // Hint to NavBarHelper if we are replacing an existing bar to skip extra work
@@ -256,7 +262,7 @@ public class NavigationBarController implements
         } else {
             mTaskbarDelegate.destroy();
         }
-        return taskbarEnabled;
+        return shouldShowTaskbar();
     }
 
     @Override
@@ -267,7 +273,6 @@ public class NavigationBarController implements
     @Override
     public void onDisplayReady(int displayId) {
         Display display = mDisplayManager.getDisplay(displayId);
-        mIsTablet = isTablet(mContext);
         createNavigationBar(display, null /* savedState */, null /* result */);
     }
 
@@ -334,7 +339,7 @@ public class NavigationBarController implements
 
         // We may show TaskBar on the default display for large screen device. Don't need to create
         // navigation bar for this case.
-        if (isOnDefaultDisplay && initializeTaskbarIfNecessary()) {
+        if (shouldShowTaskbar() && isOnDefaultDisplay) {
             return;
         }
 
@@ -471,14 +476,20 @@ public class NavigationBarController implements
         }
     }
 
+    private boolean shouldShowTaskbar() {
+        return mTaskbarShowing;
+    }
+
     /**
      * @param displayId the id of display to check if there is a software navigation bar.
      *
      * @return whether there is a soft nav bar on specific display.
      */
     private boolean hasSoftNavigationBar(Context context, int displayId) {
-        if (displayId == DEFAULT_DISPLAY && NavbarUtils.isEnabled(context)) {
-            return true;
+        if (displayId == DEFAULT_DISPLAY) {
+            return Settings.System.getIntForUser(context.getContentResolver(),
+                            Settings.System.FORCE_SHOW_NAVBAR, ActionUtils.hasNavbarByDefault(context) ? 1 : 0,
+                            UserHandle.USER_CURRENT) == 1;
         }
         try {
             return WindowManagerGlobal.getWindowManagerService().hasNavigationBar(displayId);
@@ -496,7 +507,7 @@ public class NavigationBarController implements
 
     @Override
     public void dump(@NonNull PrintWriter pw, @NonNull String[] args) {
-        pw.println("mIsTablet=" + mIsTablet);
+        pw.println("mTaskbarShowing=" + mTaskbarShowing);
         pw.println("mNavMode=" + mNavMode);
         for (int i = 0; i < mNavigationBars.size(); i++) {
             if (i > 0) {

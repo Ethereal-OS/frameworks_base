@@ -19,6 +19,7 @@ package com.android.systemui.volume;
 import static com.android.systemui.volume.Events.DISMISS_REASON_UNKNOWN;
 import static com.android.systemui.volume.VolumeDialogControllerImpl.STREAMS;
 
+import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertTrue;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -29,6 +30,7 @@ import static org.mockito.Mockito.verify;
 import android.app.KeyguardManager;
 import android.media.AudioManager;
 import android.os.SystemClock;
+import android.provider.DeviceConfig;
 import android.testing.AndroidTestingRunner;
 import android.testing.TestableLooper;
 import android.view.InputDevice;
@@ -39,6 +41,7 @@ import android.view.accessibility.AccessibilityManager;
 
 import androidx.test.filters.SmallTest;
 
+import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
 import com.android.internal.jank.InteractionJankMonitor;
 import com.android.systemui.Prefs;
 import com.android.systemui.R;
@@ -51,6 +54,9 @@ import com.android.systemui.plugins.VolumeDialogController.State;
 import com.android.systemui.statusbar.policy.AccessibilityManagerWrapper;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
+import com.android.systemui.util.DeviceConfigProxyFake;
+import com.android.systemui.util.concurrency.FakeExecutor;
+import com.android.systemui.util.time.FakeSystemClock;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -73,6 +79,8 @@ public class VolumeDialogImplTest extends SysuiTestCase {
     View mDrawerVibrate;
     View mDrawerMute;
     View mDrawerNormal;
+    private DeviceConfigProxyFake mDeviceConfigProxy;
+    private FakeExecutor mExecutor;
 
     @Mock
     VolumeDialogController mVolumeDialogController;
@@ -94,12 +102,17 @@ public class VolumeDialogImplTest extends SysuiTestCase {
     InteractionJankMonitor mInteractionJankMonitor;
     @Mock
     private DumpManager mDumpManager;
+    @Mock
+    TunerService mTunerService;
 
     @Before
     public void setup() throws Exception {
         MockitoAnnotations.initMocks(this);
 
         getContext().addMockSystemService(KeyguardManager.class, mKeyguard);
+
+        mDeviceConfigProxy = new DeviceConfigProxyFake();
+        mExecutor = new FakeExecutor(new FakeSystemClock());
 
         mDialog = new VolumeDialogImpl(
                 getContext(),
@@ -111,7 +124,10 @@ public class VolumeDialogImplTest extends SysuiTestCase {
                 mVolumePanelFactory,
                 mActivityStarter,
                 mInteractionJankMonitor,
-                mDumpManager
+                mDeviceConfigProxy,
+                mExecutor,
+                mDumpManager,
+                mTunerService
             );
         mDialog.init(0, null);
         State state = createShellState();
@@ -129,6 +145,9 @@ public class VolumeDialogImplTest extends SysuiTestCase {
                 VolumePrefs.SHOW_RINGER_TOAST_COUNT + 1);
 
         Prefs.putBoolean(mContext, Prefs.Key.HAS_SEEN_ODI_CAPTIONS_TOOLTIP, false);
+
+        mDeviceConfigProxy.setProperty(DeviceConfig.NAMESPACE_SYSTEMUI,
+                SystemUiDeviceConfigFlags.VOLUME_SEPARATE_NOTIFICATION, "false", false);
     }
 
     private State createShellState() {

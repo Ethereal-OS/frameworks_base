@@ -303,7 +303,6 @@ public class CentralSurfacesImplTest extends SysuiTestCase {
     @Mock private Lazy<CameraLauncher> mCameraLauncherLazy;
     @Mock private CameraLauncher mCameraLauncher;
     @Mock private AlternateBouncerInteractor mAlternateBouncerInteractor;
-    @Mock private TunerService mTunerService;
     /**
      * The process of registering/unregistering a predictive back callback requires a
      * ViewRootImpl, which is present IRL, but may be missing during a Mockito unit test.
@@ -337,7 +336,9 @@ public class CentralSurfacesImplTest extends SysuiTestCase {
                 Handler.createAsync(Looper.myLooper()));
 
         mNotificationInterruptStateProvider =
-                new TestableNotificationInterruptStateProviderImpl(mContext.getContentResolver(),
+                new TestableNotificationInterruptStateProviderImpl(
+                        mContext,
+                        mContext.getContentResolver(),
                         mPowerManager,
                         mAmbientDisplayConfiguration,
                         mStatusBarStateController,
@@ -524,8 +525,7 @@ public class CentralSurfacesImplTest extends SysuiTestCase {
                 () -> mLightRevealScrimViewModel,
                 mAlternateBouncerInteractor,
                 mUserTracker,
-                () -> mFingerprintManager,
-                mTunerService
+                () -> mFingerprintManager
         ) {
             @Override
             protected ViewRootImpl getViewRootImpl() {
@@ -1346,6 +1346,7 @@ public class CentralSurfacesImplTest extends SysuiTestCase {
             NotificationInterruptStateProviderImpl {
 
         TestableNotificationInterruptStateProviderImpl(
+                Context context,
                 ContentResolver contentResolver,
                 PowerManager powerManager,
                 AmbientDisplayConfiguration ambientDisplayConfiguration,
@@ -1360,6 +1361,7 @@ public class CentralSurfacesImplTest extends SysuiTestCase {
                 UiEventLogger uiEventLogger,
                 UserTracker userTracker) {
             super(
+                    context,
                     contentResolver,
                     powerManager,
                     ambientDisplayConfiguration,

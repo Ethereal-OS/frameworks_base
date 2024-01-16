@@ -45,9 +45,6 @@ import java.util.Set;
  */
 public class NotificationInlineImageResolver implements ImageResolver {
     private static final String TAG = NotificationInlineImageResolver.class.getSimpleName();
-    
-    // Timeout for loading images from ImageCache when calling from UI thread
-    private static final long MAX_UI_THREAD_TIMEOUT_MS = 100L;
 
     // Timeout for loading images from ImageCache when calling from UI thread
     private static final long MAX_UI_THREAD_TIMEOUT_MS = 100L;

@@ -118,6 +118,7 @@ public class DozeSensors {
     private boolean mListeningProxSensors;
     private boolean mListeningAodOnlySensors;
     private boolean mUdfpsEnrolled;
+    private boolean mEnableProx;
 
     @DevicePostureController.DevicePostureInt
     private int mDevicePosture;
@@ -168,6 +169,7 @@ public class DozeSensors {
         mProximitySensor.setTag(TAG);
         mSelectivelyRegisterProxSensors = dozeParameters.getSelectivelyRegisterSensorsUsingProx();
         mListeningProxSensors = !mSelectivelyRegisterProxSensors;
+        mEnableProx = resources.getBoolean(com.android.systemui.R.bool.doze_proximity_sensor_supported);
         mScreenOffUdfpsEnabled =
                 config.screenOffUdfpsEnabled(KeyguardUpdateMonitor.getCurrentUser());
         mDevicePostureController = devicePostureController;
@@ -197,6 +199,7 @@ public class DozeSensors {
                         false /* touchscreen */,
                         false /* ignoresSetting */,
                         false /* requires prox */,
+                        !dozeParameters.pickupEventNeedsProximityCheck() /* performsProxCheck */,
                         true /* immediatelyReRegister */,
                         false /* requiresAod */
                 ),
@@ -249,7 +252,7 @@ public class DozeSensors {
                         dozeParameters.longPressUsesProx(),
                         !dozeParameters.longPressNeedsProximityCheck() /* performsProxCheck */,
                         false /* immediatelyReRegister */,
-                        true /* requiresAod */
+                        !mScreenOffUdfpsEnabled /* requiresAod */
                 ),
                 new PluginSensor(
                         new SensorManagerPlugin.Sensor(TYPE_WAKE_DISPLAY),
@@ -283,7 +286,7 @@ public class DozeSensors {
                         false /* requiresAod */
                 ),
         };
-        if (resources.getBoolean(com.android.systemui.R.bool.doze_proximity_sensor_supported)) {
+        if (mEnableProx) {
             setProxListening(false);  // Don't immediately start listening when we register.
             mProximitySensor.register(
                     proximityEvent -> {
@@ -506,14 +509,15 @@ public class DozeSensors {
         for (TriggerSensor s : mTriggerSensors) {
             idpw.println("Sensor: " + s.toString());
         }
-        idpw.println("ProxSensor: " + mProximitySensor.toString());
+        if (mEnableProx) // Useless
+            idpw.println("ProxSensor: " + mProximitySensor.toString());
     }
 
     /**
      * @return true if prox is currently near, false if far or null if unknown.
      */
     public Boolean isProximityCurrentlyNear() {
-        return mProximitySensor.isNear();
+        return mEnableProx ? mProximitySensor.isNear() : null;
     }
 
     @VisibleForTesting
@@ -550,13 +554,13 @@ public class DozeSensors {
                 boolean requiresTouchscreen
         ) {
             this(
-                sensor,
-                setting,
-                configured,
-                pulseReason,
-                reportsTouchCoordinates,
-                requiresTouchscreen,
-                true
+                    sensor,
+                    setting,
+                    configured,
+                    pulseReason,
+                    reportsTouchCoordinates,
+                    requiresTouchscreen,
+                    true
             );
         }
 
@@ -580,8 +584,7 @@ public class DozeSensors {
                     false /* ignoresSetting */,
                     false /* requiresProx */,
                     performsProxCheck,
-                    true /* immediatelyReRegister */,
-                    false
+                    true /* immediatelyReRegister */
             );
         }
 
@@ -609,7 +612,8 @@ public class DozeSensors {
                     ignoresSetting,
                     requiresProx,
                     true,
-                    immediatelyReRegister
+                    immediatelyReRegister,
+                    requiresAod
             );
         }
 
@@ -624,7 +628,8 @@ public class DozeSensors {
                 boolean ignoresSetting,
                 boolean requiresProx,
                 boolean performsProxCheck,
-                boolean immediatelyReRegister
+                boolean immediatelyReRegister,
+                boolean requiresAod
         ) {
             this(
                     new Sensor[]{ sensor },
@@ -669,7 +674,8 @@ public class DozeSensors {
                     requiresProx,
                     true,
                     immediatelyReRegister,
-                    posture
+                    posture,
+                    requiresAod
             );
         }
 
@@ -685,7 +691,8 @@ public class DozeSensors {
                 boolean requiresProx,
                 boolean performsProxCheck,
                 boolean immediatelyReRegister,
-                @DevicePostureController.DevicePostureInt int posture
+                @DevicePostureController.DevicePostureInt int posture,
+                boolean requiresAod
         ) {
             mSensors = sensors;
             mSetting = setting;
@@ -696,8 +703,8 @@ public class DozeSensors {
             mRequiresTouchscreen = requiresTouchscreen;
             mIgnoresSetting = ignoresSetting;
             mRequiresProx = requiresProx;
-            mPerformsProxCheck = performsProxCheck;
             mRequiresAod = requiresAod;
+            mPerformsProxCheck = performsProxCheck;
             mPosture = posture;
             mImmediatelyReRegister = immediatelyReRegister;
         }

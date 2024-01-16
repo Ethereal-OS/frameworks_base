@@ -92,7 +92,7 @@ import java.util.Objects;
  */
 public final class NotificationRecord {
     static final String TAG = "NotificationRecord";
-    static final boolean DBG = Log.isLoggable(TAG, Log.DEBUG);
+    static final boolean DBG = false;
     // the period after which a notification is updated where it can make sound
     private static final int MAX_SOUND_DELAY_MS = 2000;
     private final StatusBarNotification sbn;
@@ -213,6 +213,8 @@ public final class NotificationRecord {
     // are sorted.
     private boolean mPendingLogUpdate = false;
     private int mProposedImportance = IMPORTANCE_UNSPECIFIED;
+
+    private boolean mIsBubbleUpSuppressedByAppLock = false;
 
     public NotificationRecord(Context context, StatusBarNotification sbn,
             NotificationChannel channel) {
@@ -1600,6 +1602,14 @@ public final class NotificationRecord {
 
     public ArraySet<String> getPhoneNumbers() {
         return mPhoneNumbers;
+    }
+
+    public void setBubbleUpSuppressedByAppLock(boolean suppressed) {
+        mIsBubbleUpSuppressedByAppLock = suppressed;
+    }
+
+    public boolean isBubbleUpSuppressedByAppLock() {
+        return mIsBubbleUpSuppressedByAppLock;
     }
 
     @VisibleForTesting

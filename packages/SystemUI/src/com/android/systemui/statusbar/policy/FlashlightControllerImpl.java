@@ -121,6 +121,12 @@ public class FlashlightControllerImpl implements FlashlightController {
         }
     }
 
+    public synchronized void initFlashLight() {
+        if (mCameraId == null) {
+            tryInitCamera();
+        }
+    }
+
     public void setFlashlight(boolean enabled) {
         if (!mHasFlashlight) return;
         if (mCameraId.get() == null) {
@@ -254,7 +260,6 @@ public class FlashlightControllerImpl implements FlashlightController {
                 setTorchMode(enabled);
                 mSecureSettings.putInt(Settings.Secure.FLASHLIGHT_AVAILABLE, 1);
                 mSecureSettings.putInt(Secure.FLASHLIGHT_ENABLED, enabled ? 1 : 0);
-
             }
         }
 

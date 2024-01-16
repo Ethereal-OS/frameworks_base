@@ -553,13 +553,16 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
                 showBadge = mUserManager.hasBadge(appUserId);
                 final String suspendingPackage = mPackageManagerInternal.getSuspendingPackage(
                         appInfo.packageName, appUserId);
-                if (PLATFORM_PACKAGE_NAME.equals(suspendingPackage)) {
+                final SuspendDialogInfo dialogInfo =
+                        mPackageManagerInternal.getSuspendedDialogInfo(
+                                appInfo.packageName, suspendingPackage, appUserId);
+                final boolean isUnpauseDialog = dialogInfo != null &&
+                        dialogInfo.getNeutralButtonAction()
+                                == SuspendDialogInfo.BUTTON_ACTION_UNSUSPEND;
+                if (PLATFORM_PACKAGE_NAME.equals(suspendingPackage) && !isUnpauseDialog) {
                     onClickIntent = mDevicePolicyManagerInternal.createShowAdminSupportIntent(
                             appUserId, true);
                 } else {
-                    final SuspendDialogInfo dialogInfo =
-                            mPackageManagerInternal.getSuspendedDialogInfo(
-                                    appInfo.packageName, suspendingPackage, appUserId);
                     // onUnsuspend is null because we don't want to start any activity on
                     // unsuspending from a suspended widget.
                     onClickIntent = SuspendedAppActivity.createSuspendedAppInterceptIntent(
@@ -4272,7 +4275,7 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
         IAppWidgetHost callbacks;
         boolean zombie; // if we're in safe mode, don't prune this just because nobody references it
 
-        private static final boolean DEBUG = true;
+        private static final boolean DEBUG = false;
 
         private static final String TAG = "AppWidgetServiceHost";
 
@@ -4496,7 +4499,7 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
     private final class BackupRestoreController {
         private static final String TAG = "BackupRestoreController";
 
-        private static final boolean DEBUG = true;
+        private static final boolean DEBUG = false;
 
         // Version of backed-up widget state.
         private static final int WIDGET_STATE_VERSION = 2;

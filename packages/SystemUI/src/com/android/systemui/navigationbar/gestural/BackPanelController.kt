@@ -26,6 +26,7 @@ import android.os.VibrationEffect
 import android.util.Log
 import android.util.MathUtils
 import android.view.Gravity
+import android.view.View
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
@@ -160,6 +161,11 @@ class BackPanelController internal constructor(
 
     private val failsafeRunnable = Runnable { onFailsafe() }
 
+    private var isExtendedSwipe = false
+    private var longSwipeThreshold = 0f
+
+    private var mBackArrowVisibility = true
+
     internal enum class GestureState {
         /* Arrow is off the screen and invisible */
         GONE,
@@ -262,6 +268,10 @@ class BackPanelController internal constructor(
 
     override fun onViewDetached() {
         configurationController.removeCallback(configurationListener)
+    }
+
+    override fun setLongSwipeEnabled(enabled: Boolean) {
+        isExtendedSwipe = enabled;
     }
 
     override fun onMotionEvent(event: MotionEvent) {
@@ -415,6 +425,8 @@ class BackPanelController internal constructor(
         // How far in the x direction we are from the original touch ignoring motion that
         // occurs between the screen edge and the touch start.
         val xTranslation = max(0f, if (mView.isLeftPanel) x - startX else startX - x)
+        val touchTranslation = MathUtils.abs(x - startX);
+        val almostLongSwipe = isExtendedSwipe && (touchTranslation  > longSwipeThreshold)
 
         // Compared to last time, how far we moved in the x direction. If <0, we are moving closer
         // to the edge. If >0, we are moving further from the edge
@@ -438,6 +450,13 @@ class BackPanelController internal constructor(
         }
 
         updateArrowStateOnMove(yTranslation, xTranslation)
+        mView.setDrawDoubleArrow(almostLongSwipe)
+
+        if (mBackArrowVisibility) {
+           mView.setVisibility(View.VISIBLE)
+        } else {
+           mView.setVisibility(View.INVISIBLE)
+        }
 
         val gestureProgress = when (currentState) {
             GestureState.ACTIVE -> fullScreenProgress(xTranslation)
@@ -652,6 +671,7 @@ class BackPanelController internal constructor(
     override fun setDisplaySize(displaySize: Point) {
         this.displaySize.set(displaySize.x, displaySize.y)
         fullyStretchedThreshold = min(displaySize.x.toFloat(), params.swipeProgressThreshold)
+        longSwipeThreshold = displaySize.x * 0.45f;
     }
 
     /**
@@ -840,11 +860,6 @@ class BackPanelController internal constructor(
 
                 updateRestingArrowDimens()
 
-                vibratorHelper.cancel()
-                mainHandler.postDelayed(10L) {
-                    vibratorHelper.vibrate(VIBRATE_ACTIVATED_EFFECT)
-                }
-
                 val startingVelocity = convertVelocityToSpringStartingVelocity(
                     valueOnFastVelocity = 0f,
                     valueOnSlowVelocity = if (previousState == GestureState.ENTRY) 2f else 4.5f
@@ -878,7 +893,7 @@ class BackPanelController internal constructor(
                 )
                 mView.popOffEdge(startingVelocity)
 
-                vibratorHelper.vibrate(VIBRATE_DEACTIVATED_EFFECT)
+//                vibratorHelper.vibrate(VIBRATE_DEACTIVATED_EFFECT)
                 updateRestingArrowDimens()
             }
             GestureState.FLUNG -> {
@@ -895,6 +910,11 @@ class BackPanelController internal constructor(
                             MIN_DURATION_COMMITTED_ANIMATION
                     )
                 }
+
+//                vibratorHelper.cancel()
+//                    mainHandler.postDelayed(10L) {
+//                        vibratorHelper.vibrate(VIBRATE_ACTIVATED_EFFECT)
+//                    }
             }
             GestureState.CANCELLED -> {
                 val delay = max(0, MIN_DURATION_CANCELLED_ANIMATION - elapsedTimeSinceEntry)
@@ -903,9 +923,13 @@ class BackPanelController internal constructor(
                 params.arrowStrokeAlphaSpring.get(0f).takeIf { it.isNewState }?.let {
                     mView.popArrowAlpha(0f, it.value)
                 }
-                mainHandler.postDelayed(10L) { vibratorHelper.cancel() }
+//                mainHandler.postDelayed(10L) { vibratorHelper.cancel() }
             }
         }
+    }
+
+    override fun setBackArrowVisibility(backArrowVisibility : Boolean) {
+        mBackArrowVisibility = backArrowVisibility;
     }
 
     private fun convertVelocityToSpringStartingVelocity(

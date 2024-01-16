@@ -17,12 +17,12 @@
 
 package com.android.systemui.qs.tiles;
 
-import static com.android.internal.custom.hardware.LiveDisplayManager.FEATURE_MANAGED_OUTDOOR_MODE;
-import static com.android.internal.custom.hardware.LiveDisplayManager.MODE_AUTO;
-import static com.android.internal.custom.hardware.LiveDisplayManager.MODE_DAY;
-import static com.android.internal.custom.hardware.LiveDisplayManager.MODE_NIGHT;
-import static com.android.internal.custom.hardware.LiveDisplayManager.MODE_OFF;
-import static com.android.internal.custom.hardware.LiveDisplayManager.MODE_OUTDOOR;
+import static com.android.internal.lineage.hardware.LiveDisplayManager.FEATURE_MANAGED_OUTDOOR_MODE;
+import static com.android.internal.lineage.hardware.LiveDisplayManager.MODE_AUTO;
+import static com.android.internal.lineage.hardware.LiveDisplayManager.MODE_DAY;
+import static com.android.internal.lineage.hardware.LiveDisplayManager.MODE_NIGHT;
+import static com.android.internal.lineage.hardware.LiveDisplayManager.MODE_OFF;
+import static com.android.internal.lineage.hardware.LiveDisplayManager.MODE_OUTDOOR;
 
 import android.content.Intent;
 import android.content.res.Resources;
@@ -38,7 +38,7 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import com.android.internal.custom.hardware.LiveDisplayManager;
+import com.android.internal.lineage.hardware.LiveDisplayManager;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.util.ArrayUtils;
@@ -60,6 +60,8 @@ import com.android.internal.R;
  * Quick settings tile: LiveDisplay mode switcher
  **/
 public class LiveDisplayTile extends QSTileImpl<LiveDisplayState> {
+
+    public static final String TILE_SPEC = "livedisplay";
 
     private static final Intent DISPLAY_SETTINGS = new Intent("android.settings.DISPLAY_SETTINGS");
 
@@ -169,7 +171,7 @@ public class LiveDisplayTile extends QSTileImpl<LiveDisplayState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.CUSTOM_SETTINGS;
+        return MetricsEvent.VOLTAGE;
     }
 
     @Override

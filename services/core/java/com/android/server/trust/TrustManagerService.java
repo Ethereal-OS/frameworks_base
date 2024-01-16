@@ -84,6 +84,7 @@ import com.android.internal.util.DumpUtils;
 import com.android.internal.widget.LockPatternUtils;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
+import com.android.server.app.AppLockManagerServiceInternal;
 import com.android.server.companion.virtual.VirtualDeviceManagerInternal;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -113,7 +114,7 @@ import java.util.List;
  */
 public class TrustManagerService extends SystemService {
     private static final String TAG = "TrustManagerService";
-    static final boolean DEBUG = Build.IS_DEBUGGABLE && Log.isLoggable(TAG, Log.VERBOSE);
+    static final boolean DEBUG = Build.IS_ENG && Log.isLoggable(TAG, Log.VERBOSE);
 
     private static final Intent TRUST_AGENT_INTENT =
             new Intent(TrustAgentService.SERVICE_INTERFACE);
@@ -231,6 +232,8 @@ public class TrustManagerService extends SystemService {
 
     private boolean mTrustAgentsCanRun = false;
     private int mCurrentUser = UserHandle.USER_SYSTEM;
+
+    private AppLockManagerServiceInternal mAppLockManagerService = null;
 
     public TrustManagerService(Context context) {
         super(context);
@@ -907,7 +910,7 @@ public class TrustManagerService extends SystemService {
             boolean secure = mLockPatternUtils.isSecure(id);
 
             if (!info.supportsSwitchToByUser()) {
-                if (info.isManagedProfile() && !secure) {
+                if (info.isManagedProfile() && !secure || info.isParallel()) {
                     setDeviceLockedForUser(id, false);
                 }
                 continue;
@@ -937,7 +940,15 @@ public class TrustManagerService extends SystemService {
             }
 
             setDeviceLockedForUser(id, deviceLocked);
+            getAppLockManagerService().notifyDeviceLocked(deviceLocked, id);
         }
+    }
+
+    private AppLockManagerServiceInternal getAppLockManagerService() {
+        if (mAppLockManagerService == null) {
+            mAppLockManagerService = LocalServices.getService(AppLockManagerServiceInternal.class);
+        }
+        return mAppLockManagerService;
     }
 
     private void setDeviceLockedForUser(@UserIdInt int userId, boolean locked) {

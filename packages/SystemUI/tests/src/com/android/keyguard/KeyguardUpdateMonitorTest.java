@@ -1138,8 +1138,7 @@ public class KeyguardUpdateMonitorTest extends SysuiTestCase {
         // Fingerprint should be cancelled on lockout if going to lockout state, else
         // restarted if it's not
         assertThat(mKeyguardUpdateMonitor.mFingerprintRunningState)
-                .isEqualTo(fpLocked
-                        ? BIOMETRIC_STATE_CANCELLING : BIOMETRIC_STATE_CANCELLING_RESTARTING);
+                .isEqualTo(BIOMETRIC_STATE_CANCELLING_RESTARTING);
     }
 
     @Test

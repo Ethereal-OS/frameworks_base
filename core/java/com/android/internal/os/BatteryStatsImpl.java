@@ -2049,7 +2049,7 @@ public class BatteryStatsImpl extends BatteryStats {
                 if (mCounts == null) {
                     mCounts = new long[counts.length];
                 }
-                for (int i = 0; i < counts.length; ++i) {
+                for (int i = 0; i < counts.length && i < mCounts.length; ++i) {
                     mCounts[i] += counts[i];
                 }
             }
@@ -7933,20 +7933,31 @@ public class BatteryStatsImpl extends BatteryStats {
         synchronized (mModemNetworkLock) {
             if (displayTransport == TRANSPORT_CELLULAR) {
                 mModemIfaces = includeInStringArray(mModemIfaces, iface);
-                if (DEBUG) Slog.d(TAG, "Note mobile iface " + iface + ": " + mModemIfaces);
+                if (DEBUG) {
+                    Slog.d(TAG, "Note mobile iface " + iface + ": "
+                            + Arrays.toString(mModemIfaces));
+                }
             } else {
                 mModemIfaces = excludeFromStringArray(mModemIfaces, iface);
-                if (DEBUG) Slog.d(TAG, "Note non-mobile iface " + iface + ": " + mModemIfaces);
+                if (DEBUG) {
+                    Slog.d(TAG, "Note non-mobile iface " + iface + ": "
+                            + Arrays.toString(mModemIfaces));
+                }
             }
         }
 
         synchronized (mWifiNetworkLock) {
             if (displayTransport == TRANSPORT_WIFI) {
                 mWifiIfaces = includeInStringArray(mWifiIfaces, iface);
-                if (DEBUG) Slog.d(TAG, "Note wifi iface " + iface + ": " + mWifiIfaces);
+                if (DEBUG) {
+                    Slog.d(TAG, "Note wifi iface " + iface + ": " + Arrays.toString(mWifiIfaces));
+                }
             } else {
                 mWifiIfaces = excludeFromStringArray(mWifiIfaces, iface);
-                if (DEBUG) Slog.d(TAG, "Note non-wifi iface " + iface + ": " + mWifiIfaces);
+                if (DEBUG) {
+                    Slog.d(TAG, "Note non-wifi iface " + iface + ": "
+                            + Arrays.toString(mWifiIfaces));
+                }
             }
         }
     }
@@ -12660,7 +12671,7 @@ public class BatteryStatsImpl extends BatteryStats {
                 BackgroundThread.getHandler().post(new Runnable() {
                     @Override
                     public void run() {
-                        synchronized (mCheckinFile) {
+                        synchronized (mDailyFile) {
                             final long startTimeMs2 = SystemClock.uptimeMillis();
                             FileOutputStream stream = null;
                             try {
@@ -13659,17 +13670,17 @@ public class BatteryStatsImpl extends BatteryStats {
                     // We store the power drain as mAms.
                     controllerMaMs = info.getControllerEnergyUsedMicroJoules() / opVolt;
                     mWifiActivity.getPowerCounter().addCountLocked((long) controllerMaMs);
+                    // Converting uWs to mAms.
+                    // Conversion: (uWs * (1000ms / 1s) * (1mW / 1000uW)) / mV = mAms
+                    long monitoredRailChargeConsumedMaMs =
+                            (long) (mTmpRailStats.getWifiTotalEnergyUseduWs() / opVolt);
+                    mWifiActivity.getMonitoredRailChargeConsumedMaMs().addCountLocked(
+                            monitoredRailChargeConsumedMaMs);
+                    mHistoryCur.wifiRailChargeMah +=
+                            (monitoredRailChargeConsumedMaMs / MILLISECONDS_IN_HOUR);
+                    addHistoryRecordLocked(elapsedRealtimeMs, uptimeMs);
+                    mTmpRailStats.resetWifiTotalEnergyUsed();
                 }
-                // Converting uWs to mAms.
-                // Conversion: (uWs * (1000ms / 1s) * (1mW / 1000uW)) / mV = mAms
-                long monitoredRailChargeConsumedMaMs =
-                        (long) (mTmpRailStats.getWifiTotalEnergyUseduWs() / opVolt);
-                mWifiActivity.getMonitoredRailChargeConsumedMaMs().addCountLocked(
-                        monitoredRailChargeConsumedMaMs);
-                mHistoryCur.wifiRailChargeMah +=
-                        (monitoredRailChargeConsumedMaMs / MILLISECONDS_IN_HOUR);
-                addHistoryRecordLocked(elapsedRealtimeMs, uptimeMs);
-                mTmpRailStats.resetWifiTotalEnergyUsed();
 
                 if (uidEstimatedConsumptionMah != null) {
                     totalEstimatedConsumptionMah = Math.max(controllerMaMs / MILLISECONDS_IN_HOUR,
@@ -14433,7 +14444,7 @@ public class BatteryStatsImpl extends BatteryStats {
             @NonNull CpuDeltaPowerAccumulator accumulator) {
         if (DEBUG_ENERGY) {
             Slog.d(TAG,
-                    "Updating cpu cluster stats: " + clusterChargeUC.toString());
+                    "Updating cpu cluster stats: " + Arrays.toString(clusterChargeUC));
         }
         if (mGlobalMeasuredEnergyStats == null) {
             return;

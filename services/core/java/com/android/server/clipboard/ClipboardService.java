@@ -88,6 +88,8 @@ import com.android.server.contentcapture.ContentCaptureManagerInternal;
 import com.android.server.uri.UriGrantsManagerInternal;
 import com.android.server.wm.WindowManagerInternal;
 
+import ink.kaleidoscope.server.ParallelSpaceManagerService;
+
 import java.util.HashSet;
 import java.util.List;
 import java.util.function.Consumer;
@@ -647,6 +649,9 @@ public class ClipboardService extends SystemService {
     }
 
     List<UserInfo> getRelatedProfiles(@UserIdInt int userId) {
+        if (ParallelSpaceManagerService.isInteractive(userId))
+            return ParallelSpaceManagerService.getInteractiveUsers();
+
         final List<UserInfo> related;
         final long origId = Binder.clearCallingIdentity();
         try {
@@ -1142,12 +1147,16 @@ public class ClipboardService extends SystemService {
     @GuardedBy("mLock")
     private void showAccessNotificationLocked(String callingPackage, int uid, @UserIdInt int userId,
             PerUserClipboard clipboard) {
+        String nfcService = "com.android.nfc";
         if (clipboard.primaryClip == null) {
             return;
         }
         if (Settings.Secure.getInt(getContext().getContentResolver(),
                 Settings.Secure.CLIPBOARD_SHOW_ACCESS_NOTIFICATIONS,
                 (mShowAccessNotifications ? 1 : 0)) == 0) {
+            return;
+        }
+        if (callingPackage.equals(nfcService)) {
             return;
         }
         // Don't notify if the app accessing the clipboard is the same as the current owner.

@@ -75,10 +75,6 @@ public class QSCustomizer extends LinearLayout {
         toolbar.setNavigationIcon(
                 getResources().getDrawable(value.resourceId, mContext.getTheme()));
 
-        SpannableString resetText = new SpannableString(
-                mContext.getString(com.android.internal.R.string.reset));
-        resetText.setSpan(new ForegroundColorSpan(isNightMode() ?
-                Color.WHITE : Color.BLACK), 0, resetText.length(), 0);
         toolbar.getMenu().add(Menu.NONE, MENU_RESET, 0, com.android.internal.R.string.reset)
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
         toolbar.setTitle(R.string.qs_edit);
@@ -97,12 +93,8 @@ public class QSCustomizer extends LinearLayout {
     }
 
     void updateNavBackDrop(Configuration newConfig, LightBarController lightBarController) {
-        View navBackdrop = findViewById(R.id.nav_bar_background);
         mIsShowingNavBackdrop = newConfig.smallestScreenWidthDp >= 600
                 || newConfig.orientation != Configuration.ORIENTATION_LANDSCAPE;
-        if (navBackdrop != null) {
-            navBackdrop.setVisibility(mIsShowingNavBackdrop ? View.VISIBLE : View.GONE);
-        }
         updateNavColors(lightBarController);
     }
 

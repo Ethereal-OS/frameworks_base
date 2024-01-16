@@ -1302,7 +1302,7 @@ public class VibratorManagerService extends IVibratorManagerService.Stub {
                 if (DEBUG) {
                     Slog.d(TAG, "Processing VibrationThread released callback");
                 }
-                if (Build.IS_DEBUGGABLE && mCurrentVibration != null
+                if (Build.IS_ENG && mCurrentVibration != null
                         && mCurrentVibration.getVibration().id != vibrationId) {
                     Slog.wtf(TAG, TextUtils.formatSimple(
                             "VibrationId mismatch on release. expected=%d, released=%d",
@@ -1733,7 +1733,7 @@ public class VibratorManagerService extends IVibratorManagerService.Stub {
                 setExternalControl(true, vibHolder.stats);
             }
             if (DEBUG) {
-                Slog.e(TAG, "Playing external vibration: " + vib);
+                Slog.d(TAG, "Playing external vibration: " + vib);
             }
             // Vibrator will start receiving data from external channels after this point.
             // Report current time as the vibration start time, for debugging.
@@ -1747,7 +1747,7 @@ public class VibratorManagerService extends IVibratorManagerService.Stub {
                 if (mCurrentExternalVibration != null
                         && mCurrentExternalVibration.isHoldingSameVibration(vib)) {
                     if (DEBUG) {
-                        Slog.e(TAG, "Stopping external vibration" + vib);
+                        Slog.d(TAG, "Stopping external vibration: " + vib);
                     }
                     endExternalVibrateLocked(
                             new Vibration.EndInfo(Vibration.Status.FINISHED),
