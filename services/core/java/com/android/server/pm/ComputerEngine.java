@@ -65,6 +65,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.UserIdInt;
 import android.app.ActivityManager;
+import android.app.ActivityManagerInternal;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -594,9 +595,24 @@ public class ComputerEngine implements Computer {
                     list, false, originalIntent, resolvedType, filterCallingUid);
         }
 
-        return skipPostResolution ? list : applyPostResolutionFilter(
+        if (!skipPostResolution)
+            list = applyPostResolutionFilter(
                 list, instantAppPkgName, allowDynamicSplits, filterCallingUid,
                 resolveForStart, userId, intent);
+
+        for (int i = list.size() - 1; i >= 0; i--) {
+            boolean shouldRemove = false;
+            ResolveInfo ri = list.get(i);
+            ActivityInfo info = ri.activityInfo;
+
+            shouldRemove = !mInjector.getLocalService(ActivityManagerInternal.class)
+                .queryActivityAllowed(new ComponentName(info.packageName, info.name), intent, Binder.getCallingUid(),
+                Binder.getCallingPid(), resolvedType, info.applicationInfo);
+
+            if (shouldRemove)
+                list.remove(i++);
+        }
+        return list;
     }
 
     @NonNull
@@ -687,6 +703,19 @@ public class ComputerEngine implements Computer {
             PackageManagerServiceUtils.applyEnforceIntentFilterMatching(
                     mInjector.getCompatibility(), mComponentResolver,
                     list, false, originalIntent, resolvedType, callingUid);
+        }
+
+        for (int i = list.size() - 1; i >= 0; i--) {
+            boolean shouldRemove = false;
+            ResolveInfo ri = list.get(i);
+            ServiceInfo info = ri.serviceInfo;
+
+            shouldRemove = !mInjector.getLocalService(ActivityManagerInternal.class)
+                .queryServiceAllowed(new ComponentName(info.packageName, info.name), intent, Binder.getCallingUid(),
+                Binder.getCallingPid(), resolvedType, ri.serviceInfo.applicationInfo);
+
+            if (shouldRemove)
+                list.remove(i++);
         }
 
         return list;
@@ -1603,6 +1632,29 @@ public class ComputerEngine implements Computer {
         return result;
     }
 
+        private boolean requestsFakeSignature(AndroidPackage p) {
+            return p.getMetaData() != null &&
+                    p.getMetaData().getString("fake-signature") != null;
+        }
+
+        private PackageInfo mayFakeSignature(AndroidPackage p, PackageInfo pi,
+                Set<String> permissions) {
+            try {
+                if (p.getMetaData() != null &&
+                        p.getTargetSdkVersion() > Build.VERSION_CODES.LOLLIPOP_MR1) {
+                    String sig = p.getMetaData().getString("fake-signature");
+                    if (sig != null &&
+                            permissions.contains("android.permission.FAKE_PACKAGE_SIGNATURE")) {
+                        pi.signatures = new Signature[] {new Signature(sig)};
+                    }
+                }
+            } catch (Throwable t) {
+                // We should never die because of any failures, this is system code!
+                Log.w("PackageManagerService.FAKE_PACKAGE_SIGNATURE", t);
+            }
+            return pi;
+        }
+
     public final PackageInfo generatePackageInfo(PackageStateInternal ps,
             @PackageManager.PackageInfoFlagsBits long flags, int userId) {
         if (!mUserManager.exists(userId)) return null;
@@ -1632,13 +1684,14 @@ public class ComputerEngine implements Computer {
             final int[] gids = (flags & PackageManager.GET_GIDS) == 0 ? EMPTY_INT_ARRAY
                     : mPermissionManager.getGidsForUid(UserHandle.getUid(userId, ps.getAppId()));
             // Compute granted permissions only if package has requested permissions
-            final Set<String> permissions = ((flags & PackageManager.GET_PERMISSIONS) == 0
+                final Set<String> permissions = (((flags & PackageManager.GET_PERMISSIONS) == 0
+                        && !requestsFakeSignature(p))
                     || ArrayUtils.isEmpty(p.getRequestedPermissions())) ? Collections.emptySet()
                     : mPermissionManager.getGrantedPermissions(ps.getPackageName(), userId);
 
-            PackageInfo packageInfo = PackageInfoUtils.generate(p, gids, flags,
-                    state.getFirstInstallTime(), ps.getLastUpdateTime(), permissions, state, userId,
-                    ps);
+            PackageInfo packageInfo = mayFakeSignature(p, PackageInfoUtils.generate(p, gids, flags,
+                    state.getFirstInstallTime(), ps.getLastUpdateTime(), permissions, state, userId, ps),
+                    permissions);
 
             if (packageInfo == null) {
                 return null;
@@ -2857,24 +2910,12 @@ public class ComputerEngine implements Computer {
      * Update given flags when being used to request {@link PackageInfo}.
      */
     public final long updateFlagsForPackage(long flags, int userId) {
-        final boolean isCallerSystemUser = UserHandle.getCallingUserId()
-                == UserHandle.USER_SYSTEM;
         if ((flags & PackageManager.MATCH_ANY_USER) != 0) {
             // require the permission to be held; the calling uid and given user id referring
             // to the same user is not sufficient
             enforceCrossUserPermission(Binder.getCallingUid(), userId, false, false,
                     !isRecentsAccessingChildProfiles(Binder.getCallingUid(), userId),
                     "MATCH_ANY_USER flag requires INTERACT_ACROSS_USERS permission");
-        } else if ((flags & PackageManager.MATCH_UNINSTALLED_PACKAGES) != 0
-                && isCallerSystemUser
-                && mUserManager.hasProfile(UserHandle.USER_SYSTEM)) {
-            // If the caller wants all packages and has a profile associated with it,
-            // then match all users. This is to make sure that launchers that need to access
-            //work
-            // profile apps don't start breaking. TODO: Remove this hack when launchers stop
-            //using
-            // MATCH_UNINSTALLED_PACKAGES to query apps in other profiles. b/31000380
-            flags |= PackageManager.MATCH_ANY_USER;
         }
         return updateFlags(flags, userId);
     }
@@ -5730,8 +5771,7 @@ public class ComputerEngine implements Computer {
             return PackageInfoUtils.generateProcessInfo(sus.processes, 0);
         } else if (settingBase instanceof PackageSetting) {
             final PackageSetting ps = (PackageSetting) settingBase;
-            final AndroidPackage pkg = ps.getPkg();
-            return pkg == null ? null : PackageInfoUtils.generateProcessInfo(pkg.getProcesses(), 0);
+            return PackageInfoUtils.generateProcessInfo(ps.getPkg().getProcesses(), 0);
         }
         return null;
     }

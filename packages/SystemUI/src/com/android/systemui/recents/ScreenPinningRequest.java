@@ -17,8 +17,7 @@
 package com.android.systemui.recents;
 
 import static android.view.Display.DEFAULT_DISPLAY;
-
-import static com.android.systemui.shared.recents.utilities.Utilities.isTablet;
+import static com.android.systemui.shared.recents.utilities.Utilities.isLargeScreen;
 import static com.android.systemui.util.leak.RotationUtils.ROTATION_LANDSCAPE;
 import static com.android.systemui.util.leak.RotationUtils.ROTATION_NONE;
 import static com.android.systemui.util.leak.RotationUtils.ROTATION_SEASCAPE;
@@ -37,12 +36,12 @@ import android.graphics.drawable.ColorDrawable;
 import android.os.Binder;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.provider.Settings;
 import android.text.SpannableStringBuilder;
 import android.text.style.BulletSpan;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.IWindowManager;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -57,6 +56,7 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
+import com.android.internal.util.hwkeys.ActionUtils;
 import com.android.systemui.R;
 import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.navigationbar.NavigationBarView;
@@ -73,8 +73,6 @@ import javax.inject.Inject;
 
 import dagger.Lazy;
 
-import com.android.internal.util.custom.NavbarUtils;
-
 public class ScreenPinningRequest implements View.OnClickListener,
         NavigationModeController.ModeChangedListener {
     private static final String TAG = "ScreenPinningRequest";
@@ -86,7 +84,6 @@ public class ScreenPinningRequest implements View.OnClickListener,
     private final WindowManager mWindowManager;
     private final BroadcastDispatcher mBroadcastDispatcher;
     private final UserTracker mUserTracker;
-    private final IWindowManager mWindowManagerService;
 
     private RequestWindowView mRequestWindow;
     private int mNavBarMode;
@@ -118,7 +115,6 @@ public class ScreenPinningRequest implements View.OnClickListener,
         mNavBarMode = navigationModeController.addListener(this);
         mBroadcastDispatcher = broadcastDispatcher;
         mUserTracker = userTracker;
-        mWindowManagerService = WindowManagerGlobal.getWindowManagerService();
     }
 
     public void clearPrompt() {
@@ -273,8 +269,7 @@ public class ScreenPinningRequest implements View.OnClickListener,
                     .setLayoutDirection(View.LAYOUT_DIRECTION_LOCALE);
             View buttons = mLayout.findViewById(R.id.screen_pinning_buttons);
             if (!QuickStepContract.isGesturalMode(mNavBarMode)
-            	    && hasSoftNavigationBar(mContext, mContext.getDisplayId())
-                    && !isTablet(mContext)) {
+            	    && hasSoftNavigationBar(mContext, mContext.getDisplayId()) && !isLargeScreen(mContext)) {
                 buttons.setLayoutDirection(View.LAYOUT_DIRECTION_LOCALE);
                 swapChildrenIfRtlAndVertical(buttons);
             } else {
@@ -303,18 +298,14 @@ public class ScreenPinningRequest implements View.OnClickListener,
                 mLayout.findViewById(R.id.screen_pinning_recents_group).setVisibility(VISIBLE);
                 mLayout.findViewById(R.id.screen_pinning_home_bg_light).setVisibility(INVISIBLE);
                 mLayout.findViewById(R.id.screen_pinning_home_bg).setVisibility(INVISIBLE);
-                descriptionStringResId = !hasNavigationBar()
-                        ? (supportsGesturesOnFP() ? R.string.screen_pinning_description_no_navbar_fpsensor : R.string.screen_pinning_description_no_navbar)
-                        : touchExplorationEnabled
+                descriptionStringResId = touchExplorationEnabled
                         ? R.string.screen_pinning_description_accessible
                         : R.string.screen_pinning_description;
             } else {
                 mLayout.findViewById(R.id.screen_pinning_recents_group).setVisibility(INVISIBLE);
                 mLayout.findViewById(R.id.screen_pinning_home_bg_light).setVisibility(VISIBLE);
                 mLayout.findViewById(R.id.screen_pinning_home_bg).setVisibility(VISIBLE);
-                descriptionStringResId = !hasNavigationBar()
-                        ? (supportsGesturesOnFP() ? R.string.screen_pinning_description_no_navbar_fpsensor : R.string.screen_pinning_description_no_navbar)
-                        : touchExplorationEnabled
+                descriptionStringResId = touchExplorationEnabled
                         ? R.string.screen_pinning_description_recents_invisible_accessible
                         : R.string.screen_pinning_description_recents_invisible;
             }
@@ -354,23 +345,11 @@ public class ScreenPinningRequest implements View.OnClickListener,
          *
          * @return whether there is a soft nav bar on specific display.
          */
-        private boolean hasSoftNavigationBar(int displayId) {
-            try {
-                return WindowManagerGlobal.getWindowManagerService().hasNavigationBar(displayId);
-            } catch (RemoteException e) {
-                Log.e(TAG, "Failed to check soft navigation bar", e);
-                return false;
-            }
-        }
-
-        /**
-         * @param displayId the id of display to check if there is a software navigation bar.
-         *
-         * @return whether there is a soft nav bar on specific display.
-         */
         private boolean hasSoftNavigationBar(Context context, int displayId) {
-            if (displayId == DEFAULT_DISPLAY && NavbarUtils.isEnabled(context)) {
-                return true;
+            if (displayId == DEFAULT_DISPLAY) {
+                return Settings.System.getIntForUser(context.getContentResolver(),
+                                Settings.System.FORCE_SHOW_NAVBAR, ActionUtils.hasNavbarByDefault(context) ? 1 : 0,
+                                UserHandle.USER_CURRENT) == 1;
             }
             try {
                 return WindowManagerGlobal.getWindowManagerService().hasNavigationBar(displayId);
@@ -397,19 +376,6 @@ public class ScreenPinningRequest implements View.OnClickListener,
                     linearLayout.addView(childList.get(i));
                 }
             }
-        }
-
-        private boolean hasNavigationBar() {
-            try {
-                return mWindowManagerService.hasNavigationBar(mContext.getDisplayId());
-            } catch (RemoteException e) {
-                // ignore
-            }
-            return false;
-        }
-
-        private boolean supportsGesturesOnFP() {
-            return mContext.getResources().getBoolean(com.android.internal.R.bool.config_supportsGesturesOnFingerprintSensor);
         }
 
         @Override

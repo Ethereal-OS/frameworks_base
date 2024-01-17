@@ -49,6 +49,7 @@ interface IStatusBarService
     @UnsupportedAppUsage
     void collapsePanels();
     void togglePanel();
+    void toggleSettingsPanel();
     @UnsupportedAppUsage
     void disable(int what, IBinder token, String pkg);
     void disableForUser(int what, IBinder token, String pkg, int userId);
@@ -101,7 +102,8 @@ interface IStatusBarService
      * These methods are needed for global actions control which the UI is shown in sysui.
      */
     void shutdown();
-    void reboot(boolean safeMode, String reason);
+    void reboot(boolean safeMode);
+    void advancedReboot(String mode);
 
     /** just restarts android without rebooting device. Used for some feature flags. */
     void restart();
@@ -230,6 +232,16 @@ interface IStatusBarService
     /** Shows rear display educational dialog */
     void showRearDisplayDialog(int currentBaseState);
 
-    /** Used to block or unblock usage of gestural navigation. */
-    void setBlockedGesturalNavigation(boolean blocked);
+    /** Ethereal additions. */
+    void toggleCameraFlash();
+    void toggleRecentApps();
+    void toggleSplitScreen();
+    void preloadRecentApps();
+    void cancelPreloadRecentApps();
+    void killForegroundApp();
+
+    /** Starts the default assistant app. */
+    void startAssist(in Bundle args);
+
+    void screenPinningStateChanged(boolean enabled);
 }

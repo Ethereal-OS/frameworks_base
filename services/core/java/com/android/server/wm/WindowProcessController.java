@@ -40,6 +40,7 @@ import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_ATM;
 import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_WITH_CLASS_NAME;
 import static com.android.server.wm.ActivityTaskManagerService.INSTRUMENTATION_KEY_DISPATCHING_TIMEOUT_MILLIS;
 import static com.android.server.wm.ActivityTaskManagerService.RELAUNCH_REASON_NONE;
+import static com.android.server.wm.BackgroundActivityStartController.BAL_BLOCK;
 import static com.android.server.wm.WindowManagerService.MY_PID;
 
 import android.Manifest;
@@ -63,6 +64,7 @@ import android.os.LocaleList;
 import android.os.Message;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.util.ArraySet;
 import android.util.Log;
 import android.util.Slog;
@@ -261,7 +263,7 @@ public class WindowProcessController extends ConfigurationContainer<Configuratio
 
         boolean isSysUiPackage = info.packageName.equals(
                 mAtm.getSysUiServiceComponentLocked().getPackageName());
-        if (isSysUiPackage || mUid == Process.SYSTEM_UID) {
+        if (isSysUiPackage || UserHandle.getAppId(mUid) == Process.SYSTEM_UID) {
             // This is a system owned process and should not use an activity config.
             // TODO(b/151161907): Remove after support for display-independent (raw) SysUi configs.
             mIsActivityConfigOverrideAllowed = false;
@@ -544,15 +546,17 @@ public class WindowProcessController extends ConfigurationContainer<Configuratio
     @HotPath(caller = HotPath.START_SERVICE)
     public boolean areBackgroundFgsStartsAllowed() {
         return areBackgroundActivityStartsAllowed(mAtm.getBalAppSwitchesState(),
-                true /* isCheckingForFgsStart */);
+                true /* isCheckingForFgsStart */) != BAL_BLOCK;
     }
 
-    boolean areBackgroundActivityStartsAllowed(int appSwitchState) {
+    @BackgroundActivityStartController.BalCode
+    int areBackgroundActivityStartsAllowed(int appSwitchState) {
         return areBackgroundActivityStartsAllowed(appSwitchState,
                 false /* isCheckingForFgsStart */);
     }
 
-    private boolean areBackgroundActivityStartsAllowed(int appSwitchState,
+    @BackgroundActivityStartController.BalCode
+    private int areBackgroundActivityStartsAllowed(int appSwitchState,
             boolean isCheckingForFgsStart) {
         return mBgLaunchController.areBackgroundActivityStartsAllowed(mPid, mUid, mInfo.packageName,
                 appSwitchState, isCheckingForFgsStart, hasActivityInVisibleTask(),
@@ -1369,7 +1373,7 @@ public class WindowProcessController extends ConfigurationContainer<Configuratio
         final Configuration config = getConfiguration();
         if (mLastReportedConfiguration.equals(config)) {
             // Nothing changed.
-            if (Build.IS_DEBUGGABLE && mHasImeService) {
+            if (Build.IS_ENG && mHasImeService) {
                 // TODO (b/135719017): Temporary log for debugging IME service.
                 Slog.w(TAG_CONFIGURATION, "Current config: " + config
                         + " unchanged for IME proc " + mName);
@@ -1410,7 +1414,7 @@ public class WindowProcessController extends ConfigurationContainer<Configuratio
     void dispatchConfiguration(Configuration config) {
         mHasPendingConfigurationChange = false;
         if (mThread == null) {
-            if (Build.IS_DEBUGGABLE && mHasImeService) {
+            if (Build.IS_ENG && mHasImeService) {
                 // TODO (b/135719017): Temporary log for debugging IME service.
                 Slog.w(TAG_CONFIGURATION, "Unable to send config for IME proc " + mName
                         + ": no app thread");
@@ -1440,7 +1444,7 @@ public class WindowProcessController extends ConfigurationContainer<Configuratio
     private void scheduleConfigurationChange(IApplicationThread thread, Configuration config) {
         ProtoLog.v(WM_DEBUG_CONFIGURATION, "Sending to proc %s new config %s", mName,
                 config);
-        if (Build.IS_DEBUGGABLE && mHasImeService) {
+        if (Build.IS_ENG && mHasImeService) {
             // TODO (b/135719017): Temporary log for debugging IME service.
             Slog.v(TAG_CONFIGURATION, "Sending to IME proc " + mName + " new config " + config);
         }

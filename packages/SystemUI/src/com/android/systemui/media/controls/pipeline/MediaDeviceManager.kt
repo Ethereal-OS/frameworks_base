@@ -49,7 +49,7 @@ import javax.inject.Inject
 
 private const val PLAYBACK_TYPE_UNKNOWN = 0
 private const val TAG = "MediaDeviceManager"
-private const val DEBUG = true
+private const val DEBUG = false
 
 /** Provides information about the route (ie. device) where playback is occurring. */
 class MediaDeviceManager
@@ -408,9 +408,9 @@ constructor(
  * [LocalMediaManager.DeviceCallback.onAboutToConnectDeviceAdded] for more information.
  *
  * @property fullMediaDevice a full-fledged [MediaDevice] object representing the device. If
- * non-null, prefer using [fullMediaDevice] over [backupMediaDeviceData].
+ *   non-null, prefer using [fullMediaDevice] over [backupMediaDeviceData].
  * @property backupMediaDeviceData a backup [MediaDeviceData] object containing the minimum
- * information required to display the device. Only use if [fullMediaDevice] is null.
+ *   information required to display the device. Only use if [fullMediaDevice] is null.
  */
 private data class AboutToConnectDevice(
     val fullMediaDevice: MediaDevice? = null,

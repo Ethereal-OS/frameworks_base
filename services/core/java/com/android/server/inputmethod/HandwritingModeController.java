@@ -47,7 +47,7 @@ final class HandwritingModeController {
 
     public static final String TAG = HandwritingModeController.class.getSimpleName();
     // TODO(b/210039666): flip the flag.
-    static final boolean DEBUG = true;
+    static final boolean DEBUG = false;
     private static final int EVENT_BUFFER_SIZE = 100;
 
     // This must be the looper for the UiThread.
@@ -124,7 +124,7 @@ final class HandwritingModeController {
 
     OptionalInt getCurrentRequestId() {
         if (mHandwritingSurface == null) {
-            Slog.e(TAG, "Cannot get requestId: Handwriting was not initialized.");
+            //Slog.e(TAG, "Cannot get requestId: Handwriting was not initialized.");
             return OptionalInt.empty();
         }
         return OptionalInt.of(mCurrentRequestId);

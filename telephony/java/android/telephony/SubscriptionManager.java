@@ -35,6 +35,7 @@ import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.app.PendingIntent;
 import android.app.PropertyInvalidatedCache;
+import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.Intent;
@@ -61,6 +62,7 @@ import android.util.Base64;
 import android.util.Log;
 import android.util.Pair;
 
+import com.android.internal.gmscompat.gcarriersettings.GCarrierSettingsApp;
 import com.android.internal.telephony.ISetOpportunisticDataCallback;
 import com.android.internal.telephony.ISub;
 import com.android.internal.telephony.PhoneConstants;
@@ -165,6 +167,15 @@ public class SubscriptionManager {
     /** @hide */
     public static final String RESTORE_SIM_SPECIFIC_SETTINGS_METHOD_NAME =
             "restoreSimSpecificSettings";
+
+    /**
+     * The key of the boolean flag indicating whether restoring subscriptions actually changes
+     * the subscription database or not.
+     *
+     * @hide
+     */
+    public static final String RESTORE_SIM_SPECIFIC_SETTINGS_DATABASE_UPDATED =
+            "restoreSimSpecificSettingsDatabaseUpdated";
 
     /**
      * Key to the backup & restore data byte array in the Bundle that is returned by {@link
@@ -2124,6 +2135,12 @@ public class SubscriptionManager {
      * subscriptionId doesn't have an associated slot index.
      */
     public static int getSlotIndex(int subscriptionId) {
+        if (GmsCompat.isGCarrierSettings()) {
+            int override = GCarrierSettingsApp.maybeOverrideSlotIndex(subscriptionId);
+            if (override >= 0) {
+                return override;
+            }
+        }
         return sSlotIndexCache.query(subscriptionId);
     }
 
@@ -2135,6 +2152,12 @@ public class SubscriptionManager {
      */
     @Nullable
     public int[] getSubscriptionIds(int slotIndex) {
+        if (GmsCompat.isGCarrierSettings()) {
+            int[] override = GCarrierSettingsApp.maybeOverrideSubIds(slotIndex);
+            if (override != null) {
+                return override;
+            }
+        }
         return getSubId(slotIndex);
     }
 

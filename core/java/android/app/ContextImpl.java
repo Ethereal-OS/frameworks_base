@@ -20,11 +20,13 @@ import static android.content.pm.PackageManager.PERMISSION_DENIED;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 import static android.os.StrictMode.vmIncorrectContextUseEnabled;
 import static android.view.WindowManager.LayoutParams.WindowType;
+import static com.android.internal.app.ContentProviderRedirector.translateContentProviderAuthority;
 
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.UiContext;
+import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.AttributionSource;
 import android.content.AutofillOptions;
@@ -95,6 +97,8 @@ import android.window.WindowContext;
 import android.window.WindowTokenClient;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.gmscompat.sysservice.GmcPackageManager;
+import com.android.internal.gmscompat.GmsHooks;
 import com.android.internal.util.Preconditions;
 
 import dalvik.system.BlockGuard;
@@ -195,12 +199,6 @@ class ContextImpl extends Context {
 
     private static final String XATTR_INODE_CACHE = "user.inode_cache";
     private static final String XATTR_INODE_CODE_CACHE = "user.inode_code_cache";
-
-    private static final Set<String> LINEAR_MOTOR_VIBRATOR_WHITELIST = Set.of(
-        "com.oneplus.camera",
-        "com.oneplus.gallery",
-        "com.oplus.camera"
-    );
 
     /**
      * Map from package name, to preference name, to cached preferences.
@@ -404,7 +402,7 @@ class ContextImpl extends Context {
         final IPackageManager pm = ActivityThread.getPackageManager();
         if (pm != null) {
             // Doesn't matter if we make more than one instance.
-            return (mPackageManager = new ApplicationPackageManager(this, pm));
+            return (mPackageManager = GmsCompat.isEnabled() ? new GmcPackageManager(this, pm) : new ApplicationPackageManager(this, pm));
         }
 
         return null;
@@ -574,7 +572,7 @@ class ContextImpl extends Context {
                 if (getApplicationInfo().targetSdkVersion >= android.os.Build.VERSION_CODES.O) {
                     if (isCredentialProtectedStorage()
                             && !getSystemService(UserManager.class)
-                                    .isUserUnlockingOrUnlocked(UserHandle.myUserId())) {
+                                    .isUserUnlockingOrUnlocked(getUserId())) {
                         throw new IllegalStateException("SharedPreferences in credential encrypted "
                                 + "storage are not available until after user is unlocked");
                     }
@@ -1290,6 +1288,10 @@ class ContextImpl extends Context {
 
     @Override
     public void sendBroadcast(Intent intent, String receiverPermission, Bundle options) {
+        if (GmsCompat.isEnabled()) {
+            options = GmsHooks.filterBroadcastOptions(intent, options);
+        }
+
         warnIfCallingFromSystemProcess();
         String resolvedType = intent.resolveTypeIfNeeded(getContentResolver());
         String[] receiverPermissions = receiverPermission == null ? null
@@ -1382,6 +1384,10 @@ class ContextImpl extends Context {
             String receiverPermission, int appOp, BroadcastReceiver resultReceiver,
             Handler scheduler, int initialCode, String initialData,
             Bundle initialExtras, Bundle options) {
+        if (GmsCompat.isEnabled()) {
+            options = GmsHooks.filterBroadcastOptions(intent, options);
+        }
+
         warnIfCallingFromSystemProcess();
         IIntentReceiver rd = null;
         if (resultReceiver != null) {
@@ -1437,6 +1443,10 @@ class ContextImpl extends Context {
     @Override
     public void sendBroadcastAsUser(Intent intent, UserHandle user, String receiverPermission,
             Bundle options) {
+        if (GmsCompat.isEnabled()) {
+            options = GmsHooks.filterBroadcastOptions(intent, options);
+        }
+
         String resolvedType = intent.resolveTypeIfNeeded(getContentResolver());
         String[] receiverPermissions = receiverPermission == null ? null
                 : new String[] {receiverPermission};
@@ -1490,6 +1500,10 @@ class ContextImpl extends Context {
     public void sendOrderedBroadcastAsUser(Intent intent, UserHandle user,
             String receiverPermission, int appOp, Bundle options, BroadcastReceiver resultReceiver,
             Handler scheduler, int initialCode, String initialData, Bundle initialExtras) {
+        if (GmsCompat.isEnabled()) {
+            options = GmsHooks.filterBroadcastOptions(intent, options);
+        }
+
         IIntentReceiver rd = null;
         if (resultReceiver != null) {
             if (mPackageInfo != null) {
@@ -2030,6 +2044,12 @@ class ContextImpl extends Context {
             throw new RuntimeException("Not supported in system context");
         }
         validateServiceIntent(service);
+
+        if (GmsCompat.isEnabled()) {
+            // requires privileged START_ACTIVITIES_FROM_BACKGROUND permission
+            flags &= ~BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS;
+        }
+
         try {
             IBinder token = getActivityToken();
             if (token == null && (flags&BIND_AUTO_CREATE) == 0 && mPackageInfo != null
@@ -2108,12 +2128,12 @@ class ContextImpl extends Context {
 
     @Override
     public Object getSystemService(String name) {
-        if (Context.LINEARMOTOR_VIBRATOR_SERVICE.equals(name)) {
-            if (!LINEAR_MOTOR_VIBRATOR_WHITELIST.contains(getPackageName())) {
-                Log.w(TAG, "LinearMotorVibrator is unsupported for external use");
+        if (GmsCompat.isEnabled()) {
+            if (GmsHooks.isHiddenSystemService(name)) {
                 return null;
             }
         }
+
         if (vmIncorrectContextUseEnabled()) {
             // Check incorrect Context usage.
             if (WINDOW_SERVICE.equals(name) && !isUiContext()) {
@@ -2236,6 +2256,12 @@ class ContextImpl extends Context {
         if (mParams.isRenouncedPermission(permission)) {
             Log.v(TAG, "Treating renounced permission " + permission + " as denied");
             return PERMISSION_DENIED;
+        }
+
+        if (GmsCompat.isEnabled()) {
+            if (GmsHooks.shouldSpoofSelfPermissionCheck(permission)) {
+                return PERMISSION_GRANTED;
+            }
         }
 
         return checkPermission(permission, Process.myPid(), Process.myUid());
@@ -3410,6 +3436,7 @@ class ContextImpl extends Context {
         @Override
         @UnsupportedAppUsage
         protected IContentProvider acquireProvider(Context context, String auth) {
+            auth = translateContentProviderAuthority(auth);
             return mMainThread.acquireProvider(context,
                     ContentProvider.getAuthorityWithoutUserId(auth),
                     resolveUserIdFromAuthority(auth), true);
@@ -3417,6 +3444,7 @@ class ContextImpl extends Context {
 
         @Override
         protected IContentProvider acquireExistingProvider(Context context, String auth) {
+            auth = translateContentProviderAuthority(auth);
             return mMainThread.acquireExistingProvider(context,
                     ContentProvider.getAuthorityWithoutUserId(auth),
                     resolveUserIdFromAuthority(auth), true);
@@ -3429,6 +3457,7 @@ class ContextImpl extends Context {
 
         @Override
         protected IContentProvider acquireUnstableProvider(Context c, String auth) {
+            auth = translateContentProviderAuthority(auth);
             return mMainThread.acquireProvider(c,
                     ContentProvider.getAuthorityWithoutUserId(auth),
                     resolveUserIdFromAuthority(auth), false);

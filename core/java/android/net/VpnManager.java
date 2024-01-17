@@ -718,6 +718,7 @@ public class VpnManager {
         }
     }
 
+
     /**
      * @hide
      */
@@ -728,4 +729,5 @@ public class VpnManager {
             throw e.rethrowFromSystemServer();
         }
     }
+
 }

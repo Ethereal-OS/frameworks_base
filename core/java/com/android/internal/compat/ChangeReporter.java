@@ -41,6 +41,7 @@ import java.util.Set;
  */
 public final class ChangeReporter {
     private static final String TAG = "CompatibilityChangeReporter";
+    private static final boolean DBG = false;
     private int mSource;
 
     private static final class ChangeReport {
@@ -89,14 +90,6 @@ public final class ChangeReporter {
      * @param state    of the reported change - enabled/disabled/only logged
      */
     public void reportChange(int uid, long changeId, int state) {
-        if (shouldWriteToStatsLog(uid, changeId, state)) {
-            FrameworkStatsLog.write(FrameworkStatsLog.APP_COMPATIBILITY_CHANGE_REPORTED, uid,
-                    changeId, state, mSource);
-        }
-        if (shouldWriteToDebug(uid, changeId, state)) {
-            debugLog(uid, changeId, state);
-        }
-        markAsReported(uid, new ChangeReport(changeId, state));
     }
 
     /**
@@ -177,6 +170,7 @@ public final class ChangeReporter {
     }
 
     private void debugLog(int uid, long changeId, int state) {
+        if (!DBG) return;
         String message = formatSimple("Compat change id reported: %d; UID %d; state: %s", changeId,
                 uid, stateToString(state));
         if (mSource == SOURCE_SYSTEM_SERVER) {

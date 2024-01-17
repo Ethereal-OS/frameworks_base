@@ -66,7 +66,9 @@ import javax.inject.Inject;
 /** Quick settings tile: Cast **/
 public class CastTile extends QSTileImpl<BooleanState> {
 
-    private static final String INTERACTION_JANK_TAG = "cast";
+    public static final String TILE_SPEC = "cast";
+
+    private static final String INTERACTION_JANK_TAG = TILE_SPEC;
 
     private static final Intent CAST_SETTINGS =
             new Intent(Settings.ACTION_CAST_SETTINGS);
@@ -76,8 +78,8 @@ public class CastTile extends QSTileImpl<BooleanState> {
     private final NetworkController mNetworkController;
     private final DialogLaunchAnimator mDialogLaunchAnimator;
     private final Callback mCallback = new Callback();
-    private boolean mWifiConnected;
-    private boolean mHotspotConnected;
+    private boolean mWifiEnabled;
+    private boolean mHotspotEnabled;
 
     @Inject
     public CastTile(
@@ -110,7 +112,6 @@ public class CastTile extends QSTileImpl<BooleanState> {
     @Override
     public BooleanState newTileState() {
         BooleanState state = new BooleanState();
-        state.handlesLongClick = false;
         return state;
     }
 
@@ -131,12 +132,7 @@ public class CastTile extends QSTileImpl<BooleanState> {
 
     @Override
     public Intent getLongClickIntent() {
-        return new Intent(Settings.ACTION_CAST_SETTINGS);
-    }
-
-    @Override
-    protected void handleLongClick(@Nullable View view) {
-        handleClick(view);
+        return CAST_SETTINGS;
     }
 
     @Override
@@ -286,19 +282,17 @@ public class CastTile extends QSTileImpl<BooleanState> {
     }
 
     private boolean canCastToWifi() {
-        return mWifiConnected || mHotspotConnected;
+        return mWifiEnabled || mHotspotEnabled;
     }
 
     private final SignalCallback mSignalCallback = new SignalCallback() {
                 @Override
                 public void setWifiIndicators(@NonNull WifiIndicators indicators) {
-                    // statusIcon.visible has the connected status information
-                    boolean enabledAndConnected = indicators.enabled
-                            && (indicators.qsIcon == null ? false : indicators.qsIcon.visible);
-                    if (enabledAndConnected != mWifiConnected) {
-                        mWifiConnected = enabledAndConnected;
-                        // Hotspot is not connected, so changes here should update
-                        if (!mHotspotConnected) {
+                    boolean enabled = indicators.enabled;
+                    if (enabled != mWifiEnabled) {
+                        mWifiEnabled = enabled;
+                        // Hotspot is not enabled, so changes here should update
+                        if (!mHotspotEnabled) {
                             refreshState();
                         }
                     }
@@ -309,11 +303,10 @@ public class CastTile extends QSTileImpl<BooleanState> {
             new HotspotController.Callback() {
                 @Override
                 public void onHotspotChanged(boolean enabled, int numDevices) {
-                    boolean enabledAndConnected = enabled && numDevices > 0;
-                    if (enabledAndConnected != mHotspotConnected) {
-                        mHotspotConnected = enabledAndConnected;
-                        // Wifi is not connected, so changes here should update
-                        if (!mWifiConnected) {
+                    if (enabled != mHotspotEnabled) {
+                        mHotspotEnabled = enabled;
+                        // Wifi is not enabled, so changes here should update
+                        if (!mWifiEnabled) {
                             refreshState();
                         }
                     }

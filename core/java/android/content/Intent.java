@@ -33,6 +33,7 @@ import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.app.ActivityThread;
 import android.app.AppGlobals;
+import android.app.compat.gms.GmsCompat;
 import android.bluetooth.BluetoothDevice;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.ActivityInfo;
@@ -65,6 +66,7 @@ import android.provider.DocumentsContract;
 import android.provider.DocumentsProvider;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.service.chooser.ChooserAction;
 import android.telecom.PhoneAccount;
 import android.telecom.TelecomManager;
@@ -1843,6 +1845,13 @@ public class Intent implements Parcelable, Cloneable {
      */
     public static final String EXTRA_UNINSTALL_ALL_USERS
             = "android.intent.extra.UNINSTALL_ALL_USERS";
+
+    /**
+     * Specify whether the "More options" button should be shown in the package uninstallation UI.
+     * @hide
+     */
+    public static final String EXTRA_UNINSTALL_SHOW_MORE_OPTIONS_BUTTON
+            = "android.intent.extra.UNINSTALL_SHOW_MORE_OPTIONS_BUTTON";
 
     /**
      * A string that associates with a metadata entry, indicating the last run version of the
@@ -4128,6 +4137,13 @@ public class Intent implements Parcelable, Cloneable {
             "android.intent.action.PROFILE_INACCESSIBLE";
 
     /**
+     * Broadcast sent to the parallel owner user when parallel space info has been refreshed.
+     * @hide
+     */
+    public static final String ACTION_PARALLEL_SPACE_CHANGED =
+            "android.intent.action.PARALLEL_SPACE_CHANGED";
+
+    /**
      * Broadcast sent to the system user when the 'device locked' state changes for any user.
      * Carries an extra {@link #EXTRA_USER_HANDLE} that specifies the ID of the user for which
      * the device was locked or unlocked.
@@ -5746,18 +5762,17 @@ public class Intent implements Parcelable, Cloneable {
      * @hide
      */
     public static final String EXTRA_CHOOSER_CUSTOM_ACTIONS =
-            "android.intent.extra.EXTRA_CHOOSER_CUSTOM_ACTIONS";
+            "android.intent.extra.CHOOSER_CUSTOM_ACTIONS";
 
     /**
      * Optional argument to be used with {@link #ACTION_CHOOSER}.
-     * A {@link android.app.PendingIntent} to be sent when the user wants to do payload reselection
-     * in the sharesheet.
-     * A reselection action allows the user to return to the source app to change the content being
-     * shared.
+     * A {@link android.app.PendingIntent} to be sent when the user wants to modify the content that
+     * they're sharing. This can be used to allow the user to return to the source app to, for
+     * example, select different media.
      * @hide
      */
-    public static final String EXTRA_CHOOSER_PAYLOAD_RESELECTION_ACTION =
-            "android.intent.extra.EXTRA_CHOOSER_PAYLOAD_RESELECTION_ACTION";
+    public static final String EXTRA_CHOOSER_MODIFY_SHARE_ACTION =
+            "android.intent.extra.CHOOSER_MODIFY_SHARE_ACTION";
 
     /**
      * An {@code ArrayList} of {@code String} annotations describing content for
@@ -9471,6 +9486,13 @@ public class Intent implements Parcelable, Cloneable {
      * @see #resolveActivityInfo
      */
     public ComponentName resolveActivity(@NonNull PackageManager pm) {
+        if (GmsCompat.isEnabled()) {
+            if (Settings.ACTION_SETTINGS_EMBED_DEEP_LINK_ACTIVITY.equals(getAction())) {
+                // LAUNCH_MULTI_PANE_SETTINGS_DEEP_LINK permission has protectionLevel="signature|preinstalled"
+                return null;
+            }
+        }
+
         if (mComponent != null) {
             return mComponent;
         }

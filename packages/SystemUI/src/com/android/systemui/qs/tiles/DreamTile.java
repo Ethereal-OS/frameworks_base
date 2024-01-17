@@ -59,6 +59,8 @@ import javax.inject.Named;
 /** Quick settings tile: Screensaver (dream) **/
 public class DreamTile extends QSTileImpl<QSTile.BooleanState> {
 
+    public static final String TILE_SPEC = "dream";
+
     private static final String LOG_TAG = "QSDream";
     // TODO: consider 1 animated icon instead
     private final Icon mIconDocked = ResourceIcon.get(R.drawable.ic_qs_screen_saver);
@@ -198,9 +200,7 @@ public class DreamTile extends QSTileImpl<QSTile.BooleanState> {
 
     @Override
     public boolean isAvailable() {
-        // Only enable for devices that have dreams for the user(s) that can dream.
         return mDreamSupported
-                // TODO(b/257333623): Allow the Dock User to be non-SystemUser user in HSUM.
                 && (!mDreamOnlyEnabledForDockUser || mUserTracker.getUserHandle().isSystem());
     }
 

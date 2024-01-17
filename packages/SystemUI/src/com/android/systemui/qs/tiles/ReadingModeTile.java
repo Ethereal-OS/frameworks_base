@@ -24,7 +24,7 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import com.android.internal.custom.hardware.LineageHardwareManager;
+import com.android.internal.lineage.hardware.LineageHardwareManager;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.R;
@@ -41,6 +41,8 @@ import com.android.systemui.qs.tileimpl.QSTileImpl;
 import javax.inject.Inject;
 
 public class ReadingModeTile extends QSTileImpl<BooleanState> {
+
+    public static final String TILE_SPEC = "reading_mode";
 
     private final Icon mIcon = ResourceIcon.get(R.drawable.ic_qs_reader);
 
@@ -108,7 +110,7 @@ public class ReadingModeTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.CUSTOM_SETTINGS;
+        return MetricsEvent.VOLTAGE;
     }
 
     @Override

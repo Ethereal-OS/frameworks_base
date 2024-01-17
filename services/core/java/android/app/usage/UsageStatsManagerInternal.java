@@ -212,7 +212,7 @@ public abstract class UsageStatsManagerInternal {
     public abstract void setAdminProtectedPackages(@Nullable Set<String> packageNames,
             @UserIdInt int userId);
 
-    /**    
+    /**
      * Called by DevicePolicyManagerService during boot to inform that admin data is loaded and
      * pushed to UsageStatsService.
      */

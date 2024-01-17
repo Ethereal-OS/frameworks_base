@@ -78,10 +78,10 @@ open class ThemedBatteryDrawable(private val context: Context, frameColor: Int) 
     // Colors can be configured based on battery level (see res/values/arrays.xml)
     private var colorLevels: IntArray
 
-    private var fillColor: Int = Color.MAGENTA
-    private var backgroundColor: Int = Color.MAGENTA
+    private var fillColor: Int = Color.WHITE
+    private var backgroundColor: Int = Color.WHITE
     // updated whenever level changes
-    private var levelColor: Int = Color.MAGENTA
+    private var levelColor: Int = Color.WHITE
 
     // Dual tone implies that battery level is a clipped overlay over top of the whole shape
     private var dualTone = false
@@ -259,7 +259,9 @@ open class ThemedBatteryDrawable(private val context: Context, frameColor: Int) 
             // If power save is enabled draw the perimeter path with colorError
             c.drawPath(scaledErrorPerimeter, errorPaint)
             // And draw the plus sign on top of the fill
-            c.drawPath(scaledPlus, errorPaint)
+            if (!showPercent) {
+                c.drawPath(scaledPlus, errorPaint)
+            }
         }
         c.restore()
 

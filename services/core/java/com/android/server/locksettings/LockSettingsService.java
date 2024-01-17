@@ -80,6 +80,7 @@ import android.hardware.fingerprint.Fingerprint;
 import android.hardware.fingerprint.FingerprintManager;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -117,6 +118,7 @@ import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.EventLog;
+import android.util.Log;
 import android.util.LongSparseArray;
 import android.util.Slog;
 import android.util.SparseArray;
@@ -138,6 +140,7 @@ import com.android.internal.widget.LockSettingsInternal;
 import com.android.internal.widget.LockscreenCredential;
 import com.android.internal.widget.RebootEscrowListener;
 import com.android.internal.widget.VerifyCredentialResponse;
+import com.android.server.app.AppLockManagerServiceInternal;
 import com.android.server.LocalServices;
 import com.android.server.ServiceThread;
 import com.android.server.SystemService;
@@ -203,7 +206,7 @@ public class LockSettingsService extends ILockSettings.Stub {
     private static final String TAG = "LockSettingsService";
     private static final String PERMISSION = ACCESS_KEYGUARD_SECURE_STORAGE;
     private static final String BIOMETRIC_PERMISSION = MANAGE_BIOMETRIC;
-    private static final boolean DEBUG = false;
+    private static final boolean DEBUG = Build.IS_DEBUGGABLE && Log.isLoggable(TAG, Log.DEBUG);
 
     private static final int PROFILE_KEY_IV_SIZE = 12;
     private static final String SEPARATE_PROFILE_CHALLENGE_KEY = "lockscreen.profilechallenge";
@@ -1304,6 +1307,17 @@ public class LockSettingsService extends ILockSettings.Stub {
     public int getCredentialType(int userId) {
         checkPasswordHavePermission(userId);
         return getCredentialTypeInternal(userId);
+    }
+
+    /**
+     * Returns the length of current credential.
+     * @return length of the current credential or -1, if the user hasn't authenticated yet.
+     */
+    @Override
+    public int getCredentialLength(int userId) {
+        checkPasswordHavePermission(userId);
+        final PasswordMetrics passwordMetrics = getUserPasswordMetrics(userId);
+        return passwordMetrics != null ? passwordMetrics.length : -1;
     }
 
     // TODO: this is a hot path, can we optimize it?
@@ -2473,6 +2487,7 @@ public class LockSettingsService extends ILockSettings.Stub {
                     PasswordMetrics.computeForCredential(newCredential),
                     userId);
             LocalServices.getService(WindowManagerInternal.class).reportPasswordChanged(userId);
+            LocalServices.getService(AppLockManagerServiceInternal.class).reportPasswordChanged(userId);
         });
     }
 

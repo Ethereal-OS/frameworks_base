@@ -40,7 +40,7 @@ public class ZenLog {
     // the ZenLog is *very* verbose, so be careful about setting this to true
     private static final boolean DEBUG = false;
 
-    private static final int SIZE = Build.IS_DEBUGGABLE ? 200 : 100;
+    private static final int SIZE = Build.IS_ENG ? 200 : 100;
 
     private static final long[] TIMES = new long[SIZE];
     private static final int[] TYPES = new int[SIZE];
@@ -68,18 +68,21 @@ public class ZenLog {
     private static final int TYPE_MATCHES_CALL_FILTER = 18;
     private static final int TYPE_RECORD_CALLER = 19;
     private static final int TYPE_CHECK_REPEAT_CALLER = 20;
+    private static final int TYPE_ALERT_ON_UPDATED_INTERCEPT = 21;
 
     private static int sNext;
     private static int sSize;
 
     public static void traceIntercepted(NotificationRecord record, String reason) {
-        if (record != null && record.isIntercepted()) return;  // already logged
         append(TYPE_INTERCEPTED, record.getKey() + "," + reason);
     }
 
     public static void traceNotIntercepted(NotificationRecord record, String reason) {
-        if (record != null && record.isUpdate) return;  // already logged
         append(TYPE_NOT_INTERCEPTED, record.getKey() + "," + reason);
+    }
+
+    public static void traceAlertOnUpdatedIntercept(NotificationRecord record) {
+        append(TYPE_ALERT_ON_UPDATED_INTERCEPT, record.getKey());
     }
 
     public static void traceSetRingerModeExternal(int ringerModeOld, int ringerModeNew,
@@ -219,6 +222,7 @@ public class ZenLog {
             case TYPE_MATCHES_CALL_FILTER: return "matches_call_filter";
             case TYPE_RECORD_CALLER: return "record_caller";
             case TYPE_CHECK_REPEAT_CALLER: return "check_repeat_caller";
+            case TYPE_ALERT_ON_UPDATED_INTERCEPT: return "alert_on_updated_intercept";
             default: return "unknown";
         }
     }

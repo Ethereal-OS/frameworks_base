@@ -97,7 +97,6 @@ public class SettingsToPropertiesMapper {
         DeviceConfig.NAMESPACE_STORAGE_NATIVE_BOOT,
         DeviceConfig.NAMESPACE_SURFACE_FLINGER_NATIVE_BOOT,
         DeviceConfig.NAMESPACE_SWCODEC_NATIVE,
-        DeviceConfig.NAMESPACE_TETHERING,
         DeviceConfig.NAMESPACE_VENDOR_SYSTEM_NATIVE,
         DeviceConfig.NAMESPACE_VENDOR_SYSTEM_NATIVE_BOOT,
         DeviceConfig.NAMESPACE_VIRTUALIZATION_FRAMEWORK_NATIVE,
@@ -257,7 +256,7 @@ public class SettingsToPropertiesMapper {
     }
 
     private static void log(String msg, Exception e) {
-        if (Build.IS_DEBUGGABLE) {
+        if (Build.IS_ENG) {
             Slog.wtf(TAG, msg, e);
         } else {
             Slog.e(TAG, msg, e);
@@ -265,7 +264,7 @@ public class SettingsToPropertiesMapper {
     }
 
     private static void log(String msg) {
-        if (Build.IS_DEBUGGABLE) {
+        if (Build.IS_ENG) {
             Slog.wtf(TAG, msg);
         } else {
             Slog.e(TAG, msg);

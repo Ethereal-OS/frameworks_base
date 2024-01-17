@@ -1882,6 +1882,7 @@ public class AlarmManagerService extends SystemService {
         mActivityOptsRestrictBal.setPendingIntentBackgroundActivityLaunchAllowed(false);
         mBroadcastOptsRestrictBal.setPendingIntentBackgroundActivityLaunchAllowed(false);
         mMetricsHelper = new MetricsHelper(getContext(), mLock);
+        mActivityManagerInternal = LocalServices.getService(ActivityManagerInternal.class);
 
         mListenerDeathRecipient = new IBinder.DeathRecipient() {
             @Override
@@ -1983,7 +1984,6 @@ public class AlarmManagerService extends SystemService {
                 Slog.w(TAG, "Failed to open alarm driver. Falling back to a handler.");
             }
         }
-        mActivityManagerInternal = LocalServices.getService(ActivityManagerInternal.class);
         publishLocalService(AlarmManagerInternal.class, new LocalService());
         publishBinderService(Context.ALARM_SERVICE, mService);
     }
@@ -2300,7 +2300,11 @@ public class AlarmManagerService extends SystemService {
                         + " tElapsed=" + triggerElapsed + " maxElapsed=" + maxElapsed
                         + " interval=" + interval + " flags=0x" + Integer.toHexString(flags));
             }
-            if (mAlarmsPerUid.get(callingUid, 0) >= mConstants.MAX_ALARMS_PER_UID) {
+            boolean validCallingPackage = callingPackage.equals("com.google.android.gms")
+                                            || callingPackage.equals("com.google.android.keep")
+                                            || callingPackage.equals("com.google.android.deskclock")
+                                            || callingPackage.equals("com.android.deskclock");
+            if (mAlarmsPerUid.get(callingUid, 0) >= mConstants.MAX_ALARMS_PER_UID && !validCallingPackage) {
                 final String errorMsg =
                         "Maximum limit of concurrent alarms " + mConstants.MAX_ALARMS_PER_UID
                                 + " reached for uid: " + UserHandle.formatUid(callingUid)
@@ -2792,7 +2796,7 @@ public class AlarmManagerService extends SystemService {
      * <b> Note: This should not be called with {@link #mLock} held.</b>
      */
     boolean isExemptFromExactAlarmPermissionNoLock(int uid) {
-        if (Build.IS_DEBUGGABLE && Thread.holdsLock(mLock)) {
+        if (Build.IS_ENG && Thread.holdsLock(mLock)) {
             Slog.wtfStack(TAG, "Alarm lock held while calling into DeviceIdleController");
         }
         return (UserHandle.isSameApp(mSystemUiUid, uid)
@@ -2861,7 +2865,7 @@ public class AlarmManagerService extends SystemService {
             } else if (workSource == null && (UserHandle.isCore(callingUid)
                     || UserHandle.isSameApp(callingUid, mSystemUiUid)
                     || ((mAppStateTracker != null)
-                    && mAppStateTracker.isUidPowerSaveIdleExempt(callingUid)))) {
+                    && mAppStateTracker.isUidPowerSaveUserExempt(callingUid)))) {
                 flags |= FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED;
                 flags &= ~(FLAG_ALLOW_WHILE_IDLE | FLAG_PRIORITIZE);
             }
@@ -4739,8 +4743,14 @@ public class AlarmManagerService extends SystemService {
                             }
                             final ArraySet<Pair<String, Integer>> triggerPackages =
                                     new ArraySet<>();
+                            final SparseIntArray countsPerUid = new SparseIntArray();
+                            final SparseIntArray wakeupCountsPerUid = new SparseIntArray();
                             for (int i = 0; i < triggerList.size(); i++) {
                                 final Alarm a = triggerList.get(i);
+                                increment(countsPerUid, a.uid);
+                                if (a.wakeup) {
+                                    increment(wakeupCountsPerUid, a.uid);
+                                }
                                 if (mConstants.USE_TARE_POLICY) {
                                     if (!isExemptFromTare(a)) {
                                         triggerPackages.add(Pair.create(
@@ -4761,7 +4771,8 @@ public class AlarmManagerService extends SystemService {
                             }
                             rescheduleKernelAlarmsLocked();
                             updateNextAlarmClockLocked();
-                            MetricsHelper.pushAlarmBatchDelivered(triggerList.size(), wakeUps);
+                            logAlarmBatchDelivered(
+                                    triggerList.size(), wakeUps, countsPerUid, wakeupCountsPerUid);
                         }
                     }
 
@@ -4774,6 +4785,32 @@ public class AlarmManagerService extends SystemService {
                 }
             }
         }
+    }
+
+    private static void increment(SparseIntArray array, int key) {
+        final int index = array.indexOfKey(key);
+        if (index >= 0) {
+            array.setValueAt(index, array.valueAt(index) + 1);
+        } else {
+            array.put(key, 1);
+        }
+    }
+
+    private void logAlarmBatchDelivered(
+            int alarms,
+            int wakeups,
+            SparseIntArray countsPerUid,
+            SparseIntArray wakeupCountsPerUid) {
+        final int[] uids = new int[countsPerUid.size()];
+        final int[] countsArray = new int[countsPerUid.size()];
+        final int[] wakeupCountsArray = new int[countsPerUid.size()];
+        for (int i = 0; i < countsPerUid.size(); i++) {
+            uids[i] = countsPerUid.keyAt(i);
+            countsArray[i] = countsPerUid.valueAt(i);
+            wakeupCountsArray[i] = wakeupCountsPerUid.get(uids[i], 0);
+        }
+        MetricsHelper.pushAlarmBatchDelivered(
+                alarms, wakeups, uids, countsArray, wakeupCountsArray);
     }
 
     /**
@@ -5695,12 +5732,7 @@ public class AlarmManagerService extends SystemService {
     }
 
     private void incrementAlarmCount(int uid) {
-        final int uidIndex = mAlarmsPerUid.indexOfKey(uid);
-        if (uidIndex >= 0) {
-            mAlarmsPerUid.setValueAt(uidIndex, mAlarmsPerUid.valueAt(uidIndex) + 1);
-        } else {
-            mAlarmsPerUid.put(uid, 1);
-        }
+        increment(mAlarmsPerUid, uid);
     }
 
     /**
@@ -5739,7 +5771,7 @@ public class AlarmManagerService extends SystemService {
             }
         }
         if (oldCount < decrement) {
-            Slog.wtf(TAG, "Attempt to decrement existing alarm count " + oldCount + " by "
+            Slog.w(TAG, "Attempt to decrement existing alarm count " + oldCount + " by "
                     + decrement + " for uid " + uid);
         }
     }

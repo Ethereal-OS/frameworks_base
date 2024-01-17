@@ -16,7 +16,6 @@
 
 package android.provider.settings.validators;
 
-import static android.provider.settings.validators.SettingsValidators.ANY_STRING_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.ACCESSIBILITY_SHORTCUT_TARGET_LIST_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.ANY_INTEGER_VALIDATOR;
 import static android.provider.settings.validators.SettingsValidators.ANY_STRING_VALIDATOR;
@@ -163,28 +162,6 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.STATUS_BAR_SHOW_VIBRATE_ICON, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DOZE_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DOZE_ALWAYS_ON, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.DOZE_ALWAYS_ON_AUTO_MODE, new DiscreteValueValidator(new String[] {"0", "1", "2", "3", "4"}));
-        VALIDATORS.put(Secure.DOZE_ALWAYS_ON_AUTO_TIME, new Validator() {
-                @Override
-                public boolean validate(String value) {
-                    String[] values = value.split(",", 0);
-                    if (values.length != 2) return false;
-                    for (String str : values) {
-                        String[] time = str.split(":", 0);
-                        if (time.length != 2) return false;
-                        int hour, minute;
-                        try {
-                            hour = Integer.valueOf(time[0]);
-                            minute = Integer.valueOf(time[1]);
-                        } catch (NumberFormatException e) {
-                            return false;
-                        }
-                        if (hour < 0 || hour > 23 || minute < 0 || minute > 59)
-                            return false;
-                    }
-                    return true;
-                }
-        });
         VALIDATORS.put(Secure.DOZE_PICK_UP_GESTURE, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DOZE_DOUBLE_TAP_GESTURE, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.DOZE_TAP_SCREEN_GESTURE, BOOLEAN_VALIDATOR);
@@ -201,7 +178,7 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.FINGERPRINT_SIDE_FPS_ENROLL_TAP_WINDOW,
                 NON_NEGATIVE_INTEGER_VALIDATOR);
         VALIDATORS.put(Secure.FINGERPRINT_SIDE_FPS_AUTH_DOWNTIME, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(Secure.SFPS_REQUIRE_SCREEN_ON_TO_AUTH_ENABLED, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.SFPS_PERFORMANT_AUTH_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.SHOW_MEDIA_WHEN_BYPASSING, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.FACE_UNLOCK_APP_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.FACE_UNLOCK_ALWAYS_REQUIRE_CONFIRMATION, BOOLEAN_VALIDATOR);
@@ -211,6 +188,10 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.ACTIVE_UNLOCK_ON_FACE_ERRORS, ANY_STRING_VALIDATOR);
         VALIDATORS.put(Secure.ACTIVE_UNLOCK_ON_FACE_ACQUIRE_INFO, ANY_STRING_VALIDATOR);
         VALIDATORS.put(Secure.ACTIVE_UNLOCK_ON_UNLOCK_INTENT_WHEN_BIOMETRIC_ENROLLED,
+                ANY_STRING_VALIDATOR);
+        VALIDATORS.put(Secure.ACTIVE_UNLOCK_WAKEUPS_CONSIDERED_UNLOCK_INTENTS,
+                ANY_STRING_VALIDATOR);
+        VALIDATORS.put(Secure.ACTIVE_UNLOCK_WAKEUPS_TO_FORCE_DISMISS_KEYGUARD,
                 ANY_STRING_VALIDATOR);
         VALIDATORS.put(Secure.ASSIST_GESTURE_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.ASSIST_GESTURE_SILENCE_ALERTS_ENABLED, BOOLEAN_VALIDATOR);
@@ -225,6 +206,7 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.SCREENSAVER_COMPONENTS, COMMA_SEPARATED_COMPONENT_LIST_VALIDATOR);
         VALIDATORS.put(Secure.SCREENSAVER_ACTIVATE_ON_DOCK, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.SCREENSAVER_ACTIVATE_ON_SLEEP, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.SCREENSAVER_HOME_CONTROLS_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.SHOW_FIRST_CRASH_DIALOG_DEV_OPTION, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.VOLUME_HUSH_GESTURE, NON_NEGATIVE_INTEGER_VALIDATOR);
         VALIDATORS.put(
@@ -373,20 +355,16 @@ public class SecureSettingsValidators {
         VALIDATORS.put(Secure.BLUETOOTH_LE_BROADCAST_PROGRAM_INFO, ANY_STRING_VALIDATOR);
         VALIDATORS.put(Secure.BLUETOOTH_LE_BROADCAST_CODE, ANY_STRING_VALIDATOR);
         VALIDATORS.put(Secure.BLUETOOTH_LE_BROADCAST_APP_SOURCE_NAME, ANY_STRING_VALIDATOR);
-        VALIDATORS.put(Secure.SCREEN_OFF_UDFPS_ENABLED, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.BUTTON_BACKLIGHT_TIMEOUT, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(Secure.BUTTON_BRIGHTNESS, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(Secure.KEYBOARD_BRIGHTNESS, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(Secure.FEATURE_TOUCH_HOVERING, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.SWAP_CAPACITIVE_KEYS, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.FACE_UNLOCK_METHOD, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.LOCKSCREEN_MEDIA_METADATA, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.RING_HOME_BUTTON_BEHAVIOR, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(Secure.ADVANCED_REBOOT, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.POWER_MENU_ACTIONS, ANY_STRING_VALIDATOR);
-        VALIDATORS.put(Secure.QS_SHOW_AUTO_BRIGHTNESS, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.QS_SHOW_BRIGHTNESS_SLIDER, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.LOCK_SCREEN_WEATHER_ENABLED, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.ACCESSIBILITY_FONT_SCALING_HAS_BEEN_CHANGED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(Secure.TETHERING_ALLOW_VPN_UPSTREAMS, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(Secure.SHOW_WIFI_STANDARD_ICON, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.GESTURE_NAVBAR_LENGTH_MODE, new InclusiveIntegerRangeValidator(0, 3));
+        VALIDATORS.put(Secure.TORCH_DOUBLE_TAP_POWER_GESTURE_ENABLED, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.TORCH_LONG_PRESS_POWER, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.FACE_UNLOCK_METHOD, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.DOZE_ON_CHARGE, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.EXTENDED_MONET_THEMES, ANY_INTEGER_VALIDATOR);
+        VALIDATORS.put(Secure.SECURE_LOCKSCREEN_QS_DISABLED, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(Secure.SHOW_BACK_ARROW_GESTURE, BOOLEAN_VALIDATOR);
     }
 }

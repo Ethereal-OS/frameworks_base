@@ -34,7 +34,6 @@ import static android.content.Intent.FLAG_ACTIVITY_RETAIN_IN_RECENTS;
 import static android.content.Intent.FLAG_ACTIVITY_TASK_ON_HOME;
 import static android.content.pm.ActivityInfo.CONFIG_SCREEN_LAYOUT;
 import static android.content.pm.ActivityInfo.FLAG_RELINQUISH_TASK_IDENTITY;
-import static android.content.pm.ActivityInfo.FLAG_RESUME_WHILE_PAUSING;
 import static android.content.pm.ActivityInfo.FLAG_SHOW_FOR_ALL_USERS;
 import static android.content.pm.ActivityInfo.RESIZE_MODE_FORCE_RESIZABLE_LANDSCAPE_ONLY;
 import static android.content.pm.ActivityInfo.RESIZE_MODE_FORCE_RESIZABLE_PORTRAIT_ONLY;
@@ -44,7 +43,6 @@ import static android.content.pm.ActivityInfo.RESIZE_MODE_RESIZEABLE;
 import static android.content.pm.ActivityInfo.RESIZE_MODE_RESIZEABLE_AND_PIPABLE_DEPRECATED;
 import static android.content.pm.ActivityInfo.RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION;
 import static android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSET;
-
 import static android.os.Trace.TRACE_TAG_WINDOW_MANAGER;
 import static android.provider.Settings.Secure.USER_SETUP_COMPLETE;
 import static android.view.Display.DEFAULT_DISPLAY;
@@ -142,7 +140,6 @@ import android.app.IActivityController;
 import android.app.PictureInPictureParams;
 import android.app.TaskInfo;
 import android.app.WindowConfiguration;
-import android.app.servertransaction.PauseActivityItem;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -169,7 +166,6 @@ import android.os.UserHandle;
 import android.provider.Settings;
 import android.service.voice.IVoiceInteractionSession;
 import android.util.ArraySet;
-import android.util.BoostFramework;
 import android.util.DisplayMetrics;
 import android.util.Slog;
 import android.util.TypedXmlPullParser;
@@ -517,9 +513,6 @@ class Task extends TaskFragment {
 
     private final Handler mHandler;
 
-    private static final ActivityPluginDelegate mActivityPluginDelegate =
-        new ActivityPluginDelegate();
-
     private class ActivityTaskHandler extends Handler {
 
         ActivityTaskHandler(Looper looper) {
@@ -616,7 +609,7 @@ class Task extends TaskFragment {
      */
     ActivityRecord mChildPipActivity;
 
-    boolean mLastSurfaceShowing = true;
+    boolean mLastSurfaceShowing;
 
     /**
      * Tracks if a back gesture is in progress.
@@ -2611,6 +2604,9 @@ class Task extends TaskFragment {
 
         EventLogTags.writeWmTaskRemoved(mTaskId, reason);
         clearPinnedTaskIfNeed();
+        if (mChildPipActivity != null) {
+            mChildPipActivity.clearLastParentBeforePip();
+        }
         // If applicable let the TaskOrganizer know the Task is vanishing.
         setTaskOrganizer(null);
 
@@ -3334,11 +3330,16 @@ class Task extends TaskFragment {
         // We intend to let organizer manage task visibility but it doesn't
         // have enough information until we finish shell transitions.
         // In the mean time we do an easy fix here.
-        final boolean show = isVisible() || isAnimating(TRANSITION | PARENTS | CHILDREN);
+        final boolean visible = isVisible();
+        final boolean show = visible || isAnimating(TRANSITION | PARENTS | CHILDREN);
         if (mSurfaceControl != null) {
             if (show != mLastSurfaceShowing) {
                 t.setVisibility(mSurfaceControl, show);
             }
+        }
+        // Only show the overlay if the task has other visible children
+        if (mOverlayHost != null) {
+            mOverlayHost.setVisibility(t, visible);
         }
         mLastSurfaceShowing = show;
     }
@@ -3450,13 +3451,22 @@ class Task extends TaskFragment {
                 && info.pictureInPictureParams.isLaunchIntoPip()
                 && top.getLastParentBeforePip() != null)
                         ? top.getLastParentBeforePip().mTaskId : INVALID_TASK_ID;
+        info.lastParentTaskIdBeforePip = top != null && top.getLastParentBeforePip() != null
+                ? top.getLastParentBeforePip().mTaskId : INVALID_TASK_ID;
         info.shouldDockBigOverlays = top != null && top.shouldDockBigOverlays;
         info.mTopActivityLocusId = top != null ? top.getLocusId() : null;
 
         final boolean isTopActivityResumed = top != null
                 && top.getOrganizedTask() == this && top.isState(RESUMED);
-        // Whether the direct top activity is in size compat mode on foreground.
-        info.topActivityInSizeCompat = isTopActivityResumed && top.inSizeCompatMode();
+        final boolean isTopActivityVisible = top != null
+                && top.getOrganizedTask() == this && top.isVisible();
+        // Whether the direct top activity is in size compat mode
+        info.topActivityInSizeCompat = isTopActivityVisible && top.inSizeCompatMode();
+        if (info.topActivityInSizeCompat
+                && mWmService.mLetterboxConfiguration.isTranslucentLetterboxingEnabled()) {
+            // We hide the restart button in case of transparent activities.
+            info.topActivityInSizeCompat = top.fillsParent();
+        }
         // Whether the direct top activity is eligible for letterbox education.
         info.topActivityEligibleForLetterboxEducation = isTopActivityResumed
                 && top.isEligibleForLetterboxEducation();
@@ -3472,6 +3482,26 @@ class Task extends TaskFragment {
         info.isFocused = isFocused();
         info.isVisible = hasVisibleChildren();
         info.isSleeping = shouldSleepActivities();
+        info.isLetterboxDoubleTapEnabled = top != null
+                && top.mLetterboxUiController.isLetterboxDoubleTapEducationEnabled();
+        info.topActivityLetterboxVerticalPosition = TaskInfo.PROPERTY_VALUE_UNSET;
+        info.topActivityLetterboxHorizontalPosition = TaskInfo.PROPERTY_VALUE_UNSET;
+        info.topActivityLetterboxWidth = TaskInfo.PROPERTY_VALUE_UNSET;
+        info.topActivityLetterboxHeight = TaskInfo.PROPERTY_VALUE_UNSET;
+        info.isFromLetterboxDoubleTap = top != null && top.mLetterboxUiController.isFromDoubleTap();
+        if (info.isLetterboxDoubleTapEnabled) {
+            info.topActivityLetterboxWidth = top.getBounds().width();
+            info.topActivityLetterboxHeight = top.getBounds().height();
+            if (info.topActivityLetterboxWidth < info.topActivityLetterboxHeight) {
+                // Pillarboxed
+                info.topActivityLetterboxHorizontalPosition =
+                        top.mLetterboxUiController.getLetterboxPositionForHorizontalReachability();
+            } else {
+                // Letterboxed
+                info.topActivityLetterboxVerticalPosition =
+                        top.mLetterboxUiController.getLetterboxPositionForVerticalReachability();
+            }
+        }
     }
 
     /**
@@ -4204,13 +4234,7 @@ class Task extends TaskFragment {
 
     @Override
     boolean showSurfaceOnCreation() {
-        if (mCreatedByOrganizer) {
-            // Tasks created by the organizer are default visible because they can synchronously
-            // update the leash before new children are added to the task.
-            return true;
-        }
-        // Organized tasks handle their own surface visibility
-        return !canBeOrganized();
+        return false;
     }
 
     @Override
@@ -5012,11 +5036,13 @@ class Task extends TaskFragment {
             // Not ready yet!
             return false;
         }
+
         final ActivityRecord topActivity = topRunningActivity(true /* focusableOnly */);
         if (topActivity == null) {
             // There are no activities left in this task, let's look somewhere else.
             return resumeNextFocusableActivityWhenRootTaskIsEmpty(prev, options);
         }
+
         final boolean[] resumed = new boolean[1];
         final TaskFragment topFragment = topActivity.getTaskFragment();
         resumed[0] = topFragment.resumeTopActivity(prev, options, deferPause);
@@ -5097,11 +5123,6 @@ class Task extends TaskFragment {
         // Slot the activity into the history root task and proceed
         ProtoLog.i(WM_DEBUG_ADD_REMOVE, "Adding activity %s to task %s "
                         + "callers: %s", r, task, new RuntimeException("here").fillInStackTrace());
-
-        if (mActivityPluginDelegate != null) {
-            mActivityPluginDelegate.activityInvokeNotification
-                (r.info.packageName, getWindowingMode() == WINDOWING_MODE_FULLSCREEN);
-        }
 
         // The transition animation and starting window are not needed if {@code allowMoveToFront}
         // is false, because the activity won't be visible.
@@ -5726,7 +5747,7 @@ class Task extends TaskFragment {
                 false /* deferResume */);
 
         ActivityRecord topActivity = getDisplayArea().topRunningActivity();
-        Task topRootTask = topActivity.getRootTask();
+        Task topRootTask = topActivity == null ? null : topActivity.getRootTask();
         if (topRootTask != null && topRootTask != this && topActivity.isState(RESUMED)) {
             // Usually resuming a top activity triggers the next app transition, but nothing's got
             // resumed in this case, so we need to execute it explicitly.
@@ -5890,8 +5911,11 @@ class Task extends TaskFragment {
             final int taskId = activity != null
                     ? mTaskSupervisor.getNextTaskIdForUser(activity.mUserId)
                     : mTaskSupervisor.getNextTaskIdForUser();
+            final int activityType = getActivityType();
             task = new Task.Builder(mAtmService)
                     .setTaskId(taskId)
+                    .setActivityType(activityType != ACTIVITY_TYPE_UNDEFINED ? activityType
+                            : ACTIVITY_TYPE_STANDARD)
                     .setActivityInfo(info)
                     .setActivityOptions(options)
                     .setIntent(intent)
@@ -6170,13 +6194,6 @@ class Task extends TaskFragment {
         return mAnimatingActivityRegistry;
     }
 
-    public void onARStopTriggered(ActivityRecord r) {
-        if (mActivityPluginDelegate != null && getWindowingMode() != WINDOWING_MODE_UNDEFINED) {
-                            mActivityPluginDelegate.activitySuspendNotification
-                                (r.info.applicationInfo.packageName, getWindowingMode() == WINDOWING_MODE_FULLSCREEN, false);
-                        }
-    }
-
     @Override
     void executeAppTransition(ActivityOptions options) {
         mDisplayContent.executeAppTransition();
@@ -6428,6 +6445,11 @@ class Task extends TaskFragment {
             return this;
         }
 
+        Builder setRemoveWithTaskOrganizer(boolean removeWithTaskOrganizer) {
+            mRemoveWithTaskOrganizer = removeWithTaskOrganizer;
+            return this;
+        }
+
         private Builder setUserId(int userId) {
             mUserId = userId;
             return this;
@@ -6625,7 +6647,7 @@ class Task extends TaskFragment {
             mCallingPackage = mActivityInfo.packageName;
             mResizeMode = mActivityInfo.resizeMode;
             mSupportsPictureInPicture = mActivityInfo.supportsPictureInPicture();
-            if (mActivityOptions != null) {
+            if (!mRemoveWithTaskOrganizer && mActivityOptions != null) {
                 mRemoveWithTaskOrganizer = mActivityOptions.getRemoveWithTaskOranizer();
             }
 

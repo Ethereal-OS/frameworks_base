@@ -164,13 +164,13 @@ public class PackageParser {
     public static final boolean DEBUG_JAR = false;
     public static final boolean DEBUG_PARSER = false;
     public static final boolean DEBUG_BACKUP = false;
-    public static final boolean LOG_PARSE_TIMINGS = Build.IS_DEBUGGABLE;
+    public static final boolean LOG_PARSE_TIMINGS = Build.IS_ENG;
     public static final int LOG_PARSE_TIMINGS_THRESHOLD_MS = 100;
 
     private static final String PROPERTY_CHILD_PACKAGES_ENABLED =
             "persist.sys.child_packages_enabled";
 
-    public static final boolean MULTI_PACKAGE_APK_ENABLED = Build.IS_DEBUGGABLE &&
+    public static final boolean MULTI_PACKAGE_APK_ENABLED = Build.IS_ENG &&
             SystemProperties.getBoolean(PROPERTY_CHILD_PACKAGES_ENABLED, false);
 
     public static final float DEFAULT_PRE_O_MAX_ASPECT_RATIO = 1.86f;
@@ -3637,7 +3637,11 @@ public class PackageParser {
             ai.privateFlags |= ApplicationInfo.PRIVATE_FLAG_ALLOW_CLEAR_USER_DATA_ON_FAILED_RESTORE;
         }
 
-        ai.privateFlags |= ApplicationInfo.PRIVATE_FLAG_ALLOW_AUDIO_PLAYBACK_CAPTURE;
+        if (sa.getBoolean(
+                R.styleable.AndroidManifestApplication_allowAudioPlaybackCapture,
+                owner.applicationInfo.targetSdkVersion >= Build.VERSION_CODES.Q)) {
+            ai.privateFlags |= ApplicationInfo.PRIVATE_FLAG_ALLOW_AUDIO_PLAYBACK_CAPTURE;
+        }
 
         if (sa.getBoolean(
                 R.styleable.AndroidManifestApplication_requestLegacyExternalStorage,
@@ -4671,43 +4675,7 @@ public class PackageParser {
     }
 
     private void setActivityResizeMode(ActivityInfo aInfo, TypedArray sa, Package owner) {
-        final boolean appExplicitDefault = (owner.applicationInfo.privateFlags
-                & (PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE
-                | PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_UNRESIZEABLE)) != 0;
-
-        if (sa.hasValue(R.styleable.AndroidManifestActivity_resizeableActivity)
-                || appExplicitDefault) {
-            // Activity or app explicitly set if it is resizeable or not;
-            final boolean appResizeable = (owner.applicationInfo.privateFlags
-                    & PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE) != 0;
-            if (sa.getBoolean(R.styleable.AndroidManifestActivity_resizeableActivity,
-                    appResizeable)) {
-                aInfo.resizeMode = RESIZE_MODE_RESIZEABLE;
-            } else {
-                aInfo.resizeMode = RESIZE_MODE_UNRESIZEABLE;
-            }
-            return;
-        }
-
-        if ((owner.applicationInfo.privateFlags
-                & PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION) != 0) {
-            // The activity or app didn't explicitly set the resizing option, however we want to
-            // make it resize due to the sdk version it is targeting.
-            aInfo.resizeMode = RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION;
-            return;
-        }
-
-        // resize preference isn't set and target sdk version doesn't support resizing apps by
-        // default. For the app to be resizeable if it isn't fixed orientation or immersive.
-        if (aInfo.isFixedOrientationPortrait()) {
-            aInfo.resizeMode = RESIZE_MODE_FORCE_RESIZABLE_PORTRAIT_ONLY;
-        } else if (aInfo.isFixedOrientationLandscape()) {
-            aInfo.resizeMode = RESIZE_MODE_FORCE_RESIZABLE_LANDSCAPE_ONLY;
-        } else if (aInfo.isFixedOrientation()) {
-            aInfo.resizeMode = RESIZE_MODE_FORCE_RESIZABLE_PRESERVE_ORIENTATION;
-        } else {
-            aInfo.resizeMode = RESIZE_MODE_FORCE_RESIZEABLE;
-        }
+        aInfo.resizeMode = RESIZE_MODE_RESIZEABLE;
     }
 
     /**
@@ -4715,10 +4683,8 @@ public class PackageParser {
      * ratio set.
      */
     private void setMaxAspectRatio(Package owner) {
-        // Default to (1.86) 16.7:9 aspect ratio for pre-O apps and unset for O and greater.
-        // NOTE: 16.7:9 was the max aspect ratio Android devices can support pre-O per the CDD.
-        float maxAspectRatio = owner.applicationInfo.targetSdkVersion < O
-                ? DEFAULT_PRE_O_MAX_ASPECT_RATIO : 0;
+        // Start at an unlimited aspect ratio unless we get a more restrictive one
+        float maxAspectRatio = 0;
 
         if (owner.applicationInfo.maxAspectRatio != 0) {
             // Use the application max aspect ration as default if set.
@@ -5599,6 +5565,20 @@ public class PackageParser {
 
         if (data == null) {
             data = new Bundle();
+            data.putBoolean("batch_opted_out_by_default", true);
+            data.putBoolean("com.ad4screen.no_geoloc", true);
+            data.putBoolean("com.facebook.sdk.AutoLogAppEventsEnabled", false);
+            data.putBoolean("com.mixpanel.android.MPConfig.UseIpAddressForGeolocation", false);
+            data.putBoolean("com.webengage.sdk.android.location_tracking", false);
+            data.putBoolean("firebase_analytics_collection_deactivated", true);
+            data.putBoolean("firebase_analytics_collection_enabled", false);
+            data.putBoolean("firebase_crash_collection_enabled", false);
+            data.putBoolean("firebase_performance_collection_deactivated", true);
+            data.putBoolean("google_analytics_adid_collection_enabled", false);
+            data.putBoolean("google_analytics_ssaid_collection_enabled", false);
+            data.putBoolean("google_analytics_default_allow_ad_personalization_signals", false);
+            data.putString("com.ad4screen.tracking_mode", "Restricted");
+            data.putString("com.sprooki.LOCATION_SERVICES", "disable");
         }
 
         String name = sa.getNonConfigurationString(

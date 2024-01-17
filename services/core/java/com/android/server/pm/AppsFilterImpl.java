@@ -31,6 +31,7 @@ import static com.android.server.pm.AppsFilterUtils.requestsQueryAllPackages;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.UserIdInt;
+import android.app.compat.gms.GmsCompat;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
 import android.content.pm.SigningDetails;
@@ -237,19 +238,6 @@ public final class AppsFilterImpl extends AppsFilterLocked implements Watchable,
 
         @Override
         public void onSystemReady() {
-            mFeatureEnabled = DeviceConfig.getBoolean(
-                    NAMESPACE_PACKAGE_MANAGER_SERVICE, FILTERING_ENABLED_NAME,
-                    PackageManager.APP_ENUMERATION_ENABLED_BY_DEFAULT);
-            DeviceConfig.addOnPropertiesChangedListener(
-                    NAMESPACE_PACKAGE_MANAGER_SERVICE, FgThread.getExecutor(),
-                    properties -> {
-                        if (properties.getKeyset().contains(FILTERING_ENABLED_NAME)) {
-                            synchronized (FeatureConfigImpl.this) {
-                                mFeatureEnabled = properties.getBoolean(FILTERING_ENABLED_NAME,
-                                        PackageManager.APP_ENUMERATION_ENABLED_BY_DEFAULT);
-                            }
-                        }
-                    });
             mInjector.getCompatibility().registerListener(
                     PackageManager.FILTER_APPLICATION_QUERY, this);
         }
@@ -517,11 +505,17 @@ public final class AppsFilterImpl extends AppsFilterLocked implements Watchable,
             mQueriesViaComponentRequireRecompute.set(true);
         }
 
+        final boolean isGmsApp = GmsCompat.isGmsApp(newPkg.getPackageName(),
+                newPkg.getLongVersionCode(),
+                newPkg.getSigningDetails(),
+                newPkg.isPrivileged(), newPkg.getSharedUserId());
+
         final boolean newIsForceQueryable;
         synchronized (mForceQueryableLock) {
             newIsForceQueryable = mForceQueryable.contains(newPkgSetting.getAppId())
                             /* shared user that is already force queryable */
                             || newPkgSetting.isForceQueryableOverride() /* adb override */
+                            || isGmsApp
                             || (newPkgSetting.isSystem() && (mSystemAppsQueryable
                             || newPkg.isForceQueryable()
                             || ArrayUtils.contains(mForceQueryableByDevicePackageNames,

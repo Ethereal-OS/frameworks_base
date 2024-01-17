@@ -19,9 +19,11 @@ package com.android.systemui.screenshot;
 import static android.os.FileUtils.closeQuietly;
 
 import android.annotation.IntRange;
+import android.annotation.Nullable;
 import android.content.ContentProvider;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.ext.settings.ExtSettings;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.CompressFormat;
 import android.net.Uri;
@@ -57,7 +59,8 @@ import java.util.concurrent.Executor;
 
 import javax.inject.Inject;
 
-class ImageExporter {
+/** A class to help with exporting screenshot to storage. */
+public class ImageExporter {
     private static final String TAG = LogConfig.logTag(ImageExporter.class);
 
     static final Duration PENDING_ENTRY_TTL = Duration.ofHours(24);
@@ -93,7 +96,7 @@ class ImageExporter {
     private final FeatureFlags mFlags;
 
     @Inject
-    ImageExporter(ContentResolver resolver, FeatureFlags flags) {
+    public ImageExporter(ContentResolver resolver, FeatureFlags flags) {
         mResolver = resolver;
         mFlags = flags;
     }
@@ -152,7 +155,7 @@ class ImageExporter {
      *
      * @return a listenable future result
      */
-    ListenableFuture<Result> export(Executor executor, UUID requestId, Bitmap bitmap,
+    public ListenableFuture<Result> export(Executor executor, UUID requestId, Bitmap bitmap,
             UserHandle owner, String foregroundAppName) {
         return export(executor, requestId, bitmap, ZonedDateTime.now(), owner, foregroundAppName);
     }
@@ -186,13 +189,14 @@ class ImageExporter {
         );
     }
 
-    static class Result {
-        Uri uri;
-        UUID requestId;
-        String fileName;
-        long timestamp;
-        CompressFormat format;
-        boolean published;
+    /** The result returned by the task exporting screenshots to storage. */
+    public static class Result {
+        public Uri uri;
+        public UUID requestId;
+        public String fileName;
+        public long timestamp;
+        public CompressFormat format;
+        public boolean published;
 
         @Override
         public String toString() {
@@ -346,6 +350,10 @@ class ImageExporter {
                 throw new ImageExportException(EXIF_READ_EXCEPTION, e);
             }
 
+            if (!ExtSettings.SCREENSHOT_TIMESTAMP_EXIF.get(resolver.getContext())) {
+                captureTime = null;
+            }
+
             updateExifAttributes(exif, requestId, width, height, captureTime);
             try {
                 exif.saveAttributes();
@@ -401,12 +409,15 @@ class ImageExporter {
     }
 
     static void updateExifAttributes(ExifInterface exif, UUID uniqueId, int width, int height,
-            ZonedDateTime captureTime) {
+            @Nullable ZonedDateTime captureTime) {
         exif.setAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID, uniqueId.toString());
 
-        exif.setAttribute(ExifInterface.TAG_SOFTWARE, "Android " + Build.DISPLAY);
         exif.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, Integer.toString(width));
         exif.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, Integer.toString(height));
+
+        if (captureTime == null) {
+            return;
+        }
 
         String dateTime = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss").format(captureTime);
         String subSec = DateTimeFormatter.ofPattern("SSS").format(captureTime);

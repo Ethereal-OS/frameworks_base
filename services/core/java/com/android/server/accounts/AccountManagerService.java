@@ -4803,6 +4803,7 @@ public class AccountManagerService
 
     private abstract class Session extends IAccountAuthenticatorResponse.Stub
             implements IBinder.DeathRecipient, ServiceConnection {
+        private final Object mSessionLock = new Object();
         IAccountManagerResponse mResponse;
         final String mAccountType;
         final boolean mExpectActivityLaunch;
@@ -4932,7 +4933,10 @@ public class AccountManagerService
             p.setDataPosition(0);
             Bundle simulateBundle = p.readBundle();
             p.recycle();
-            Intent intent = bundle.getParcelable(AccountManager.KEY_INTENT, Intent.class);
+            Intent intent = bundle.getParcelable(AccountManager.KEY_INTENT);
+            if (intent != null && intent.getClass() != Intent.class) {
+                return false;
+            }
             Intent simulateIntent = simulateBundle.getParcelable(AccountManager.KEY_INTENT,
                     Intent.class);
             if (intent == null) {
@@ -5007,9 +5011,11 @@ public class AccountManagerService
         }
 
         private void unbind() {
-            if (mAuthenticator != null) {
-                mAuthenticator = null;
-                mContext.unbindService(this);
+            synchronized (mSessionLock) {
+                if (mAuthenticator != null) {
+                    mAuthenticator = null;
+                    mContext.unbindService(this);
+                }
             }
         }
 
@@ -5019,12 +5025,14 @@ public class AccountManagerService
 
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            mAuthenticator = IAccountAuthenticator.Stub.asInterface(service);
-            try {
-                run();
-            } catch (RemoteException e) {
-                onError(AccountManager.ERROR_CODE_REMOTE_EXCEPTION,
-                        "remote exception");
+            synchronized (mSessionLock) {
+                mAuthenticator = IAccountAuthenticator.Stub.asInterface(service);
+                try {
+                    run();
+                } catch (RemoteException e) {
+                    onError(AccountManager.ERROR_CODE_REMOTE_EXCEPTION,
+                            "remote exception");
+                }
             }
         }
 

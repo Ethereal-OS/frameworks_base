@@ -278,6 +278,9 @@ interface IPackageManager {
     void addCrossProfileIntentFilter(in IntentFilter intentFilter, String ownerPackage,
             int sourceUserId, int targetUserId, int flags);
 
+    void removeCrossProfileIntentFilter(in IntentFilter intentFilter, String ownerPackage,
+            int sourceUserId, int targetUserId, int flags);
+
     void clearCrossProfileIntentFilters(int sourceUserId, String ownerPackage);
 
     String[] setDistractingPackageRestrictionsAsUser(in String[] packageNames, int restrictionFlags,
@@ -803,4 +806,18 @@ interface IPackageManager {
     void setKeepUninstalledPackages(in List<String> packageList);
 
     boolean canPackageQuery(String sourcePackageName, String targetPackageName, int userId);
+
+    @nullable Bundle getExtraAppBindArgs(String packageName);
+
+    void skipSpecialRuntimePermissionAutoGrantsForPackage(String packageName, int userId, in List<String> permissions);
+
+    android.content.pm.GosPackageState getGosPackageState(String packageName, int userId);
+
+    boolean setGosPackageState(String packageName, int userId, in android.content.pm.GosPackageState updatedPs, int editorFlags);
+
+    PackageInfo findPackage(String packageName, long minVersion, in Bundle validSignaturesSha256);
+
+    boolean updateListOfBusyPackages(boolean add, in List<String> packageNames, IBinder callerBinder);
+
+    void updateSeInfo(String packageName);
 }

@@ -47,6 +47,7 @@ oneway interface IStatusBar
     void animateExpandSettingsPanel(String subPanel);
     void animateCollapsePanels();
     void togglePanel();
+    void toggleSettingsPanel();
 
     void showWirelessChargingAnimation(int batteryLevel);
 
@@ -149,7 +150,7 @@ oneway interface IStatusBar
     void showPinningEnterExitToast(boolean entering);
     void showPinningEscapeToast();
 
-    void showShutdownUi(boolean isReboot, String reason, boolean rebootCustom);
+    void showShutdownUi(boolean isReboot, String reason, boolean advancedReboot);
 
     /**
     * Used to show the authentication dialog (Biometrics, Device Credential).
@@ -340,7 +341,17 @@ oneway interface IStatusBar
     void enterStageSplitFromRunningApp(boolean leftOrTop);
 
     /**
-     * Used to block or unblock usage of gestural navigation
+     * Shows the media output switcher dialog.
+     *
+     * @param packageName of the session for which the output switcher is shown.
      */
-    void setBlockedGesturalNavigation(boolean blocked);
+    void showMediaOutputSwitcher(String packageName);
+
+    /** Ethereal additions. */
+    void toggleCameraFlash();
+
+    void screenPinningStateChanged(boolean enabled);
+    void leftInLandscapeChanged(boolean isLeft);
+    void killForegroundApp();
+
 }

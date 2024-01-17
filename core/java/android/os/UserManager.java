@@ -58,7 +58,6 @@ import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.location.LocationManager;
 import android.provider.Settings;
-import android.telephony.TelephonyManager;
 import android.util.AndroidException;
 import android.util.ArraySet;
 import android.util.Log;
@@ -171,6 +170,18 @@ public class UserManager {
      */
     @SystemApi
     public static final String USER_TYPE_SYSTEM_HEADLESS = "android.os.usertype.system.HEADLESS";
+
+    /**
+     * User type representing a parallel space without the ability of sharing media.
+     * @hide
+     */
+    public static final String USER_TYPE_PARALLEL_DEFAULT = "android.os.usertype.parallel.DEFAULT";
+
+    /**
+     * User type representing a parallel space with the ability of sharing media.
+     * @hide
+     */
+    public static final String USER_TYPE_PARALLEL_SHARE = "android.os.usertype.parallel.SHARE";
 
     /**
      * Flag passed to {@link #requestQuietModeEnabled} to request disabling quiet mode only if
@@ -595,8 +606,11 @@ public class UserManager {
     /**
      * Specifies if a user is disallowed from transferring files over USB.
      *
-     * <p>This restriction can only be set by a device owner, a profile owner on the primary
-     * user or a profile owner of an organization-owned managed profile on the parent profile.
+     * <p>This restriction can only be set by a <a href="https://developers.google.com/android/work/terminology#device_owner_do">
+     * device owner</a> or a <a href="https://developers.google.com/android/work/terminology#profile_owner_po">
+     * profile owner</a> on the primary user's profile or a profile owner of an organization-owned
+     * <a href="https://developers.google.com/android/work/terminology#managed_profile">
+     * managed profile</a> on the parent profile.
      * When it is set by a device owner, it applies globally. When it is set by a profile owner
      * on the primary user or by a profile owner of an organization-owned managed profile on
      * the parent profile, it disables the primary user from transferring files over USB. No other
@@ -1670,7 +1684,7 @@ public class UserManager {
     public static final int SWITCHABILITY_STATUS_SYSTEM_USER_LOCKED = 1 << 2;
 
     /**
-     * Result returned in {@link #getUserSwitchability()} indicating user swichability.
+     * Result returned in {@link #getUserSwitchability()} indicating user switchability.
      * @hide
      */
     @Retention(RetentionPolicy.SOURCE)
@@ -2037,25 +2051,16 @@ public class UserManager {
      * @hide
      */
     @Deprecated
-    @RequiresPermission(allOf = {
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.MANAGE_USERS}, // Can be INTERACT_ACROSS_USERS instead.
-            conditional = true)
+    @RequiresPermission(anyOf = {android.Manifest.permission.MANAGE_USERS,
+            android.Manifest.permission.INTERACT_ACROSS_USERS})
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     @UserHandleAware
     public boolean canSwitchUsers() {
-        boolean allowUserSwitchingWhenSystemUserLocked = Settings.Global.getInt(
-                mContext.getContentResolver(),
-                Settings.Global.ALLOW_USER_SWITCHING_WHEN_SYSTEM_USER_LOCKED, 0) != 0;
-        boolean isSystemUserUnlocked = isUserUnlocked(UserHandle.SYSTEM);
-        boolean inCall = false;
-        TelephonyManager telephonyManager = mContext.getSystemService(TelephonyManager.class);
-        if (telephonyManager != null) {
-            inCall = telephonyManager.getCallState() != TelephonyManager.CALL_STATE_IDLE;
+        try {
+            return mService.getUserSwitchability(mUserId) == SWITCHABILITY_STATUS_OK;
+        } catch (RemoteException re) {
+            throw re.rethrowFromSystemServer();
         }
-        boolean isUserSwitchDisallowed = hasUserRestrictionForUser(DISALLOW_USER_SWITCH, mUserId);
-        return (allowUserSwitchingWhenSystemUserLocked || isSystemUserUnlocked) && !inCall
-                && !isUserSwitchDisallowed;
     }
 
     /**
@@ -2089,34 +2094,14 @@ public class UserManager {
      * @return A {@link UserSwitchabilityResult} flag indicating if the user is switchable.
      * @hide
      */
-    @RequiresPermission(allOf = {Manifest.permission.READ_PHONE_STATE,
-            android.Manifest.permission.MANAGE_USERS,
-            android.Manifest.permission.INTERACT_ACROSS_USERS}, conditional = true)
+    @RequiresPermission(anyOf = {android.Manifest.permission.MANAGE_USERS,
+            android.Manifest.permission.INTERACT_ACROSS_USERS})
     public @UserSwitchabilityResult int getUserSwitchability(UserHandle userHandle) {
-        final TelephonyManager tm =
-                (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
-
-        int flags = SWITCHABILITY_STATUS_OK;
-        if (tm.getCallState() != TelephonyManager.CALL_STATE_IDLE) {
-            flags |= SWITCHABILITY_STATUS_USER_IN_CALL;
+        try {
+            return mService.getUserSwitchability(userHandle.getIdentifier());
+        } catch (RemoteException re) {
+            throw re.rethrowFromSystemServer();
         }
-        if (hasUserRestrictionForUser(DISALLOW_USER_SWITCH, userHandle)) {
-            flags |= SWITCHABILITY_STATUS_USER_SWITCH_DISALLOWED;
-        }
-
-        // System User is always unlocked in Headless System User Mode, so ignore this flag
-        if (!isHeadlessSystemUserMode()) {
-            final boolean allowUserSwitchingWhenSystemUserLocked = Settings.Global.getInt(
-                    mContext.getContentResolver(),
-                    Settings.Global.ALLOW_USER_SWITCHING_WHEN_SYSTEM_USER_LOCKED, 0) != 0;
-            final boolean systemUserUnlocked = isUserUnlocked(UserHandle.SYSTEM);
-
-            if (!allowUserSwitchingWhenSystemUserLocked && !systemUserUnlocked) {
-                flags |= SWITCHABILITY_STATUS_SYSTEM_USER_LOCKED;
-            }
-        }
-
-        return flags;
     }
 
     /**
@@ -4084,7 +4069,7 @@ public class UserManager {
         int aliveUserCount = 0;
         for (int i = 0; i < totalUserCount; i++) {
             UserInfo user = users.get(i);
-            if (!user.isGuest()) {
+            if (!user.isGuest() && !user.isParallel()) {
                 aliveUserCount++;
             }
         }
@@ -4603,10 +4588,6 @@ public class UserManager {
      * @hide
      */
     public boolean hasBadge(@UserIdInt int userId) {
-        if (!isProfile(userId)) {
-            // Since currently only profiles actually have badges, we can do this optimization.
-            return false;
-        }
         try {
             return mService.hasBadge(userId);
         } catch (RemoteException re) {

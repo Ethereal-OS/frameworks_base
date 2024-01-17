@@ -22,6 +22,7 @@ import static android.app.PendingIntent.FLAG_MUTABLE;
 import static android.app.PendingIntent.FLAG_UPDATE_CURRENT;
 import static android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT;
+import static android.content.Intent.FLAG_ACTIVITY_NO_USER_ACTION;
 import static android.content.pm.LauncherApps.FLAG_CACHE_BUBBLE_SHORTCUTS;
 import static android.content.pm.LauncherApps.FLAG_CACHE_NOTIFICATION_SHORTCUTS;
 import static android.content.pm.LauncherApps.FLAG_CACHE_PEOPLE_TILE_SHORTCUTS;
@@ -96,14 +97,18 @@ import com.android.internal.util.CollectionUtils;
 import com.android.internal.util.Preconditions;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
+import com.android.server.app.AppLockManagerServiceInternal;
 import com.android.server.pm.parsing.pkg.AndroidPackage;
 import com.android.server.wm.ActivityTaskManagerInternal;
+
+import ink.kaleidoscope.server.ParallelSpaceManagerService;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 
@@ -185,6 +190,8 @@ public class LauncherAppsService extends SystemService {
 
         final LauncherAppsServiceInternal mInternal;
 
+        private final AppLockManagerServiceInternal mAppLockManagerInternal;
+
         public LauncherAppsImpl(Context context) {
             mContext = context;
             mIPM = AppGlobals.getPackageManager();
@@ -206,6 +213,7 @@ public class LauncherAppsService extends SystemService {
             mShortcutServiceInternal.addShortcutChangeCallback(mShortcutChangeHandler);
             mCallbackHandler = BackgroundThread.getHandler();
             mDpm = (DevicePolicyManager) mContext.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            mAppLockManagerInternal = LocalServices.getService(AppLockManagerServiceInternal.class);
             mInternal = new LocalService();
         }
 
@@ -651,6 +659,7 @@ public class LauncherAppsService extends SystemService {
 
         private List<LauncherActivityInfoInternal> queryIntentLauncherActivities(
                 Intent intent, int callingUid, UserHandle user) {
+            final Set<String> hiddenApps = mAppLockManagerInternal.getHiddenPackages(user.getIdentifier());
             final List<ResolveInfo> apps = mPackageManagerInternal.queryIntentActivities(intent,
                     intent.resolveTypeIfNeeded(mContext.getContentResolver()),
                     PackageManager.MATCH_DIRECT_BOOT_AWARE
@@ -663,6 +672,10 @@ public class LauncherAppsService extends SystemService {
                 final String packageName = ri.activityInfo.packageName;
                 if (packageName == null) {
                     // should not happen
+                    continue;
+                }
+                if (hiddenApps.contains(packageName)) {
+                    if (DEBUG) Slog.d(TAG, "Skipping package " + packageName);
                     continue;
                 }
                 final IncrementalStatesInfo incrementalStatesInfo =
@@ -1114,12 +1127,19 @@ public class LauncherAppsService extends SystemService {
 
             // Flag for bubble
             ActivityOptions options = ActivityOptions.fromBundle(startActivityOptions);
-            if (options != null && options.isApplyActivityFlagsForBubbles()) {
-                // Flag for bubble to make behaviour match documentLaunchMode=always.
-                intents[0].addFlags(FLAG_ACTIVITY_NEW_DOCUMENT);
-                intents[0].addFlags(FLAG_ACTIVITY_MULTIPLE_TASK);
+            if (options != null) {
+                if (options.isApplyActivityFlagsForBubbles()) {
+                    // Flag for bubble to make behaviour match documentLaunchMode=always.
+                    intents[0].addFlags(FLAG_ACTIVITY_NEW_DOCUMENT);
+                    intents[0].addFlags(FLAG_ACTIVITY_MULTIPLE_TASK);
+                }
+                if (options.isApplyMultipleTaskFlagForShortcut()) {
+                    intents[0].addFlags(FLAG_ACTIVITY_MULTIPLE_TASK);
+                }
+                if (options.isApplyNoUserActionFlagForShortcut()) {
+                    intents[0].addFlags(FLAG_ACTIVITY_NO_USER_ACTION);
+                }
             }
-
             intents[0].addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             intents[0].setSourceBounds(sourceBounds);
 
@@ -1355,7 +1375,8 @@ public class LauncherAppsService extends SystemService {
         private boolean isEnabledProfileOf(UserHandle listeningUser, UserHandle user,
                 String debugMsg) {
             return mUserManagerInternal.isProfileAccessible(listeningUser.getIdentifier(),
-                    user.getIdentifier(), debugMsg, false);
+                    user.getIdentifier(), debugMsg, false) ||
+                    ParallelSpaceManagerService.isCurrentParallelUser(user.getIdentifier());
         }
 
         /** Returns whether or not the result to the listener should be filtered. */

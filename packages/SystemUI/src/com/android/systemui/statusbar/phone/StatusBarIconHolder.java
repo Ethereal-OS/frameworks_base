@@ -23,7 +23,9 @@ import android.graphics.drawable.Icon;
 import android.os.UserHandle;
 
 import com.android.internal.statusbar.StatusBarIcon;
+import com.android.systemui.statusbar.connectivity.ImsIconState;
 import com.android.systemui.statusbar.phone.PhoneStatusBarPolicy.BluetoothIconState;
+import com.android.systemui.statusbar.phone.PhoneStatusBarPolicy.NetworkTrafficState;
 import com.android.systemui.statusbar.phone.StatusBarSignalPolicy.CallIndicatorIconState;
 import com.android.systemui.statusbar.phone.StatusBarSignalPolicy.MobileIconState;
 import com.android.systemui.statusbar.phone.StatusBarSignalPolicy.WifiIconState;
@@ -66,7 +68,9 @@ public class StatusBarIconHolder {
 
     public static final int TYPE_BLUETOOTH = 5;
 
-    public static final int TYPE_NETWORK_TRAFFIC = 42;
+    public static final int TYPE_IMS = 6;
+
+    public static final int TYPE_NETWORK_TRAFFIC = 7;
 
     @IntDef({
             TYPE_ICON,
@@ -75,6 +79,7 @@ public class StatusBarIconHolder {
             TYPE_MOBILE_NEW,
             TYPE_WIFI_NEW,
             TYPE_BLUETOOTH,
+            TYPE_IMS,
             TYPE_NETWORK_TRAFFIC
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -84,8 +89,23 @@ public class StatusBarIconHolder {
     private WifiIconState mWifiState;
     private MobileIconState mMobileState;
     private BluetoothIconState mBluetoothState;
+    private ImsIconState mImsState;
+    private NetworkTrafficState mNetworkTrafficState;
+
     private @IconType int mType = TYPE_ICON;
     private int mTag = 0;
+
+    /** Returns a human-readable string representing the given type. */
+    public static String getTypeString(@IconType int type) {
+        switch(type) {
+            case TYPE_ICON: return "ICON";
+            case TYPE_WIFI: return "WIFI_OLD";
+            case TYPE_MOBILE: return "MOBILE_OLD";
+            case TYPE_MOBILE_NEW: return "MOBILE_NEW";
+            case TYPE_WIFI_NEW: return "WIFI_NEW";
+            default: return "UNKNOWN";
+        }
+    }
 
     private StatusBarIconHolder() {
     }
@@ -133,10 +153,18 @@ public class StatusBarIconHolder {
     }
 
     /** */
-    public static StatusBarIconHolder fromBluetoothIconState(BluetoothIconState state) {
+    public static StatusBarIconHolder fromImsIconState(ImsIconState state) {
         StatusBarIconHolder holder = new StatusBarIconHolder();
-        holder.mBluetoothState = state;
-        holder.mType = TYPE_BLUETOOTH;
+        holder.mImsState = state;
+        holder.mType = TYPE_IMS;
+        return holder;
+    }
+
+    /** */
+    public static StatusBarIconHolder fromNetworkTrafficState(NetworkTrafficState state) {
+        StatusBarIconHolder holder = new StatusBarIconHolder();
+        holder.mNetworkTrafficState = state;
+        holder.mType = TYPE_NETWORK_TRAFFIC;
         return holder;
     }
 
@@ -149,6 +177,14 @@ public class StatusBarIconHolder {
         holder.mType = TYPE_MOBILE_NEW;
         holder.mTag = subId;
 
+        return holder;
+    }
+
+    /** */
+    public static StatusBarIconHolder fromBluetoothIconState(BluetoothIconState state) {
+        StatusBarIconHolder holder = new StatusBarIconHolder();
+        holder.mBluetoothState = state;
+        holder.mType = TYPE_BLUETOOTH;
         return holder;
     }
 
@@ -165,12 +201,6 @@ public class StatusBarIconHolder {
         holder.mIcon = new StatusBarIcon(UserHandle.SYSTEM, context.getPackageName(),
                 Icon.createWithResource(context, resId), 0, 0, contentDescription);
         holder.mTag = state.subId;
-        return holder;
-    }
-
-    public static StatusBarIconHolder fromNetworkTraffic() {
-        StatusBarIconHolder holder = new StatusBarIconHolder();
-        holder.mType = TYPE_NETWORK_TRAFFIC;
         return holder;
     }
 
@@ -214,6 +244,22 @@ public class StatusBarIconHolder {
         mBluetoothState = state;
     }
 
+    public ImsIconState getImsState() {
+        return mImsState;
+    }
+
+    public void setImsState(ImsIconState state) {
+        mImsState = state;
+    }
+
+    public NetworkTrafficState getNetworkTrafficState() {
+        return mNetworkTrafficState;
+    }
+
+    public void setNetworkTrafficState(NetworkTrafficState state) {
+        mNetworkTrafficState = state;
+    }
+
     public boolean isVisible() {
         switch (mType) {
             case TYPE_ICON:
@@ -229,6 +275,10 @@ public class StatusBarIconHolder {
                 return true;
             case TYPE_BLUETOOTH:
                 return mBluetoothState.visible;
+            case TYPE_IMS:
+                return mImsState.visible;
+            case TYPE_NETWORK_TRAFFIC:
+                return mNetworkTrafficState.visible;
             default:
                 return true;
         }
@@ -261,10 +311,25 @@ public class StatusBarIconHolder {
             case TYPE_BLUETOOTH:
                 mBluetoothState.visible = visible;
                 break;
+
+            case TYPE_IMS:
+                mImsState.visible = visible;
+                break;
+
+            case TYPE_NETWORK_TRAFFIC:
+                mNetworkTrafficState.visible = visible;
+                break;
         }
     }
 
     public int getTag() {
         return mTag;
+    }
+
+    @Override
+    public String toString() {
+        return "StatusBarIconHolder(type=" + getTypeString(mType)
+                + " tag=" + getTag()
+                + " visible=" + isVisible() + ")";
     }
 }

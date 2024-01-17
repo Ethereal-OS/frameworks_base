@@ -91,6 +91,8 @@ import com.android.internal.R;
 import com.android.internal.os.ClassLoaderFactory;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.XmlUtils;
+import com.android.server.ext.GmsSysServerHooks;
+import com.android.server.ext.PackageManagerHooks;
 import com.android.server.pm.SharedUidMigration;
 import com.android.server.pm.permission.CompatibilityPermissionInfo;
 import com.android.server.pm.pkg.component.ComponentMutateUtils;
@@ -2203,6 +2205,9 @@ public class ParsingPackageUtils {
             pkg.addActivity(a.getResult());
         }
 
+        PackageManagerHooks.amendParsedPackage(pkg);
+        GmsSysServerHooks.amendParsedPackage(pkg);
+
         if (hasActivityOrder) {
             pkg.sortActivities();
         }
@@ -2220,6 +2225,8 @@ public class ParsingPackageUtils {
         setSupportsSizeChanges(pkg);
 
         pkg.setHasDomainUrls(hasDomainURLs(pkg));
+
+        pkg.addUsesPermission(new ParsedUsesPermissionImpl(android.Manifest.permission.OTHER_SENSORS, 0));
 
         return input.success(pkg);
     }
@@ -2752,9 +2759,8 @@ public class ParsingPackageUtils {
      * ratio set.
      */
     private static void setMaxAspectRatio(ParsingPackage pkg) {
-        // Default to (1.86) 16.7:9 aspect ratio for pre-O apps and unset for O and greater.
-        // NOTE: 16.7:9 was the max aspect ratio Android devices can support pre-O per the CDD.
-        float maxAspectRatio = pkg.getTargetSdkVersion() < O ? DEFAULT_PRE_O_MAX_ASPECT_RATIO : 0;
+        // Start at an unlimited aspect ratio unless we get a more restrictive one
+        float maxAspectRatio = 0;
 
         float packageMaxAspectRatio = pkg.getMaxAspectRatio();
         if (packageMaxAspectRatio != 0) {

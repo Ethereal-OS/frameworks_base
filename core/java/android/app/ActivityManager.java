@@ -33,6 +33,7 @@ import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
 import android.annotation.UserIdInt;
+import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.ChangeId;
 import android.compat.annotation.EnabledSince;
 import android.compat.annotation.UnsupportedAppUsage;
@@ -86,6 +87,8 @@ import android.window.TaskSnapshot;
 
 import com.android.internal.app.LocalePicker;
 import com.android.internal.app.procstats.ProcessStats;
+import com.android.internal.gmscompat.sysservice.GmcUserManager;
+import com.android.internal.gmscompat.GmsHooks;
 import com.android.internal.os.RoSystemProperties;
 import com.android.internal.os.TransferPipe;
 import com.android.internal.util.FastPrintWriter;
@@ -182,7 +185,7 @@ public class ActivityManager {
     public static final int INSTR_FLAG_NO_RESTART = 1 << 3;
     /**
      * Force the check that instrumentation and the target package are signed with the same
-     * certificate even if {@link Build#IS_DEBUGGABLE} is {@code true}.
+     * certificate even if {@link Build.IS_ENG} is {@code true}.
      * @hide
      */
     public static final int INSTR_FLAG_ALWAYS_CHECK_SIGNATURE = 1 << 4;
@@ -1189,7 +1192,7 @@ public class ActivityManager {
     @UnsupportedAppUsage
     public static boolean isLowRamDeviceStatic() {
         return RoSystemProperties.CONFIG_LOW_RAM ||
-                (Build.IS_DEBUGGABLE && DEVELOPMENT_FORCE_LOW_RAM);
+                (Build.IS_ENG && DEVELOPMENT_FORCE_LOW_RAM);
     }
 
     /**
@@ -3625,7 +3628,11 @@ public class ActivityManager {
      */
     public List<RunningAppProcessInfo> getRunningAppProcesses() {
         try {
-            return getService().getRunningAppProcesses();
+            List<RunningAppProcessInfo> res = getService().getRunningAppProcesses();
+            if (GmsCompat.isEnabled()) {
+                res = GmsHooks.addRecentlyBoundPids(mContext, res);
+            }
+            return res;
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -3932,6 +3939,9 @@ public class ActivityManager {
      * with the given package.  This is the same as the kernel killing those
      * processes to reclaim memory; the system will take care of restarting
      * these processes in the future as needed.
+     *
+     * <p class="note">Third party applications can only use this API to kill their own processes.
+     * </p>
      *
      * @param packageName The name of the package whose processes are to
      * be killed.
@@ -4304,6 +4314,10 @@ public class ActivityManager {
             "android.permission.INTERACT_ACROSS_USERS_FULL"
     })
     public static int getCurrentUser() {
+        if (GmsCompat.isEnabled()) {
+            return GmcUserManager.amGetCurrentUser();
+        }
+
         try {
             return getService().getCurrentUserId();
         } catch (RemoteException e) {
@@ -4531,6 +4545,10 @@ public class ActivityManager {
      */
     @UnsupportedAppUsage
     public boolean isUserRunning(int userId) {
+        if (GmsCompat.isEnabled()) {
+            return GmcUserManager.amIsUserRunning(userId);
+        }
+
         try {
             return getService().isUserRunning(userId, 0);
         } catch (RemoteException e) {

@@ -29,8 +29,6 @@ import androidx.preference.Preference;
 import androidx.preference.PreferenceFragment;
 import androidx.preference.PreferenceScreen;
 
-import com.android.settingslib.collapsingtoolbar.CollapsingToolbarBaseActivity;
-
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
 import com.android.systemui.demomode.DemoModeController;
@@ -38,6 +36,8 @@ import com.android.systemui.fragments.FragmentService;
 import com.android.systemui.util.settings.GlobalSettings;
 
 import javax.inject.Inject;
+
+import com.android.settingslib.collapsingtoolbar.CollapsingToolbarBaseActivity;
 
 public class TunerActivity extends CollapsingToolbarBaseActivity implements
         PreferenceFragment.OnPreferenceStartFragmentCallback,
@@ -64,17 +64,22 @@ public class TunerActivity extends CollapsingToolbarBaseActivity implements
     protected void onCreate(Bundle savedInstanceState) {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         super.onCreate(savedInstanceState);
+
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        setContentView(R.layout.tuner_activity);
+/*
+        Toolbar toolbar = findViewById(R.id.action_bar);
+        if (toolbar != null) {
+            setActionBar(toolbar);
+        }
+*/
         if (getFragmentManager().findFragmentByTag(TAG_TUNER) == null) {
             final String action = getIntent().getAction();
-            final Fragment fragment;
-            if ("com.android.settings.action.DEMO_MODE".equals(action)) {
-                fragment = new DemoModeFragment(mDemoModeController, mGlobalSettings);
-            } else if ("com.android.settings.action.STATUS_BAR_TUNER".equals(action)) {
-                fragment = new StatusBarTuner();
-            } else {
-                fragment = new TunerFragment(mTunerService);
-            }
-
+            boolean showDemoMode = action != null && action.equals(
+                    "com.android.settings.action.DEMO_MODE");
+            final PreferenceFragment fragment = showDemoMode
+                    ? new DemoModeFragment(mDemoModeController, mGlobalSettings)
+                    : new TunerFragment(mTunerService);
             getFragmentManager().beginTransaction().replace(R.id.content_frame,
                     fragment, TAG_TUNER).commit();
         }

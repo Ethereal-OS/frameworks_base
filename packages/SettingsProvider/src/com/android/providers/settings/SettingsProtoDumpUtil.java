@@ -1822,6 +1822,9 @@ class SettingsProtoDumpUtil {
                 Settings.Secure.ACCESSIBILITY_MAGNIFICATION_FOLLOW_TYPING_ENABLED,
                 SecureSettingsProto.Accessibility
                         .ACCESSIBILITY_MAGNIFICATION_FOLLOW_TYPING_ENABLED);
+        dumpSetting(s, p,
+                Settings.Secure.ACCESSIBILITY_FONT_SCALING_HAS_BEEN_CHANGED,
+                SecureSettingsProto.Accessibility.ACCESSIBILITY_FONT_SCALING_HAS_BEEN_CHANGED);
         p.end(accessibilityToken);
 
         final long adaptiveSleepToken = p.start(SecureSettingsProto.ADAPTIVE_SLEEP);
@@ -2811,13 +2814,7 @@ class SettingsProtoDumpUtil {
                 Settings.System.RINGTONE,
                 SystemSettingsProto.Ringtone.DEFAULT_URI);
         dumpSetting(s, p,
-                Settings.System.RINGTONE2,
-                SystemSettingsProto.Ringtone.DEFAULT_URI);
-        dumpSetting(s, p,
                 Settings.System.RINGTONE_CACHE,
-                SystemSettingsProto.Ringtone.CACHE);
-        dumpSetting(s, p,
-                Settings.System.RINGTONE2_CACHE,
                 SystemSettingsProto.Ringtone.CACHE);
         p.end(ringtoneToken);
 

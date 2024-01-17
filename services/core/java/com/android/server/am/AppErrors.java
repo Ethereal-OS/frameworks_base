@@ -728,7 +728,7 @@ class AppErrors {
 
         return mService.mAtmInternal.handleAppCrashInActivityController(
                 name, pid, shortMsg, longMsg, timeMillis, crashInfo.stackTrace, () -> {
-                if (Build.IS_DEBUGGABLE
+                if (Build.IS_ENG
                         && "Native crash".equals(crashInfo.exceptionClassName)) {
                     Slog.w(TAG, "Skip killing native crashed app " + name
                             + "(" + pid + ") during testing");
@@ -827,6 +827,7 @@ class AppErrors {
 
         ApplicationErrorReport report = new ApplicationErrorReport();
         report.packageName = r.info.packageName;
+        report.packageVersion = r.info.longVersionCode;
         report.installerPackageName = errState.getErrorReportReceiver().getPackageName();
         report.processName = r.processName;
         report.time = timeMillis;

@@ -16,8 +16,8 @@
 package com.android.systemui.statusbar.policy;
 
 import android.annotation.Nullable;
-import android.app.AppOpsManager;
 import android.app.admin.DeviceAdminInfo;
+import android.app.AppOpsManager;
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.DevicePolicyManager.DeviceOwnerType;
 import android.content.BroadcastReceiver;
@@ -40,6 +40,7 @@ import android.os.Handler;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.provider.Settings;
 import android.security.KeyChain;
 import android.util.ArrayMap;
 import android.util.Log;
@@ -66,8 +67,8 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.List;
 
 import javax.inject.Inject;
 
@@ -237,8 +238,8 @@ public class SecurityControllerImpl implements SecurityController {
                 // Look for a MODE_ALLOWED permission to activate VPN.
                 boolean allowed = false;
                 for (AppOpsManager.OpEntry op : pkg.getOps()) {
-                    if (op.getOp() == AppOpsManager.OP_ACTIVATE_VPN
-                            && op.getMode() == AppOpsManager.MODE_ALLOWED) {
+                    if (op.getOp() == AppOpsManager.OP_ACTIVATE_VPN &&
+                            op.getMode() == AppOpsManager.MODE_ALLOWED) {
                         allowed = true;
                         break;
                     }
@@ -254,11 +255,7 @@ public class SecurityControllerImpl implements SecurityController {
 
     @Override
     public void connectLegacyVpn(VpnProfile profile) {
-        try {
-            mVpnManager.startLegacyVpn(profile);
-        } catch (IllegalStateException e) {
-            Log.e(TAG, "Failed to connect", e);
-        }
+        mVpnManager.startLegacyVpn(profile);
     }
 
     @Override
@@ -406,8 +403,13 @@ public class SecurityControllerImpl implements SecurityController {
     @Override
     public void onUserSwitched(int newUserId) {
         mCurrentUserId = newUserId;
+        final String globalVpnApp = Settings.Global.getString(mContext.getContentResolver(),
+                Settings.Global.GLOBAL_VPN_APP);
         final UserInfo newUserInfo = mUserManager.getUserInfo(newUserId);
-        if (newUserInfo.isRestricted()) {
+        if (mCurrentVpns.get(UserHandle.USER_SYSTEM) != null &&
+                mCurrentVpns.get(UserHandle.USER_SYSTEM).user.equals(globalVpnApp)) {
+            mVpnUserId = UserHandle.USER_SYSTEM;
+        } else if (newUserInfo.isRestricted()) {
             // VPN for a restricted profile is routed through its owner user
             mVpnUserId = newUserInfo.restrictedProfileParentId;
         } else {

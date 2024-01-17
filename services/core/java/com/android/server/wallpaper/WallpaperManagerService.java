@@ -1762,6 +1762,15 @@ public class WallpaperManagerService extends IWallpaperManager.Stub
         public void onDisplayReady(int displayId) {
             onDisplayReadyInternal(displayId);
         }
+
+        @Override
+        public void onScreenTurnedOn(int displayId) {
+            notifyScreenTurnedOn(displayId);
+        }
+        @Override
+        public void onScreenTurningOn(int displayId) {
+            notifyScreenTurningOn(displayId);
+        }
     }
 
     void initialize() {
@@ -2575,6 +2584,54 @@ public class WallpaperManagerService extends IWallpaperManager.Stub
         }
     }
 
+    /**
+     * Propagates screen turned on event to wallpaper engine.
+     */
+    @Override
+    public void notifyScreenTurnedOn(int displayId) {
+        synchronized (mLock) {
+            final WallpaperData data = mWallpaperMap.get(mCurrentUserId);
+            if (data != null
+                    && data.connection != null
+                    && data.connection.containsDisplay(displayId)) {
+                final IWallpaperEngine engine = data.connection
+                        .getDisplayConnectorOrCreate(displayId).mEngine;
+                if (engine != null) {
+                    try {
+                        engine.onScreenTurnedOn();
+                    } catch (RemoteException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+    }
+
+
+
+    /**
+     * Propagate screen turning on event to wallpaper engine.
+     */
+    @Override
+    public void notifyScreenTurningOn(int displayId) {
+        synchronized (mLock) {
+            final WallpaperData data = mWallpaperMap.get(mCurrentUserId);
+            if (data != null
+                    && data.connection != null
+                    && data.connection.containsDisplay(displayId)) {
+                final IWallpaperEngine engine = data.connection
+                        .getDisplayConnectorOrCreate(displayId).mEngine;
+                if (engine != null) {
+                    try {
+                        engine.onScreenTurningOn();
+                    } catch (RemoteException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+    }
+
     @Override
     public boolean setLockWallpaperCallback(IWallpaperManagerCallback cb) {
         checkPermission(android.Manifest.permission.INTERNAL_SYSTEM_WINDOW);
@@ -2728,6 +2785,13 @@ public class WallpaperManagerService extends IWallpaperManager.Stub
         checkPermission(android.Manifest.permission.SET_WALLPAPER_DIM_AMOUNT);
         synchronized (mLock) {
             WallpaperData data = mWallpaperMap.get(mCurrentUserId);
+            if (data == null) {
+                data = mWallpaperMap.get(UserHandle.USER_SYSTEM);
+                if (data == null) {
+                    Slog.e(TAG, "getWallpaperDimAmount: wallpaperData is null");
+                    return 0.0f;
+                }
+            }
             return data.mWallpaperDimAmount;
         }
     }

@@ -67,6 +67,7 @@ namespace android {
 using ui::DisplayMode;
 
 static const char OEM_BOOTANIMATION_FILE[] = "/oem/media/bootanimation.zip";
+static const char PRODUCT_BOOTANIMATION_DARK_FILE[] = "/product/media/bootanimation-dark.zip";
 static const char PRODUCT_BOOTANIMATION_FILE[] = "/product/media/bootanimation.zip";
 static const char SYSTEM_BOOTANIMATION_FILE[] = "/system/media/bootanimation.zip";
 static const char APEX_BOOTANIMATION_FILE[] = "/apex/com.android.bootanimation/etc/bootanimation.zip";
@@ -106,6 +107,7 @@ static const char PROGRESS_PROP_NAME[] = "service.bootanim.progress";
 static const char DISPLAYS_PROP_NAME[] = "persist.service.bootanim.displays";
 static const char CLOCK_ENABLED_PROP_NAME[] = "persist.sys.bootanim.clock.enabled";
 static const int ANIM_ENTRY_NAME_MAX = ANIM_PATH_MAX + 1;
+static const int MAX_CHECK_EXIT_INTERVAL_US = 50000;
 static constexpr size_t TEXT_POS_LEN_MAX = 16;
 static const int DYNAMIC_COLOR_COUNT = 4;
 static const char U_TEXTURE[] = "uTexture";
@@ -131,14 +133,14 @@ static const char IMAGE_FRAG_DYNAMIC_COLORING_SHADER_SOURCE[] = R"(
     uniform sampler2D uTexture;
     uniform float uFade;
     uniform float uColorProgress;
-    uniform vec3 uStartColor0;
-    uniform vec3 uStartColor1;
-    uniform vec3 uStartColor2;
-    uniform vec3 uStartColor3;
-    uniform vec3 uEndColor0;
-    uniform vec3 uEndColor1;
-    uniform vec3 uEndColor2;
-    uniform vec3 uEndColor3;
+    uniform vec4 uStartColor0;
+    uniform vec4 uStartColor1;
+    uniform vec4 uStartColor2;
+    uniform vec4 uStartColor3;
+    uniform vec4 uEndColor0;
+    uniform vec4 uEndColor1;
+    uniform vec4 uEndColor2;
+    uniform vec4 uEndColor3;
     varying highp vec2 vUv;
     void main() {
         vec4 mask = texture2D(uTexture, vUv);
@@ -151,12 +153,12 @@ static const char IMAGE_FRAG_DYNAMIC_COLORING_SHADER_SOURCE[] = R"(
             * step(cWhiteMaskThreshold, g)
             * step(cWhiteMaskThreshold, b)
             * step(cWhiteMaskThreshold, a);
-        vec3 color = r * mix(uStartColor0, uEndColor0, uColorProgress)
+        vec4 color = r * mix(uStartColor0, uEndColor0, uColorProgress)
                 + g * mix(uStartColor1, uEndColor1, uColorProgress)
                 + b * mix(uStartColor2, uEndColor2, uColorProgress)
                 + a * mix(uStartColor3, uEndColor3, uColorProgress);
-        color = mix(color, vec3((r + g + b + a) * 0.25), useWhiteMask);
-        gl_FragColor = vec4(color.x, color.y, color.z, (1.0 - uFade));
+        color = mix(color, vec4(vec3((r + g + b + a) * 0.25), 1.0), useWhiteMask);
+        gl_FragColor = vec4(color.x, color.y, color.z, (1.0 - uFade)) * color.a;
     })";
 static const char IMAGE_FRAG_SHADER_SOURCE[] = R"(
     precision mediump float;
@@ -459,7 +461,6 @@ public:
 
 EGLConfig BootAnimation::getEglConfig(const EGLDisplay& display) {
     const EGLint attribs[] = {
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_RED_SIZE,   8,
         EGL_GREEN_SIZE, 8,
         EGL_BLUE_SIZE,  8,
@@ -506,19 +507,7 @@ status_t BootAnimation::readyToRun() {
 
     mMaxWidth = android::base::GetIntProperty("ro.surface_flinger.max_graphics_width", 0);
     mMaxHeight = android::base::GetIntProperty("ro.surface_flinger.max_graphics_height", 0);
-
-    // check for overridden ui resolution
-    ui::Size resolution;
-    char *endptr;
-    std::string size_override = android::base::GetProperty("ro.config.size_override", "");
-
-    resolution.width = strtoimax(size_override.c_str(), &endptr, 10);
-    if (endptr[0] == ',')
-        resolution.height = strtoimax(endptr+1, NULL, 10);
-
-    if (resolution.width <= 0 || resolution.height <= 0)
-        resolution = displayMode.resolution;
-
+    ui::Size resolution = displayMode.resolution;
     resolution = limitSurfaceSize(resolution.width, resolution.height);
     // create the native surface
     sp<SurfaceControl> control = session()->createSurface(String8("BootAnimation"),
@@ -565,11 +554,6 @@ status_t BootAnimation::readyToRun() {
         }
         t.setLayerStack(control, ui::DEFAULT_LAYER_STACK);
     }
-
-    // Scale forced resolution to physical resolution
-    Rect forcedRes(0, 0, resolution.width, resolution.height);
-    Rect physRes(0, 0, displayMode.resolution.width, displayMode.resolution.height);
-    t.setDisplayProjection(mDisplayToken, ui::ROTATION_0, forcedRes, physRes);
 
     t.setLayer(control, 0x40000000)
         .apply();
@@ -740,8 +724,9 @@ void BootAnimation::findBootAnimationFile() {
         }
     }
 
+    const bool playDarkAnim = android::base::GetIntProperty("ro.boot.theme", 0) == 1;
     static const std::vector<std::string> bootFiles = {
-        APEX_BOOTANIMATION_FILE, PRODUCT_BOOTANIMATION_FILE,
+        APEX_BOOTANIMATION_FILE, playDarkAnim ? PRODUCT_BOOTANIMATION_DARK_FILE : PRODUCT_BOOTANIMATION_FILE,
         OEM_BOOTANIMATION_FILE, SYSTEM_BOOTANIMATION_FILE
     };
     static const std::vector<std::string> shutdownFiles = {
@@ -1509,12 +1494,12 @@ void BootAnimation::initDynamicColors() {
     for (int i = 0; i < DYNAMIC_COLOR_COUNT; i++) {
         float *startColor = mAnimation->startColors[i];
         float *endColor = mAnimation->endColors[i];
-        glUniform3f(glGetUniformLocation(mImageShader,
+        glUniform4f(glGetUniformLocation(mImageShader,
             (U_START_COLOR_PREFIX + std::to_string(i)).c_str()),
-            startColor[0], startColor[1], startColor[2]);
-        glUniform3f(glGetUniformLocation(mImageShader,
+            startColor[0], startColor[1], startColor[2], 1 /* alpha */);
+        glUniform4f(glGetUniformLocation(mImageShader,
             (U_END_COLOR_PREFIX + std::to_string(i)).c_str()),
-            endColor[0], endColor[1], endColor[2]);
+            endColor[0], endColor[1], endColor[2], 1 /* alpha */);
     }
     mImageColorProgressLocation = glGetUniformLocation(mImageShader, U_COLOR_PROGRESS);
 }
@@ -1689,7 +1674,17 @@ bool BootAnimation::playAnimation(const Animation& animation) {
                 checkExit();
             }
 
-            usleep(part.pause * ns2us(frameDuration));
+            int pauseDuration = part.pause * ns2us(frameDuration);
+            while(pauseDuration > 0 && !exitPending()){
+                if (pauseDuration > MAX_CHECK_EXIT_INTERVAL_US) {
+                    usleep(MAX_CHECK_EXIT_INTERVAL_US);
+                    pauseDuration -= MAX_CHECK_EXIT_INTERVAL_US;
+                } else {
+                    usleep(pauseDuration);
+                    break;
+                }
+                checkExit();
+            }
 
             if (exitPending() && !part.count && mCurrentInset >= mTargetInset &&
                 !part.hasFadingPhase()) {

@@ -55,7 +55,7 @@ public class ServiceListingTest {
 
     private ServiceListing mServiceListing;
     private Context mContext;
-    private PackageManager mPm;    
+    private PackageManager mPm;
 
     @Before
     public void setUp() {
@@ -147,7 +147,7 @@ public class ServiceListingTest {
         assertThat(captor.getValue().size()).isEqualTo(2);
     }
 
-    @Test    
+    @Test
     public void testCallback() {
         ServiceListing.Callback callback = mock(ServiceListing.Callback.class);
         mServiceListing.addCallback(callback);

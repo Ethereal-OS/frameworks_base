@@ -576,7 +576,7 @@ class BatteryExternalStatsWorker implements BatteryStatsImpl.ExternalStatsSync {
 
                             @Override
                             public void onBluetoothActivityEnergyInfoError(int errorCode) {
-                                Slog.w(TAG, "error reading Bluetooth stats: " + errorCode);
+                                //Slog.w(TAG, "error reading Bluetooth stats: " + errorCode);
                                 Bundle bundle = new Bundle();
                                 bundle.putParcelable(
                                         BatteryStats.RESULT_RECEIVER_CONTROLLER_KEY, null);
@@ -602,7 +602,7 @@ class BatteryExternalStatsWorker implements BatteryStatsImpl.ExternalStatsSync {
 
                             @Override
                             public void onError(TelephonyManager.ModemActivityInfoException e) {
-                                Slog.w(TAG, "error reading modem stats:" + e);
+                                //Slog.w(TAG, "error reading modem stats:" + e);
                                 temp.complete(null);
                             }
                         });
@@ -891,6 +891,7 @@ class BatteryExternalStatsWorker implements BatteryStatsImpl.ExternalStatsSync {
                     break;
                 case EnergyConsumerType.MOBILE_RADIO:
                     buckets[MeasuredEnergyStats.POWER_BUCKET_MOBILE_RADIO] = true;
+                    buckets[MeasuredEnergyStats.POWER_BUCKET_PHONE] = true;
                     break;
                 case EnergyConsumerType.DISPLAY:
                     buckets[MeasuredEnergyStats.POWER_BUCKET_SCREEN_ON] = true;

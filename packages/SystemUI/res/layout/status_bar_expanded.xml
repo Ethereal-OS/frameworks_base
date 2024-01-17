@@ -26,6 +26,7 @@
     android:layout_height="match_parent"
     android:background="@android:color/transparent">
 
+    <!-- reTicker -->
     <LinearLayout
         android:id="@+id/ticker_comeback"
         android:animateLayoutChanges="true"
@@ -62,6 +63,11 @@
             android:layout_height="wrap_content"
             android:textAppearance="@style/TextAppearance.Notifications.reTicker"/>
     </LinearLayout>
+
+    <com.android.systemui.common.ui.view.LongPressHandlingView
+        android:id="@+id/keyguard_long_press"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
     <ViewStub
         android:id="@+id/keyguard_qs_user_switch_stub"

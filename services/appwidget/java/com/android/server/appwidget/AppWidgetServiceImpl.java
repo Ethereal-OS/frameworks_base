@@ -553,13 +553,16 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
                 showBadge = mUserManager.hasBadge(appUserId);
                 final String suspendingPackage = mPackageManagerInternal.getSuspendingPackage(
                         appInfo.packageName, appUserId);
-                if (PLATFORM_PACKAGE_NAME.equals(suspendingPackage)) {
+                final SuspendDialogInfo dialogInfo =
+                        mPackageManagerInternal.getSuspendedDialogInfo(
+                                appInfo.packageName, suspendingPackage, appUserId);
+                final boolean isUnpauseDialog = dialogInfo != null &&
+                        dialogInfo.getNeutralButtonAction()
+                                == SuspendDialogInfo.BUTTON_ACTION_UNSUSPEND;
+                if (PLATFORM_PACKAGE_NAME.equals(suspendingPackage) && !isUnpauseDialog) {
                     onClickIntent = mDevicePolicyManagerInternal.createShowAdminSupportIntent(
                             appUserId, true);
                 } else {
-                    final SuspendDialogInfo dialogInfo =
-                            mPackageManagerInternal.getSuspendedDialogInfo(
-                                    appInfo.packageName, suspendingPackage, appUserId);
                     // onUnsuspend is null because we don't want to start any activity on
                     // unsuspending from a suspended widget.
                     onClickIntent = SuspendedAppActivity.createSuspendedAppInterceptIntent(
@@ -579,12 +582,6 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
                 }
             }
 
-            if (onClickIntent != null) {
-                views.setOnClickPendingIntent(android.R.id.background,
-                        PendingIntent.getActivity(mContext, 0, onClickIntent,
-                                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
-            }
-
             Icon icon = appInfo.icon != 0
                     ? Icon.createWithResource(appInfo.packageName, appInfo.icon)
                     : Icon.createWithResource(mContext, android.R.drawable.sym_def_app_icon);
@@ -596,6 +593,12 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
             for (int j = 0; j < widgetCount; j++) {
                 Widget widget = provider.widgets.get(j);
                 if (targetWidget != null && targetWidget != widget) continue;
+                if (onClickIntent != null) {
+                    views.setOnClickPendingIntent(android.R.id.background,
+                            PendingIntent.getActivity(mContext, widget.appWidgetId, onClickIntent,
+                                    PendingIntent.FLAG_UPDATE_CURRENT
+                                       | PendingIntent.FLAG_IMMUTABLE));
+                }
                 if (widget.replaceWithMaskedViewsLocked(views)) {
                     scheduleNotifyUpdateAppWidgetLocked(widget, widget.getEffectiveViewsLocked());
                 }
@@ -817,7 +820,8 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
             if (host != null) {
                 host.callbacks = null;
                 pruneHostLocked(host);
-                mAppOpsManagerInternal.updateAppWidgetVisibility(host.getWidgetUids(), false);
+                mAppOpsManagerInternal.updateAppWidgetVisibility(host.getWidgetUidsIfBound(),
+                        false);
             }
         }
     }
@@ -888,12 +892,8 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
             Host host = lookupHostLocked(id);
 
             if (host != null) {
-                try {
-                    mAppOpsManagerInternal.updateAppWidgetVisibility(host.getWidgetUids(), false);
-                } catch (NullPointerException e) {
-                    Slog.e(TAG, "setAppWidgetHidden(): Getting host uids: " + host.toString(), e);
-                    throw e;
-                }
+                mAppOpsManagerInternal.updateAppWidgetVisibility(host.getWidgetUidsIfBound(),
+                        false);
             }
         }
     }
@@ -4275,7 +4275,7 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
         IAppWidgetHost callbacks;
         boolean zombie; // if we're in safe mode, don't prune this just because nobody references it
 
-        private static final boolean DEBUG = true;
+        private static final boolean DEBUG = false;
 
         private static final String TAG = "AppWidgetServiceHost";
 
@@ -4345,14 +4345,15 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
                     PendingHostUpdate.appWidgetRemoved(appWidgetId));
         }
 
-        public SparseArray<String> getWidgetUids() {
+        public SparseArray<String> getWidgetUidsIfBound() {
             final SparseArray<String> uids = new SparseArray<>();
             for (int i = widgets.size() - 1; i >= 0; i--) {
                 final Widget widget = widgets.get(i);
                 if (widget.provider == null) {
                     if (DEBUG) {
-                        Slog.e(TAG, "Widget with no provider " + widget.toString());
+                        Slog.d(TAG, "Widget with no provider " + widget.toString());
                     }
+                    continue;
                 }
                 final ProviderId providerId = widget.provider.id;
                 uids.put(providerId.uid, providerId.componentName.getPackageName());
@@ -4498,7 +4499,7 @@ class AppWidgetServiceImpl extends IAppWidgetService.Stub implements WidgetBacku
     private final class BackupRestoreController {
         private static final String TAG = "BackupRestoreController";
 
-        private static final boolean DEBUG = true;
+        private static final boolean DEBUG = false;
 
         // Version of backed-up widget state.
         private static final int WIDGET_STATE_VERSION = 2;

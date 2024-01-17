@@ -48,7 +48,7 @@ public class TileServiceManager {
     private static final long MIN_BIND_TIME = 5000;
     private static final long UNBIND_DELAY = 30000;
 
-    public static final boolean DEBUG = true;
+    public static final boolean DEBUG = false;
 
     private static final String TAG = "TileServiceManager";
 
@@ -76,7 +76,8 @@ public class TileServiceManager {
         this(tileServices, handler, userTracker, new TileLifecycleManager(handler,
                 tileServices.getContext(), tileServices,
                 new PackageManagerAdapter(tileServices.getContext()), broadcastDispatcher,
-                new Intent().setComponent(component), userTracker.getUserHandle()));
+                new Intent(TileService.ACTION_QS_TILE).setComponent(component),
+                userTracker.getUserHandle()));
     }
 
     @VisibleForTesting

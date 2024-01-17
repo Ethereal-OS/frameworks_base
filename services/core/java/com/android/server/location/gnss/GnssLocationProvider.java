@@ -60,6 +60,9 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
+import android.ext.settings.ExtSettings;
+import android.ext.settings.GnssConstants;
+import android.ext.settings.IntSetting;
 import android.location.GnssCapabilities;
 import android.location.GnssStatus;
 import android.location.INetInitiatedListener;
@@ -100,6 +103,7 @@ import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.text.format.DateUtils;
 import android.util.Log;
+import android.util.Slog;
 import android.util.TimeUtils;
 
 import com.android.internal.annotations.GuardedBy;
@@ -127,6 +131,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * A GNSS implementation of LocationProvider used by LocationManager.
@@ -481,6 +486,25 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         mGnssNative.setNotificationCallbacks(this);
         mGnssNative.setLocationRequestCallbacks(this);
         mGnssNative.setTimeCallbacks(this);
+
+        Consumer<IntSetting> suplSettingObserver = setting -> {
+            Slog.d(TAG, "SUPL setting changed, value: " + setting.get(mContext));
+            reloadGpsProperties();
+        };
+
+        ExtSettings.GNSS_SUPL.registerObserver(mContext, suplSettingObserver, mHandler);
+
+        if (ExtSettings.isStandardGnssPsds(mContext)) {
+            Consumer<IntSetting> psdsSettingObserver = setting -> {
+                Slog.d(TAG, "PSDS setting changed, value: " + setting.get(mContext));
+                if (!isPsdsEnabled()) {
+                    Slog.d(TAG, "PSDS is disabled");
+                }
+                reloadGpsProperties();
+            };
+
+            ExtSettings.GNSS_PSDS_STANDARD.registerObserver(mContext, psdsSettingObserver, mHandler);
+        }
     }
 
     /** Called when system is ready. */
@@ -574,7 +598,7 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
     private void onNetworkAvailable() {
         mNtpTimeHelper.onNetworkAvailable();
         // Download only if supported, (prevents an unnecessary on-boot download)
-        if (mSupportsPsds) {
+        if (mSupportsPsds && isPsdsEnabled()) {
             synchronized (mLock) {
                 for (int psdsType : mPendingDownloadPsdsTypes) {
                     postWithWakeLockHeld(() -> handleDownloadPsdsData(psdsType));
@@ -667,6 +691,10 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         if (!mSupportsPsds) {
             // native code reports psds not supported, don't try
             Log.d(TAG, "handleDownloadPsdsData() called when PSDS not supported");
+            return;
+        }
+        if (!isPsdsEnabled()) {
+            Log.d(TAG, "handleDownloadPsdsData() called when PSDS is disabled");
             return;
         }
         if (!mNetworkConnectivityHandler.isDataNetworkConnected()) {
@@ -1720,17 +1748,9 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
                 mContext.getSystemService(Context.TELEPHONY_SERVICE);
         int type = AGPS_SETID_TYPE_NONE;
         String setId = null;
-        final Boolean isEmergency = mNIHandler.getInEmergency();
-
-        // Unless we are in an emergency, do not provide sensitive subscriber information
-        // to SUPL servers.
-        if (!isEmergency) {
-            mGnssNative.setAgpsSetId(type, "");
-            return;
-        }
 
         int subId = SubscriptionManager.getDefaultDataSubscriptionId();
-        if (isEmergency && mNetworkConnectivityHandler.getActiveSubId() >= 0) {
+        if (mNIHandler.getInEmergency() && mNetworkConnectivityHandler.getActiveSubId() >= 0) {
             subId = mNetworkConnectivityHandler.getActiveSubId();
         }
         if (SubscriptionManager.isValidSubscriptionId(subId)) {
@@ -1785,5 +1805,10 @@ public class GnssLocationProvider extends AbstractLocationProvider implements
         mGnssVisibilityControl.reportNfwNotification(proxyAppPackageName, protocolStack,
                 otherProtocolStackName, requestor, requestorId, responseType, inEmergencyMode,
                 isCachedLocation);
+    }
+
+    private boolean isPsdsEnabled() {
+        return ExtSettings.isStandardGnssPsds(mContext) &&
+                ExtSettings.GNSS_PSDS_STANDARD.get(mContext) != GnssConstants.PSDS_DISABLED;
     }
 }

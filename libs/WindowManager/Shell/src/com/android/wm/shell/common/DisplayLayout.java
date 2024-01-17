@@ -30,6 +30,8 @@ import static android.view.Surface.ROTATION_0;
 import static android.view.Surface.ROTATION_270;
 import static android.view.Surface.ROTATION_90;
 
+import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL;
+
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -38,7 +40,6 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Insets;
 import android.graphics.Rect;
-import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.SystemProperties;
 import android.provider.Settings;
@@ -51,7 +52,6 @@ import android.view.Gravity;
 import android.view.InsetsSource;
 import android.view.InsetsState;
 import android.view.Surface;
-import android.view.WindowManagerGlobal;
 
 import androidx.annotation.VisibleForTesting;
 
@@ -61,8 +61,6 @@ import com.android.internal.policy.SystemBarUtils;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.Objects;
-
-import com.android.internal.util.custom.NavbarUtils;
 
 /**
  * Contains information about the layout-properties of a display. This refers to internal layout
@@ -83,6 +81,7 @@ public class DisplayLayout {
     public static final int NAV_BAR_RIGHT = 1 << 1;
     public static final int NAV_BAR_BOTTOM = 1 << 2;
 
+
     private int mUiMode;
     private int mWidth;
     private int mHeight;
@@ -93,6 +92,7 @@ public class DisplayLayout {
     private final Rect mStableInsets = new Rect();
     private boolean mHasNavigationBar = false;
     private boolean mHasStatusBar = false;
+    private boolean mIsHideIMESpaceEnabled = true;
     private int mNavBarFrameHeight = 0;
     private boolean mAllowSeamlessRotationDespiteNavBarMoving = false;
     private boolean mNavigationBarCanMove = false;
@@ -101,8 +101,7 @@ public class DisplayLayout {
 
     /**
      * Different from {@link #equals(Object)}, this method compares the basic geometry properties
-     * of two {@link DisplayLayout} objects including width, height, rotation, density, cutout and
-     * insets.
+     * of two {@link DisplayLayout} objects including width, height, rotation, density, cutout.
      * @return {@code true} if the given {@link DisplayLayout} is identical geometry wise.
      */
     public boolean isSameGeometry(@NonNull DisplayLayout other) {
@@ -110,8 +109,7 @@ public class DisplayLayout {
                 && mHeight == other.mHeight
                 && mRotation == other.mRotation
                 && mDensityDpi == other.mDensityDpi
-                && Objects.equals(mCutout, other.mCutout)
-                && Objects.equals(mStableInsets, other.mStableInsets);
+                && Objects.equals(mCutout, other.mCutout);
     }
 
     @Override
@@ -171,6 +169,8 @@ public class DisplayLayout {
         rawDisplay.getDisplayInfo(info);
         init(info, context.getResources(), hasNavigationBar(info, context, displayId),
                 hasStatusBar(displayId));
+        mIsHideIMESpaceEnabled = Settings.System.getIntForUser(context.getContentResolver(),
+                Settings.System.HIDE_IME_SPACE_ENABLE , 0, UserHandle.USER_CURRENT) != 0;
     }
 
     public DisplayLayout(DisplayLayout dl) {
@@ -229,7 +229,14 @@ public class DisplayLayout {
         if (mHasStatusBar) {
             convertNonDecorInsetsToStableInsets(res, mStableInsets, mCutout, mHasStatusBar);
         }
-        mNavBarFrameHeight = getNavigationBarFrameHeight(res, mWidth > mHeight);
+
+        int mode = res.getInteger(
+            com.android.internal.R.integer.config_navBarInteractionMode);
+        if (mIsHideIMESpaceEnabled && (mode == NAV_BAR_MODE_GESTURAL)) {
+            mNavBarFrameHeight = getNavigationBarFrameHeightHidden(res, mWidth > mHeight);
+        } else {
+            mNavBarFrameHeight = getNavigationBarFrameHeight(res, mWidth > mHeight);
+        }
     }
 
     /**
@@ -497,20 +504,21 @@ public class DisplayLayout {
         }
     }
 
-    static boolean hasSoftNavigationBar(Context context, int displayId) {
-        if (displayId == Display.DEFAULT_DISPLAY && NavbarUtils.isEnabled(context)) {
-            return true;
-        }
-        try {
-            return WindowManagerGlobal.getWindowManagerService().hasNavigationBar(displayId);
-        } catch (RemoteException e) {
-            return false;
-        }
-    }
-
     static boolean hasNavigationBar(DisplayInfo info, Context context, int displayId) {
         if (displayId == Display.DEFAULT_DISPLAY) {
-            return hasSoftNavigationBar(context, displayId);
+            if (Settings.System.getIntForUser(context.getContentResolver(),
+                    Settings.System.FORCE_SHOW_NAVBAR, 0,
+                    UserHandle.USER_CURRENT) == 1) {
+                return true;
+            }
+            // Allow a system property to override this. Used by the emulator.
+            final String navBarOverride = SystemProperties.get("qemu.hw.mainkeys");
+            if ("1".equals(navBarOverride)) {
+                return false;
+            } else if ("0".equals(navBarOverride)) {
+                return true;
+            }
+            return context.getResources().getBoolean(R.bool.config_showNavigationBar);
         } else {
             boolean isUntrustedVirtualDisplay = info.type == Display.TYPE_VIRTUAL
                     && info.ownerUid != SYSTEM_UID;
@@ -523,7 +531,7 @@ public class DisplayLayout {
             // TODO(b/142569966): make sure VR2D and DisplayWindowSettings are moved here somehow.
         }
     }
-
+             
     static boolean hasStatusBar(int displayId) {
         return displayId == Display.DEFAULT_DISPLAY;
     }
@@ -567,6 +575,12 @@ public class DisplayLayout {
         }
     }
 
+    public static int getNavigationBarFrameHeightHidden(Resources res, boolean landscape) {
+        return res.getDimensionPixelSize(landscape
+                ? R.dimen.navigation_bar_frame_height_landscape_hide_ime
+                : R.dimen.navigation_bar_frame_height_hide_ime);
+    }
+    
     /** @see com.android.server.wm.DisplayPolicy#getNavigationBarFrameHeight */
     public static int getNavigationBarFrameHeight(Resources res, boolean landscape) {
         return res.getDimensionPixelSize(landscape

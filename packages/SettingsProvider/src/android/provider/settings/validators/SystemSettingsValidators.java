@@ -208,58 +208,26 @@ public class SystemSettingsValidators {
         VALIDATORS.put(System.WIFI_STATIC_DNS2, LENIENT_IP_ADDRESS_VALIDATOR);
         VALIDATORS.put(System.SHOW_BATTERY_PERCENT, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.NOTIFICATION_LIGHT_PULSE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.BUTTON_BACKLIGHT_ONLY_WHEN_PRESSED, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.NAVIGATION_BAR_SHOW, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.NAVIGATION_BAR_MODE_OVERLAY, ANY_STRING_VALIDATOR);
-        VALIDATORS.put(System.KEY_HOME_LONG_PRESS_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_HOME_DOUBLE_TAP_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_BACK_LONG_PRESS_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_MENU_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_MENU_LONG_PRESS_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_ASSIST_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_ASSIST_LONG_PRESS_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_APP_SWITCH_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.KEY_APP_SWITCH_LONG_PRESS_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.HOME_WAKE_SCREEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.BACK_WAKE_SCREEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.MENU_WAKE_SCREEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.ASSIST_WAKE_SCREEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.APP_SWITCH_WAKE_SCREEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.CAMERA_WAKE_SCREEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.CAMERA_SLEEP_ON_RELEASE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.CAMERA_LAUNCH, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.TOUCHSCREEN_GESTURE_HAPTIC_FEEDBACK, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.HIGH_TOUCH_SENSITIVITY_ENABLE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.HIGH_TOUCH_POLLING_RATE_ENABLE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.ACCELEROMETER_ROTATION_ANGLES, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.NAV_BAR_COMPACT_LAYOUT, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.NAVIGATION_BAR_HINT, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.NAVIGATION_BAR_MENU_ARROW_KEYS, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.STATUS_BAR_QUICK_QS_PULLDOWN, new InclusiveIntegerRangeValidator(0, 2));
-        VALIDATORS.put(System.DOUBLE_TAP_SLEEP_GESTURE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.VOLUME_WAKE_SCREEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.VOLBTN_MUSIC_CONTROLS, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.TORCH_LONG_PRESS_POWER_GESTURE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.TORCH_LONG_PRESS_POWER_TIMEOUT, new InclusiveIntegerRangeValidator(0, 3600));
-        VALIDATORS.put(System.VOLUME_ANSWER_CALL, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.LOCKSCREEN_PIN_SCRAMBLE_LAYOUT, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.CLICK_PARTIAL_SCREENSHOT, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.STATUS_BAR_CLOCK, new InclusiveIntegerRangeValidator(0, 2));
-        VALIDATORS.put(System.STATUS_BAR_AM_PM, new InclusiveIntegerRangeValidator(0, 2));
-        VALIDATORS.put(System.STATUS_BAR_BATTERY_STYLE, new InclusiveIntegerRangeValidator(0, 2));
-        VALIDATORS.put(System.STATUS_BAR_SHOW_BATTERY_PERCENT, new InclusiveIntegerRangeValidator(0, 2));
-        VALIDATORS.put(System.KEY_EDGE_LONG_SWIPE_ACTION, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.SWAP_VOLUME_KEYS_ON_ROTATION, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.INCREASING_RING, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.INCREASING_RING_START_VOLUME, new InclusiveFloatRangeValidator(0, 1));
         VALIDATORS.put(System.INCREASING_RING_RAMP_UP_TIME, new InclusiveFloatRangeValidator(5, 60));
-        VALIDATORS.put(System.INCALL_FEEDBACK_VIBRATE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.AUTO_BRIGHTNESS_ONE_SHOT, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.NAVIGATION_BAR_INVERSE, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.NAV_BAR_COMPACT_LAYOUT, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.VOLUME_BUTTON_MUSIC_CONTROL, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.USE_OLD_MOBILETYPE, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.LOCKSCREEN_BATTERY_INFO, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.NETWORK_TRAFFIC_LOCATION, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(System.NETWORK_TRAFFIC_MODE, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(System.NETWORK_TRAFFIC_AUTOHIDE, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.NETWORK_TRAFFIC_AUTOHIDE_THRESHOLD, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(System.NETWORK_TRAFFIC_UNITS, NON_NEGATIVE_INTEGER_VALIDATOR);
+        VALIDATORS.put(System.OMNIJAWS_WEATHER_ICON_PACK, ANY_STRING_VALIDATOR);
+        VALIDATORS.put(System.OMNI_LOCKSCREEN_WEATHER_ENABLED, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.AICP_LOCKSCREEN_WEATHER_STYLE, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.DISPLAY_TEMPERATURE_DAY, new InclusiveIntegerRangeValidator(0, 100000));
         VALIDATORS.put(System.DISPLAY_TEMPERATURE_NIGHT, new InclusiveIntegerRangeValidator(0, 100000));
         VALIDATORS.put(System.DISPLAY_TEMPERATURE_MODE, new InclusiveIntegerRangeValidator(0, 4));
         VALIDATORS.put(System.DISPLAY_AUTO_OUTDOOR_MODE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.DISPLAY_ANTI_FLICKER, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.DISPLAY_READING_MODE, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.DISPLAY_CABC, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.DISPLAY_COLOR_ENHANCE, BOOLEAN_VALIDATOR);
@@ -267,12 +235,14 @@ public class SystemSettingsValidators {
         VALIDATORS.put(System.DISPLAY_COLOR_ADJUSTMENT, new Validator() {
             @Override
             public boolean validate(String value) {
-                String[] colorAdjustment = value == null ?
-                        null : value.split(" ");
+                String[] colorAdjustment = null;
+                if (value != null) {
+                    colorAdjustment = value.split(" ");
+                }
                 if (colorAdjustment != null && colorAdjustment.length != 3) {
                     return false;
                 }
-                Validator floatValidator = new InclusiveFloatRangeValidator(0, 1);
+                final Validator floatValidator = new InclusiveFloatRangeValidator(0, 1);
                 return colorAdjustment == null ||
                         floatValidator.validate(colorAdjustment[0]) &&
                         floatValidator.validate(colorAdjustment[1]) &&
@@ -296,27 +266,7 @@ public class SystemSettingsValidators {
             }
         });
         VALIDATORS.put(System.LIVE_DISPLAY_HINTED, new InclusiveIntegerRangeValidator(-3, 1));
-        VALIDATORS.put(System.NETWORK_TRAFFIC_ENABLED, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.NETWORK_TRAFFIC_AUTOHIDE, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.NETWORK_TRAFFIC_UNIT_TYPE, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.DISPLAY_CUTOUT_HIDDEN, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.SWIPE_TO_SCREENSHOT, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.ADAPTIVE_PLAYBACK_ENABLED, BOOLEAN_VALIDATOR);
-        VALIDATORS.put(System.ADAPTIVE_PLAYBACK_TIMEOUT, NON_NEGATIVE_INTEGER_VALIDATOR);
-        VALIDATORS.put(System.RINGTONE_VIBRATION_PATTERN, new InclusiveIntegerRangeValidator(0, 5));
-        VALIDATORS.put(System.CUSTOM_RINGTONE_VIBRATION_PATTERN,
-                 new ListValidator(",") {
-
-                    @Override
-                    protected boolean isEntryValid(String entry) {
-                        return entry != null;
-                    }
-
-                    @Override
-                    protected boolean isItemValid(String item) {
-                        return new InclusiveIntegerRangeValidator(0, 1000).validate(item);
-                    }
-                });
-        VALIDATORS.put(System.FORCE_FULLSCREEN_CUTOUT_APPS, ANY_STRING_VALIDATOR);
+        VALIDATORS.put(System.DISPLAY_ANTI_FLICKER, BOOLEAN_VALIDATOR);
+        VALIDATORS.put(System.FINGERPRINT_WAKE_UNLOCK, NON_NEGATIVE_INTEGER_VALIDATOR);
     }
 }

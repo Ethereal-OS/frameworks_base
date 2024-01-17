@@ -1766,7 +1766,7 @@ public class AppStandbyControllerTests {
         assertAdminProtectedPackagesForTest(USER_ID, (String[]) null);
     }
 
-    @Test    
+    @Test
     @FlakyTest(bugId = 185169504)
     public void testUserInteraction_CrossProfile() throws Exception {
         mInjector.mRunningUsers = new int[] {USER_ID, USER_ID2, USER_ID3};

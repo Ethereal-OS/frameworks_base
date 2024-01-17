@@ -27,6 +27,8 @@
     <!-- Do not translate. Defines the slots for the right-hand side icons.  That is to say, the
          icons in the status bar that are not notifications. -->
     <string-array name="config_statusBarIcons">
+        <item><xliff:g id="id">@string/status_bar_network_traffic</xliff:g></item>
+        <item><xliff:g id="id">@string/status_bar_firewall</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_no_calling</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_call_strength</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_alarm_clock</xliff:g></item>
@@ -48,7 +50,6 @@
         <item><xliff:g id="id">@string/status_bar_cast</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_screen_record</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_vpn</xliff:g></item>
-        <item><xliff:g id="id">@string/status_bar_bluetooth</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_camera</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_microphone</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_location</xliff:g></item>
@@ -56,8 +57,10 @@
         <item><xliff:g id="id">@string/status_bar_volume</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_zen</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_ethernet</xliff:g></item>
+        <item><xliff:g id="id">@string/status_bar_bluetooth</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_wifi</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_hotspot</xliff:g></item>
+        <item><xliff:g id="id">@string/status_bar_ims</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_mobile</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_airplane</xliff:g></item>
         <item><xliff:g id="id">@string/status_bar_battery</xliff:g></item>
@@ -90,6 +93,7 @@
     <string translatable="false" name="status_bar_alarm_clock">alarm_clock</string>
     <string translatable="false" name="status_bar_secure">secure</string>
     <string translatable="false" name="status_bar_clock">clock</string>
+    <string translatable="false" name="status_bar_ims">ims</string>
     <string translatable="false" name="status_bar_mobile">mobile</string>
     <string translatable="false" name="status_bar_vpn">vpn</string>
     <string translatable="false" name="status_bar_ethernet">ethernet</string>
@@ -100,6 +104,8 @@
     <string translatable="false" name="status_bar_call_strength">call_strength</string>
     <string translatable="false" name="status_bar_sensors_off">sensors_off</string>
     <string translatable="false" name="status_bar_screen_record">screen_record</string>
+    <string translatable="false" name="status_bar_network_traffic">network_traffic</string>
+    <string translatable="false" name="status_bar_firewall">firewall</string>
 
     <!-- Flag indicating whether the surface flinger has limited
          alpha compositing functionality in hardware.  If set, the window
@@ -138,17 +144,17 @@
     <bool name="config_disableTransitionAnimation">false</bool>
 
     <!-- The duration (in milliseconds) of a short animation. -->
-    <integer name="config_shortAnimTime">200</integer>
+    <integer name="config_shortAnimTime">100</integer>
 
     <!-- The duration (in milliseconds) of a medium-length animation. -->
-    <integer name="config_mediumAnimTime">400</integer>
+    <integer name="config_mediumAnimTime">200</integer>
 
     <!-- The duration (in milliseconds) of a long animation. -->
-    <integer name="config_longAnimTime">500</integer>
+    <integer name="config_longAnimTime">250</integer>
 
     <!-- The duration (in milliseconds) of the activity open/close and fragment open/close animations. -->
-    <integer name="config_activityShortDur">150</integer>
-    <integer name="config_activityDefaultDur">220</integer>
+    <integer name="config_activityShortDur">72</integer>
+    <integer name="config_activityDefaultDur">106</integer>
 
     <!-- Fade out time for screen rotation -->
     <integer name="config_screen_rotation_fade_out">116</integer>
@@ -169,7 +175,7 @@
     <integer name="config_screen_rotation_color_transition">200</integer>
 
     <!-- The duration (in milliseconds) of the tooltip show/hide animations. -->
-    <integer name="config_tooltipAnimTime">150</integer>
+    <integer name="config_tooltipAnimTime">140</integer>
 
     <!-- Duration for the dim animation behind a dialog.  This may be either
          a percentage, which is relative to the duration of the enter/open
@@ -246,7 +252,7 @@
          dozing).  This should be enabled if you have such services and expect apps to
          correctly use them when installed on your device.  Otherwise, keep this disabled
          so that applications can still use their own mechanisms. -->
-    <bool name="config_enableAutoPowerModes">false</bool>
+    <bool name="config_enableAutoPowerModes">true</bool>
 
     <!-- Whether (if true) this is a kind of device that can be moved around (eg. phone/laptop),
          or (if false) something for which movement is either not measurable or should not count
@@ -548,7 +554,7 @@
     <!-- If this is true, go to sleep when theater mode is enabled from button press -->
     <bool name="config_goToSleepOnButtonPressTheaterMode">true</bool>
     <!-- If this is true, long press on power button will be available from the non-interactive state -->
-    <bool name="config_supportLongPressPowerWhenNonInteractive">false</bool>
+    <bool name="config_supportLongPressPowerWhenNonInteractive">true</bool>
 
     <!-- If this is true, then keep dreaming when undocking. -->
     <bool name="config_keepDreamingWhenUndocking">false</bool>
@@ -575,6 +581,10 @@
     <!-- If true, the screen can be rotated via the accelerometer in all 4
          rotations as the default behavior. -->
     <bool name="config_allowAllRotations">false</bool>
+
+    <!-- If false and config_allowAllRotations is false, the screen will rotate to the natural
+         orientation of the device when the auto-rotate policy is toggled. -->
+    <bool name="config_useCurrentRotationOnRotationLockChange">false</bool>
 
     <!-- If true, the direction rotation is applied to get to an application's requested
          orientation is reversed.  Normally, the model is that landscape is
@@ -648,6 +658,16 @@
          The default is false. -->
     <bool name="config_lidControlsSleep">false</bool>
 
+    <!-- The device states (supplied by DeviceStateManager) that should be treated as open by the
+         device fold controller. Default is empty. -->
+    <integer-array name="config_openDeviceStates">
+        <!-- Example:
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        -->
+    </integer-array>
+
     <!-- The device states (supplied by DeviceStateManager) that should be treated as folded by the
          display fold controller. Default is empty. -->
     <integer-array name="config_foldedDeviceStates">
@@ -668,9 +688,33 @@
         -->
     </integer-array>
 
+    <!-- The device states (supplied by DeviceStateManager) that should be treated as a rear display
+     state. Default is empty. -->
+    <integer-array name="config_rearDisplayDeviceStates">
+        <!-- Example:
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        -->
+    </integer-array>
+
     <!-- Indicates whether the window manager reacts to half-fold device states by overriding
      rotation. -->
     <bool name="config_windowManagerHalfFoldAutoRotateOverride">false</bool>
+
+    <!-- Indicates whether the window manager pauses autorotation when folding or unfolding
+     a foldable device based on hinge angle sensor events and physical display switch events. -->
+    <bool name="config_windowManagerPauseRotationWhenUnfolding">false</bool>
+
+    <!-- Amount of time during which autorotation will be disabled since last hinge angle event -->
+    <integer name="config_pauseRotationWhenUnfolding_maxHingeAngle">0</integer>
+
+    <!-- Maximum hinge angle event to be considered to disable autorotation when folding or
+     unfolding -->
+    <integer name="config_pauseRotationWhenUnfolding_hingeEventTimeout">0</integer>
+
+    <!-- Amount of time during which autorotation will be disabled since last display switch -->
+    <integer name="config_pauseRotationWhenUnfolding_displaySwitchTimeout">0</integer>
 
     <!-- When a device enters any of these states, it should be woken up. States are defined in
          device_state_configuration.xml. -->
@@ -703,20 +747,22 @@
          mode. -->
     <integer name="config_unfoldTransitionHalfFoldedTimeout">1000</integer>
 
+    <!-- Timeout for receiving the keyguard drawn event from System UI.  -->
+    <integer name="config_keyguardDrawnTimeout">1000</integer>
+
     <!-- Indicates that the device supports having more than one internal display on at the same
          time. Only applicable to devices with more than one internal display. If this option is
          set to false, DisplayManager will make additional effort to ensure no more than 1 internal
          display is powered on at the same time. -->
     <bool name="config_supportsConcurrentInternalDisplays">true</bool>
 
-    <!-- Map of DeviceState to rotation lock setting. Each entry must be in the format
-         "key:value", for example: "0:1".
-          The keys are device states, and the values are one of
-          Settings.Secure.DeviceStateRotationLockSetting.
-          Any device state that doesn't have a default set here will be treated as
-          DEVICE_STATE_ROTATION_LOCK_IGNORED meaning it will not have its own rotation lock setting.
-          If this map is missing, the feature is disabled and only one global rotation lock setting
-           will apply, regardless of device state. -->
+    <!-- Map of device posture to rotation lock setting. Each entry must be in the format
+         "key:value", or "key:value:fallback_key" for example: "0:1" or "2:0:1". The keys are one of
+         Settings.Secure.DeviceStateRotationLockKey, and the values are one of
+         Settings.Secure.DeviceStateRotationLockSetting.
+         The fallback is a key to a device posture that can be specified when the value is
+         Settings.Secure.DEVICE_STATE_ROTATION_LOCK_IGNORED.
+     -->
     <string-array name="config_perDeviceStateRotationLockDefaults" />
 
     <!-- Dock behavior -->
@@ -744,6 +790,11 @@
          apart and the docks cannot report their true orientation on their own,
          we rely on gravity to determine the effective orientation. -->
     <bool name="config_deskDockEnablesAccelerometer">true</bool>
+
+    <!-- Control whether nosensor and locked orientation requests are respected from the app when
+         config_deskDockEnablesAccelerometer is set to false.
+         TODO(b/274763533): Consider making true by default and removing this. -->
+    <bool name="config_deskRespectsNoSensorAndLockedWithoutAccelerometer">false</bool>
 
     <!-- Car dock behavior -->
 
@@ -856,7 +907,7 @@
     <integer name="config_defaultNightDisplayCustomEndTime">21600000</integer>
 
     <!-- Minimum color temperature, in Kelvin, supported by Night display. -->
-    <integer name="config_nightDisplayColorTemperatureMin">2596</integer>
+    <integer name="config_nightDisplayColorTemperatureMin">686</integer>
 
     <!-- Default color temperature, in Kelvin, to tint the screen when Night display is
          activated. -->
@@ -960,6 +1011,15 @@
     <!-- Boolean indicating whether light mode is allowed when DWB is turned on. -->
     <bool name="config_displayWhiteBalanceLightModeAllowed">true</bool>
 
+    <!-- Duration, in milliseconds, of the display white balance animated transitions. -->
+    <integer name="config_displayWhiteBalanceTransitionTime">3000</integer>
+
+    <!-- Device states where the sensor based rotation values should be reversed around the Z axis
+         for the default display.
+         TODO(b/265312193): Remove this workaround when this bug is fixed.-->
+    <integer-array name="config_deviceStatesToReverseDefaultDisplayRotationAroundZAxis">
+    </integer-array>
+
     <!-- Indicate available ColorDisplayManager.COLOR_MODE_xxx. -->
     <integer-array name="config_availableColorModes">
         <!-- Example:
@@ -1027,9 +1087,8 @@
             3 - Power off (without confirmation)
             4 - Go to voice assist
             5 - Go to assistant (Settings.Secure.ASSISTANT)
-            6 - Toggle torch on / off (if screen is off)
     -->
-    <integer name="config_longPressOnPowerBehavior">5</integer>
+    <integer name="config_longPressOnPowerBehavior">1</integer>
 
     <!-- The time in milliseconds after which a press on power button is considered "long". -->
     <integer name="config_longPressOnPowerDurationMs">500</integer>
@@ -1061,7 +1120,14 @@
             1 - Mute toggle
             2 - Global actions menu
     -->
-    <integer name="config_keyChordPowerVolumeUp">2</integer>
+    <integer name="config_keyChordPowerVolumeUp">1</integer>
+
+    <!-- Control the behavior when the user long presses the back button.  Non-zero values are only
+         valid for watches as part of CDD/CTS.
+            0 - Nothing
+            1 - Go to voice assist
+    -->
+    <integer name="config_longPressOnBackBehavior">0</integer>
 
     <!-- Allows activities to be launched on a long press on power during device setup. -->
     <bool name="config_allowStartActivityForLongPressOnPowerInSetup">false</bool>
@@ -1287,7 +1353,7 @@
     <integer name="config_notificationsBatteryLedOn">125</integer>
 
     <!-- Is the notification LED intrusive? Used to decide if there should be a disable option -->
-    <bool name="config_intrusiveNotificationLed">false</bool>
+    <bool name="config_intrusiveNotificationLed">true</bool>
 
     <!-- De we do icon badges? Used to decide if there should be a disable option-->
     <bool name="config_notificationBadging">true</bool>
@@ -1332,6 +1398,25 @@
         flow. This should be true if gatekeeper / weaver credentials can still be checked after a
         factory reset. -->
     <bool name="config_enableCredentialFactoryResetProtection">true</bool>
+
+    <!-- Control the behavior when the user long presses the home button.
+            0 - Nothing
+            1 - Launch all apps intent
+            2 - Launch assist intent
+            3 - Launch notification panel
+         This needs to match the constants in
+         policy/src/com/android/internal/policy/impl/PhoneWindowManager.java
+    -->
+    <integer name="config_longPressOnHomeBehavior">0</integer>
+
+    <!-- Control the behavior when the user double-taps the home button.
+            0 - Nothing
+            1 - Recent apps view in SystemUI
+            2 - Picture-in-picture menu
+         This needs to match the constants in
+         policy/src/com/android/internal/policy/impl/PhoneWindowManager.java
+    -->
+    <integer name="config_doubleTapOnHomeBehavior">0</integer>
 
     <!-- Note: This setting is deprecated, please use
     config_screenBrightnessSettingMinimumFloat instead -->
@@ -1751,7 +1836,6 @@
          See com.android.server.timedetector.TimeDetectorStrategy for available sources. -->
     <string-array name="config_autoTimeSourcesPriority">
         <item>network</item>
-        <item>telephony</item>
     </string-array>
 
     <!-- Enables the GnssTimeUpdate service. This is the global switch for enabling Gnss time based
@@ -2049,9 +2133,8 @@
          STREAM_MUSIC as if it's on TV platform. -->
     <bool name="config_single_volume">false</bool>
 
-    <!-- Flag indicating whether notification and ringtone volumes
-         are controlled together (aliasing is true) or not. -->
-    <bool name="config_alias_ring_notif_stream_types">true</bool>
+    <!-- Volume policy -->
+    <bool name="config_volume_down_to_enter_silent">false</bool>
 
     <!-- The number of volume steps for the notification stream -->
     <integer name="config_audio_notif_vol_steps">7</integer>
@@ -2185,7 +2268,7 @@
     <string name="config_overrideComponentUiPackage" translatable="false">com.android.stk</string>
 
     <!-- IP address of the dns server to use if nobody else suggests one -->
-    <string name="config_default_dns_server" translatable="false">8.8.8.8</string>
+    <string name="config_default_dns_server" translatable="false">1.0.0.1</string>
 
     <!-- The default mobile provisioning apn. Empty by default, maybe overridden by
          an mcc/mnc specific config.xml -->
@@ -2684,7 +2767,7 @@
     <bool name="config_syncstorageengine_masterSyncAutomatically">true</bool>
 
     <!--  Maximum number of supported users -->
-    <integer name="config_multiuserMaximumUsers">1</integer>
+    <integer name="config_multiuserMaximumUsers">32</integer>
 
     <!-- Maximum number of users we allow to be running at a time -->
     <integer name="config_multiuserMaxRunningUsers">3</integer>
@@ -2722,7 +2805,7 @@
     <integer name="config_userTypePackageWhitelistMode">13</integer> <!-- 1+4+8 -->
 
     <!-- Whether UI for multi user should be shown -->
-    <bool name="config_enableMultiUserUI">false</bool>
+    <bool name="config_enableMultiUserUI">true</bool>
 
     <!-- Whether the new Auto Selection Network UI should be shown -->
     <bool name="config_enableNewAutoSelectNetworkUI">false</bool>
@@ -2813,7 +2896,7 @@
     <bool name="config_useDevInputEventForAudioJack">false</bool>
 
     <!-- Whether safe headphone volume is enabled or not (country specific). -->
-    <bool name="config_safe_media_volume_enabled">true</bool>
+    <bool name="config_safe_media_volume_enabled">false</bool>
 
     <!-- Whether safe headphone volume warning dialog is disabled on Vol+ (operator specific). -->
     <bool name="config_safe_media_disable_on_volume_up">true</bool>
@@ -3231,7 +3314,6 @@
         <item>power</item>
         <item>restart</item>
         <item>logout</item>
-        <item>screenshot</item>
         <item>bugreport</item>
     </string-array>
 
@@ -3305,7 +3387,7 @@
     </string-array>
 
     <!-- Flag indicating which package name can access the persistent data partition -->
-    <string name="config_persistentDataPackageName" translatable="false"></string>
+    <string name="config_persistentDataPackageName" translatable="false">com.google.android.gms</string>
 
     <!-- Flag indicating which package name can access DeviceConfig table -->
     <string name="config_deviceConfiguratorPackageName" translatable="false"></string>
@@ -3735,7 +3817,7 @@
          0: 3 button mode (back, home, overview buttons)
          1: 2 button mode (back, home buttons + swipe up for overview)
          2: gestures only for back, home and overview -->
-    <integer name="config_navBarInteractionMode">0</integer>
+    <integer name="config_navBarInteractionMode">2</integer>
 
     <!-- Controls whether the nav bar can move from the bottom to the side in landscape.
          Only applies if the device display is not square. -->
@@ -3811,7 +3893,7 @@
 
     <!-- List of comma separated package names for which we the system will not show crash, ANR,
          etc. dialogs. -->
-    <string translatable="false" name="config_appsNotReportingCrashes"></string>
+    <string translatable="false" name="config_appsNotReportingCrashes">com.android.statementservice</string>
 
     <!-- Inactivity threshold (in milliseconds) used in JobScheduler. JobScheduler will consider
          the device to be "idle" after being inactive for this long. -->
@@ -3959,7 +4041,7 @@
     <integer name="config_keepPreloadsMinDays">7</integer>
 
     <!-- Flag indicating whether round icons should be parsed from the application manifest. -->
-    <bool name="config_useRoundIcon">false</bool>
+    <bool name="config_useRoundIcon">true</bool>
 
     <!-- Flag indicating whether the assist disclosure can be disabled using
          ASSIST_DISCLOSURE_ENABLED. -->
@@ -4057,7 +4139,7 @@
     <bool name="config_allow3rdPartyAppOnInternal">true</bool>
 
     <!-- Specifies the path that is used by AdaptiveIconDrawable class to crop launcher icons. -->
-    <string name="config_icon_mask" translatable="false">"M50,0L92,0C96.42,0 100,4.58 100 8L100,92C100, 96.42 96.42 100 92 100L8 100C4.58, 100 0 96.42 0 92L0 8 C 0 4.42 4.42 0 8 0L50 0Z"</string>
+    <string name="config_icon_mask" translatable="false">"M50 0C77.6 0 100 22.4 100 50C100 77.6 77.6 100 50 100C22.4 100 0 77.6 0 50C0 22.4 22.4 0 50 0Z"</string>
 
     <!-- The component name, flattened to a string, for the default accessibility service to be
          enabled by the accessibility shortcut. This service must be trusted, as it can be activated
@@ -4080,7 +4162,7 @@
     <string name="config_defaultTrustAgent" translatable="false"></string>
 
     <!-- Colon separated list of package names that should be granted Notification Listener access -->
-    <string name="config_defaultListenerAccessPackages" translatable="false"></string>
+    <string name="config_defaultListenerAccessPackages" translatable="false">com.android.launcher3</string>
 
     <!-- Maximum size, specified in pixels, to restrain the display space width to. Height and
          density will be scaled accordingly to maintain aspect ratio. A value of 0 indicates no
@@ -4364,7 +4446,7 @@
     <integer translatable="false" name="config_storageManagerDaystoRetainDefault">90</integer>
 
     <!-- Name of a font family to use for headlines. If empty, falls back to platform default -->
-    <string name="config_headlineFontFamily" translatable="false"></string>
+    <string name="config_headlineFontFamily" translatable="false">sans-serif</string>
     <!-- Allows setting custom fontFeatureSettings on specific text. -->
     <string name="config_headlineFontFeatureSettings" translatable="false"></string>
 
@@ -4432,24 +4514,24 @@
     <string name="config_mediaProjectionPermissionDialogComponent" translatable="false">com.android.systemui/com.android.systemui.media.MediaProjectionPermissionActivity</string>
 
     <!-- Corner radius of system dialogs -->
-    <dimen name="config_dialogCornerRadius">2dp</dimen>
+    <dimen name="config_dialogCornerRadius">32dp</dimen>
     <!-- Corner radius of system buttons -->
-    <dimen name="config_buttonCornerRadius">@dimen/control_corner_material</dimen>
+    <dimen name="config_buttonCornerRadius">@dimen/config_dialogCornerRadius</dimen>
     <!-- Corner radius for bottom sheet system dialogs -->
     <dimen name="config_bottomDialogCornerRadius">@dimen/config_dialogCornerRadius</dimen>
     <!-- Corner radius of system progress bars -->
-    <dimen name="config_progressBarCornerRadius">@dimen/progress_bar_corner_material</dimen>
+    <dimen name="config_progressBarCornerRadius">1000dp</dimen>
     <!-- Controls whether system buttons use all caps for text -->
     <bool name="config_buttonTextAllCaps">true</bool>
     <!-- Name of the font family used for system surfaces where the font should use medium weight -->
-    <string name="config_headlineFontFamilyMedium" translateable="false">@string/font_family_button_material</string>
+    <string name="config_headlineFontFamilyMedium" translateable="false">sans-serif-medium</string>
     <!-- Name of a font family to use for body text. -->
     <string name="config_bodyFontFamily" translatable="false">sans-serif</string>
     <!-- Name of a font family to use for medium body text. -->
     <string name="config_bodyFontFamilyMedium" translatable="false">sans-serif-medium</string>
 
     <!-- Name of the font family to use in the default lockscreen clock -->
-    <string name="config_clockFontFamily" translatable="false">monospace</string>
+    <string name="config_clockFontFamily" translatable="false"></string>
 
     <!-- Size of icon shown beside a preference locked by admin -->
     <dimen name="config_restrictedIconSize">@dimen/restricted_icon_size_material</dimen>
@@ -4480,7 +4562,7 @@
     <string-array name="config_disableApkUnlessMatchedSku_skus_list" translatable="false" />
 
     <!-- Whether or not we should show the option to show battery percentage -->
-    <bool name="config_battery_percentage_setting_available">true</bool>
+    <bool name="config_battery_percentage_setting_available">false</bool>
 
     <!-- Whether or not battery saver should be "sticky" when manually enabled. -->
     <bool name="config_batterySaverStickyBehaviourDisabled">false</bool>
@@ -4737,6 +4819,37 @@
     <string name="config_batterymeterPowersavePath" translatable="false">
         M9,10l-2,0l0,-2l-2,0l0,2l-2,0l0,2l2,0l0,2l2,0l0,-2l2,0z
     </string>
+    <!-- Landscape Battery -->
+    <string name="config_batterymeterLandPerimeterPath" translatable="false">
+	M3.77,0.80L21.85,0.80A1.97 1.97 0 0 1 23.82,2.77L23.82,9.31A1.97 1.97 0 0 1 21.85,11.27L3.77,11.27A1.97 1.97 0 0 1 1.81,9.31L1.81,2.77A1.97 1.97 0 0 1 3.77,0.80zM2.85,3.00L2.85,9.02A1.48 1.48 0 0 0 4.33,10.50L21.30,10.50A1.48 1.48 0 0 0 22.78,9.02L22.78,3.00A1.48 1.48 0 0 0 21.30,1.52L4.33,1.52A1.48 1.48 0 0 0 2.85,3.00zM1.26,7.97Q-1.14,5.86,1.29,3.81z
+    </string>
+    <string name="config_batterymeterLandFillMask" translatable="false">
+        M2.82,1.39L2.82,10.63A0.00 0.00 0 0 0 2.82,10.63L22.88,10.63A0.00 0.00 0 0 0 22.88,10.63L22.88,1.39A0.00 0.00 0 0 0 22.88,1.39L2.82,1.39A0.00 0.00 0 0 0 2.82,1.39z
+    </string>
+    <string name="config_batterymeterLandBoltPath" translatable="false">
+        M10.81,10.30L12.84,6.06L9.76,6.13L14.43,1.90L12.86,5.07L15.85,5.00z
+    </string>
+    <string name="config_batterymeterLandPowersavePath" translatable="false">
+        M8.90,5.05L12.19,5.21L11.90,2.95L13.67,3.07L13.48,5.16L16.28,5.01L16.51,6.68L13.53,6.60L13.64,9.13L11.73,9.00L12.05,6.68L8.92,6.76z
+    </string>
+    <string name="config_batterymeterLandErrorPerimeterPath" translatable="false">@string/config_batterymeterLandPerimeterPath</string>
+    <string name="config_batterymeterRLandPerimeterPath" translatable="false">
+	M2.44,0.64L19.70,0.64A2.21 2.21 0 0 1 21.91,2.85L21.91,9.21A2.21 2.21 0 0 1 19.70,11.42L2.44,11.42A2.21 2.21 0 0 1 0.23,9.21L0.23,2.85A2.21 2.21 0 0 1 2.44,0.64zM0.87,3.59L0.87,8.41A2.28 2.28 0 0 0 3.15,10.69L18.98,10.69A2.28 2.28 0 0 0 21.26,8.41L21.26,3.59A2.28 2.28 0 0 0 18.98,1.31L3.15,1.31A2.28 2.28 0 0 0 0.87,3.59zM22.45,8.32Q25.10,5.95,22.42,3.62
+    </string>
+    <string name="config_batterymeterRLandFillMask" translatable="false">
+        M0.87,1.30L0.87,10.69A0.00 0.00 0 0 0 0.87,10.69L21.26,10.69A0.00 0.00 0 0 0 21.26,10.69L21.26,1.30A0.00 0.00 0 0 0 21.26,1.30L0.87,1.30A0.00 0.00 0 0 0 0.87,1.30z
+    </string>
+    <string name="config_batterymeterRLandBoltPath" translatable="false">
+        M8.92,10.42L10.91,6.05L7.88,6.12L12.48,1.77L10.93,5.03L13.88,4.96z
+    </string>
+    <string name="config_batterymeterRLandPowersavePath" translatable="false">
+        M14.92,5.01L11.69,5.18L11.97,2.85L10.23,2.97L10.41,5.12L7.65,4.97L7.43,6.69L10.37,6.61L10.26,9.22L12.14,9.08L11.82,6.69L14.91,6.78z
+    </string>
+    <string name="config_batterymeterRLandErrorPerimeterPath" translatable="false">@string/config_batterymeterRLandPerimeterPath</string>
+    <!-- X path for SignalDrawable as defined on a 24x24 canvas. -->
+    <string name="config_signalXPath" translatable="false">
+        M22,16.41L20.59,15l-2.09,2.09L16.41,15L15,16.41l2.09,2.09L15,20.59L16.41,22l2.09-2.08L20.59,22L22,20.59l-2.08-2.09   L22,16.41z
+    </string>
 
     <!-- Attribution path for SignalDrawable as defined on a 24x24 canvas. -->
     <string name="config_signalAttributionPath" translatable="false">
@@ -4830,7 +4943,7 @@
 
     <!-- The type of the light sensor to be used by the display framework for things like
          auto-brightness. If unset, then it just gets the default sensor of type TYPE_LIGHT. -->
-    <string name="config_displayLightSensorType" translatable="false">android.sensor.light</string>
+    <string name="config_displayLightSensorType" translatable="false" />
 
     <!-- Whether or not to enable automatic heap dumps for the system server on debuggable builds. -->
     <bool name="config_debugEnableAutomaticSystemServerHeapDumps">false</bool>
@@ -4951,9 +5064,8 @@
     <!-- If face auth sends the user directly to home/last open app, or stays on keyguard -->
     <bool name="config_faceAuthDismissesKeyguard">true</bool>
 
-    <!-- Default value for whether a SFPS device is required to be interactive for fingerprint auth
-    to unlock the device.  -->
-    <bool name="config_requireScreenOnToAuthEnabled">false</bool>
+    <!-- Default value for performant auth feature. -->
+    <bool name="config_performantAuthDefault">@bool/config_is_powerbutton_fps</bool>
 
     <!-- The component name for the default profile supervisor, which can be set as a profile owner
     even after user setup is complete. The defined component should be used for supervision purposes
@@ -4986,6 +5098,11 @@
     <!-- The list of packages to automatically opt out of refresh rates higher than 60hz because
          of known compatibility issues. -->
     <string-array name="config_highRefreshRateBlacklist"></string-array>
+
+    <!-- The list of packages to force slowJpegMode for Apps using Camera API1 -->
+    <string-array name="config_forceSlowJpegModeList" translatable="false">
+        <!-- Add packages here -->
+    </string-array>
 
     <!-- Whether or not to hide the navigation bar when the soft keyboard is visible in order to
          create additional screen real estate outside beyond the keyboard. Note that the user needs
@@ -5275,6 +5392,10 @@
     <!-- Whether vertical reachability repositioning is allowed for letterboxed fullscreen apps. -->
     <bool name="config_letterboxIsVerticalReachabilityEnabled">false</bool>
 
+    <!-- Whether book mode automatic horizontal reachability positioning is allowed for letterboxed
+        fullscreen apps -->
+    <bool name="config_letterboxIsAutomaticReachabilityInBookModeEnabled">false</bool>
+
     <!-- Default horizontal position of the letterboxed app window when reachability is
         enabled and an app is fullscreen in landscape device orientation. When reachability is
         enabled, the position can change between left, center and right. This config defines the
@@ -5332,6 +5453,9 @@
     <!-- Whether using split screen aspect ratio as a default aspect ratio for unresizable apps. -->
     <bool name="config_letterboxIsSplitScreenAspectRatioForUnresizableAppsEnabled">false</bool>
 
+    <!-- Whether using display aspect ratio as a default aspect ratio for all letterboxed apps. -->
+    <bool name="config_letterboxIsDisplayAspectRatioForFixedOrientationLetterboxEnabled">false</bool>
+
     <!-- Whether the specific behaviour for translucent activities letterboxing is enabled.
          TODO(b/255532890) Enable when ignoreOrientationRequest is set -->
     <bool name="config_letterboxIsEnabledForTranslucentActivities">false</bool>
@@ -5347,9 +5471,19 @@
         split screen. -->
     <bool name="config_isWindowManagerCameraCompatTreatmentEnabled">false</bool>
 
+    <!-- Whether should use split screen aspect ratio for the activity when camera compat treatment
+        is enabled and activity is connected to the camera in fullscreen. -->
+    <bool name="config_isWindowManagerCameraCompatSplitScreenAspectRatioEnabled">false</bool>
+
     <!-- Whether a camera compat controller is enabled to allow the user to apply or revert
          treatment for stretched issues in camera viewfinder. -->
     <bool name="config_isCameraCompatControlForStretchedIssuesEnabled">false</bool>
+
+    <!-- Docking is a uiMode configuration change and will cause activities to relaunch if it's not
+         handled. If true, the configuration change will be sent but activities will not be
+         relaunched upon docking. Apps with desk resources will behave like normal, since they may
+         expect the relaunch upon the desk uiMode change. -->
+    <bool name="config_skipActivityRelaunchWhenDocking">false</bool>
 
     <!-- If true, hide the display cutout with display area -->
     <bool name="config_hideDisplayCutoutWithDisplayArea">false</bool>
@@ -5857,10 +5991,10 @@
     <bool name="config_settingsHelpLinksEnabled">false</bool>
 
     <!-- Whether or not to enable the lock screen entry point for the QR code scanner. -->
-    <bool name="config_enableQrCodeScannerOnLockScreen">false</bool>
+    <bool name="config_enableQrCodeScannerOnLockScreen">true</bool>
 
     <!-- Default component for QR code scanner -->
-    <string name="config_defaultQrCodeComponent"></string>
+    <string name="config_defaultQrCodeComponent">app.grapheneos.camera/app.grapheneos.camera.ui.activities.QrTile</string>
 
     <!-- Whether Low Power Standby is supported and can be enabled. -->
     <bool name="config_lowPowerStandbySupported">false</bool>
@@ -6024,4 +6158,29 @@
     <!-- Whether the lock screen is allowed to run its own live wallpaper,
          different from the home screen wallpaper. -->
     <bool name="config_independentLockscreenLiveWallpaper">false</bool>
+
+    <!-- Whether the vendor power press code need to be mapped. -->
+    <bool name="config_powerPressMapping">false</bool>
+
+    <!-- Power press vendor code. -->
+    <integer name="config_powerPressCode">-1</integer>
+
+    <!-- Whether to show weather on the lock screen by default. -->
+    <bool name="config_lockscreenWeatherEnabledByDefault">false</bool>
+
+    <!-- Whether we should persist the brightness value in nits for the default display even if
+         the underlying display device changes. -->
+    <bool name="config_persistBrightnessNitsForDefaultDisplay">false</bool>
+
+    <string name="config_gnssPsdsType"></string>
+
+    <!-- The list of components which should be automatically disabled for a specific device.
+     Note: this MUST not be used to randomly disable components, ask for approval first! -->
+    <string-array name="config_deviceDisabledComponents" translatable="false" />
+
+    <!-- The list of components which should be automatically disabled for all devices. -->
+    <string-array name="config_globallyDisabledComponents" translatable="false" />
+
+    <!-- The list of components which should be forced to be enabled. -->
+    <string-array name="config_forceEnabledComponents" translatable="false" />
 </resources>

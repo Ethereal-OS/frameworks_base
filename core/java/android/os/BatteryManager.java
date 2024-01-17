@@ -164,62 +164,31 @@ public class BatteryManager {
     public static final String EXTRA_EVENT_TIMESTAMP = "android.os.extra.EVENT_TIMESTAMP";
 
     /**
-     * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
-     * Contains a value that forces Moto Mod battery level `mod_level`
-     * to overwrite the interal battery level and act as the device's
-     * sole battery. This isn't used by any Mods we have come across.
+     * boolean value to detect fast charging
      * {@hide}
      */
-    public static final String EXTRA_MOD_FLAG = "mod_flag";
+    public static final String EXTRA_DASH_CHARGER = "dash_charger";
 
     /**
      * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
-     * Contains battery percentage value for Moto Mod devices.
+     * boolean value to detect fast charging
      * {@hide}
      */
-    public static final String EXTRA_MOD_LEVEL = "mod_level";
+    public static final String EXTRA_WARP_CHARGER = "warp_charger";
 
     /**
      * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
-     * Contains Moto Mod power source type value.
+     * boolean value to detect fast charging
      * {@hide}
      */
-    public static final String EXTRA_MOD_POWER_SOURCE = "mod_psrc";
+    public static final String EXTRA_VOOC_CHARGER = "vooc_charger";
 
     /**
      * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
-     * Contains Moto Mod status (ready, charging, etc.) value.
+     * boolean value to detect fast charging
      * {@hide}
      */
-    public static final String EXTRA_MOD_STATUS = "mod_status";
-
-    /**
-     * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
-     * Contains Moto Mod type information (battery, audio, input).
-     * {@hide}
-     */
-    public static final String EXTRA_MOD_TYPE = "mod_type";
-
-    /**
-     * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
-     * Contains Moto Mod connection indicator.
-     * {@hide}
-     */
-    public static final String EXTRA_PLUGGED_RAW = "plugged_raw";
-
-    /** @hide */
-    public static final int BATTERY_PROPERTY_MOD_CHARGE_FULL = 100;
-    /** @hide */
-    public static final int BATTERY_PROPERTY_CHARGE_FULL = 101;
-    /** @hide */
-    public static final int BATTERY_PLUGGED_MOD = 8;
-
-    /**
-     * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
-     * boolean value to indicate OEM fast charging
-     * {@hide}
-     */
-    public static final String EXTRA_OEM_FAST_CHARGER = "oem_fast_charger";
+    public static final String EXTRA_TURBO_POWER = "turbo_power";
 
     // values for "status" field in the ACTION_BATTERY_CHANGED Intent
     public static final int BATTERY_STATUS_UNKNOWN = Constants.BATTERY_STATUS_UNKNOWN;
@@ -251,7 +220,7 @@ public class BatteryManager {
     /** @hide */
     public static final int BATTERY_PLUGGED_ANY =
             BATTERY_PLUGGED_AC | BATTERY_PLUGGED_USB | BATTERY_PLUGGED_WIRELESS
-                    | BATTERY_PLUGGED_DOCK | BATTERY_PLUGGED_MOD;
+                    | BATTERY_PLUGGED_DOCK;
 
     /**
      * Sent when the device's battery has started charging (or has reached full charge
@@ -455,6 +424,14 @@ public class BatteryManager {
     public boolean setChargingStateUpdateDelayMillis(int delayMillis) {
         try {
             return mBatteryStats.setChargingStateUpdateDelayMillis(delayMillis);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    public void resetStatistics() {
+        try {
+            mBatteryStats.resetStatistics();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

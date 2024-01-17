@@ -2444,7 +2444,7 @@ public abstract class ContentProvider implements ContentInterface, ComponentCall
                 mSingleUser = (info.flags & ProviderInfo.FLAG_SINGLE_USER) != 0;
                 setAuthorities(info.authority);
             }
-            if (Build.IS_DEBUGGABLE) {
+            if (Build.IS_ENG) {
                 setTransportLoggingEnabled(Log.isLoggable(getClass().getSimpleName(),
                         Log.VERBOSE));
             }
@@ -2556,7 +2556,8 @@ public abstract class ContentProvider implements ContentInterface, ComponentCall
         writer.println("nothing to dump");
     }
 
-    private void validateIncomingAuthority(String authority) throws SecurityException {
+    /** @hide */
+    protected void validateIncomingAuthority(String authority) throws SecurityException {
         if (!matchesOurAuthorities(getAuthorityWithoutUserId(authority))) {
             String message = "The authority " + authority + " does not match the one of the "
                     + "contentProvider: ";

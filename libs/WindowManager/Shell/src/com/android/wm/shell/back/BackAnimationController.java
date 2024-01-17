@@ -51,6 +51,7 @@ import android.view.RemoteAnimationTarget;
 import android.view.SurfaceControl;
 import android.window.BackAnimationAdaptor;
 import android.window.BackEvent;
+import android.window.BackMotionEvent;
 import android.window.BackNavigationInfo;
 import android.window.IBackAnimationRunner;
 import android.window.IBackNaviAnimationController;
@@ -81,7 +82,7 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
     /** Flag for U animation features */
     public static boolean IS_U_ANIMATION_ENABLED =
             SystemProperties.getInt("persist.wm.debug.predictive_back_anim",
-                    SETTING_VALUE_OFF) == SETTING_VALUE_ON;
+                    SETTING_VALUE_ON) == SETTING_VALUE_ON;
     /** Predictive back animation developer option */
     private final AtomicBoolean mEnableAnimations = new AtomicBoolean(false);
     // TODO (b/241808055) Find a appropriate time to remove during refactor
@@ -102,8 +103,6 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
     private boolean mShouldStartOnNextMoveEvent = false;
     /** @see #setTriggerBack(boolean) */
     private boolean mTriggerBack;
-    /** @see #setTriggerLongSwipe(boolean) */
-    private boolean mTriggerLongSwipe;
 
     @Nullable
     private BackNavigationInfo mBackNavigationInfo;
@@ -175,11 +174,11 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
             boolean consumed = false;
             if (mWaitingAnimation && mOnBackCallback != null) {
                 if (mTriggerBack) {
-                    final BackEvent backFinish = mTouchTracker.createProgressEvent(1);
+                    final BackMotionEvent backFinish = mTouchTracker.createProgressEvent(1);
                     dispatchOnBackProgressed(mBackToLauncherCallback, backFinish);
                     dispatchOnBackInvoked(mOnBackCallback);
                 } else {
-                    final BackEvent backFinish = mTouchTracker.createProgressEvent(0);
+                    final BackMotionEvent backFinish = mTouchTracker.createProgressEvent(0);
                     dispatchOnBackProgressed(mBackToLauncherCallback, backFinish);
                     dispatchOnBackCancelled(mOnBackCallback);
                 }
@@ -289,12 +288,6 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
         @Override
         public void setTriggerBack(boolean triggerBack) {
             mShellExecutor.execute(() -> BackAnimationController.this.setTriggerBack(triggerBack));
-        }
-
-        @Override
-        public void setTriggerLongSwipe(boolean triggerLongSwipe) {
-            mShellExecutor.execute(
-                    () -> BackAnimationController.this.setTriggerLongSwipe(triggerLongSwipe));
         }
 
         @Override
@@ -488,7 +481,7 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
         if (!mBackGestureStarted || mBackNavigationInfo == null) {
             return;
         }
-        final BackEvent backEvent = mTouchTracker.createProgressEvent();
+        final BackMotionEvent backEvent = mTouchTracker.createProgressEvent();
         if (USE_TRANSITION && mBackAnimationController != null && mAnimationTarget != null) {
                 dispatchOnBackProgressed(mBackToLauncherCallback, backEvent);
         } else if (mEnableAnimations.get()) {
@@ -549,14 +542,6 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
             return;
         }
 
-        if (mTriggerLongSwipe) {
-            // Let key event handlers deal with back long swipe gesture
-            sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, KeyEvent.FLAG_LONG_SWIPE);
-            sendEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, KeyEvent.FLAG_LONG_SWIPE);
-            finishAnimation();
-            return;
-        }
-
         int backType = mBackNavigationInfo.getType();
         boolean shouldDispatchToLauncher = shouldDispatchToLauncher(backType);
         IOnBackInvokedCallback targetCallback = shouldDispatchToLauncher
@@ -579,18 +564,6 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
         }
     }
 
-    private boolean sendEvent(int action, int code, int flags) {
-        long when = SystemClock.uptimeMillis();
-        final KeyEvent ev = new KeyEvent(when, when, action, code, 0 /* repeat */,
-                0 /* metaState */, KeyCharacterMap.VIRTUAL_KEYBOARD, 0 /* scancode */,
-                flags | KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY,
-                InputDevice.SOURCE_KEYBOARD);
-
-        ev.setDisplayId(mContext.getDisplay().getDisplayId());
-        return InputManager.getInstance()
-                .injectInputEvent(ev, InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
-    }
-
     private boolean shouldDispatchToLauncher(int backType) {
         return backType == BackNavigationInfo.TYPE_RETURN_TO_HOME
                 && mBackToLauncherCallback != null
@@ -601,7 +574,7 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
     }
 
     private void dispatchOnBackStarted(IOnBackInvokedCallback callback,
-            BackEvent backEvent) {
+            BackMotionEvent backEvent) {
         if (callback == null) {
             return;
         }
@@ -639,7 +612,7 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
     }
 
     private void dispatchOnBackProgressed(IOnBackInvokedCallback callback,
-            BackEvent backEvent) {
+            BackMotionEvent backEvent) {
         if (callback == null) {
             return;
         }
@@ -668,17 +641,6 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
         mTouchTracker.setTriggerBack(triggerBack);
     }
 
-    /**
-     * Sets to true when the back long swipe gesture has passed the triggering threshold,
-     * false otherwise.
-     */
-    public void setTriggerLongSwipe(boolean triggerLongSwipe) {
-        if (mTransitionInProgress) {
-            return;
-        }
-        mTriggerLongSwipe = triggerLongSwipe;
-    }
-
     private void setSwipeThresholds(float triggerThreshold, float progressThreshold) {
         mTouchTracker.setProgressThreshold(progressThreshold);
         mTriggerThreshold = triggerThreshold;
@@ -693,7 +655,6 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
         mAnimationTarget = null;
         mTriggerBack = false;
         mShouldStartOnNextMoveEvent = false;
-        mTriggerLongSwipe = false;
         if (backNavigationInfo == null) {
             return;
         }
@@ -770,7 +731,7 @@ public class BackAnimationController implements RemoteCallable<BackAnimationCont
                     }
                     dispatchOnBackStarted(mBackToLauncherCallback,
                             mTouchTracker.createStartEvent(mAnimationTarget));
-                    final BackEvent backInit = mTouchTracker.createProgressEvent();
+                    final BackMotionEvent backInit = mTouchTracker.createProgressEvent();
                     if (!mCachingBackDispatcher.consume()) {
                         dispatchOnBackProgressed(mBackToLauncherCallback, backInit);
                     }

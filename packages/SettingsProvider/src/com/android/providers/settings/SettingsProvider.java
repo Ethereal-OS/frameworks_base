@@ -49,6 +49,7 @@ import android.compat.annotation.EnabledSince;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.ContentProvider;
+import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
@@ -238,8 +239,6 @@ public class SettingsProvider extends ContentProvider {
     private static final Set<String> OVERLAY_ALLOWED_GLOBAL_INSTANT_APP_SETTINGS = new ArraySet<>();
     private static final Set<String> OVERLAY_ALLOWED_SYSTEM_INSTANT_APP_SETTINGS = new ArraySet<>();
     private static final Set<String> OVERLAY_ALLOWED_SECURE_INSTANT_APP_SETTINGS = new ArraySet<>();
-
-    private static final String NAV_MODE_IMMERSIVE_OVERLAY = "com.custom.overlay.navbar.gestural";
 
     static {
         for (String name : Resources.getSystem().getStringArray(
@@ -834,9 +833,16 @@ public class SettingsProvider extends ContentProvider {
         if (Settings.System.RINGTONE_CACHE_URI.equals(uri)) {
             cacheRingtoneSetting = Settings.System.RINGTONE;
             cacheName = Settings.System.RINGTONE_CACHE;
-        } else if (Settings.System.RINGTONE2_CACHE_URI.equals(uri)) {
-            cacheRingtoneSetting = Settings.System.RINGTONE2;
-            cacheName = Settings.System.RINGTONE2_CACHE;
+        } else if (uri != null && ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())
+                && Settings.AUTHORITY.equals(
+                        ContentProvider.getAuthorityWithoutUserId(uri.getAuthority()))
+                && uri.getPathSegments().size() == 2
+                && uri.getPathSegments().get(1).startsWith(Settings.System.RINGTONE_CACHE)) {
+            // Check whether the uri is ringtone cache uri for a specific PhoneAccountHandle,
+            // which should be in the form of "content://settings/system/ringtone_cache_xxxx".
+            cacheRingtoneSetting = uri.getPathSegments().get(1)
+                    .replace(Settings.System.RINGTONE_CACHE, Settings.System.RINGTONE);
+            cacheName = uri.getPathSegments().get(1);
         } else if (Settings.System.NOTIFICATION_SOUND_CACHE_URI.equals(uri)) {
             cacheRingtoneSetting = Settings.System.NOTIFICATION_SOUND;
             cacheName = Settings.System.NOTIFICATION_SOUND_CACHE;
@@ -1164,8 +1170,8 @@ public class SettingsProvider extends ContentProvider {
             Slog.v(LOG_TAG, "setAllConfigSettings for prefix: " + prefix);
         }
 
-        enforceWritePermission(Manifest.permission.WRITE_DEVICE_CONFIG);
         final String callingPackage = resolveCallingPackage();
+        enforceWriteDeviceConfigPermission(callingPackage);
 
         synchronized (mLock) {
             if (getSyncDisabledModeConfigLocked() != SYNC_DISABLED_MODE_NONE) {
@@ -1183,7 +1189,8 @@ public class SettingsProvider extends ContentProvider {
             Slog.v(LOG_TAG, "setSyncDisabledModeConfig(" + syncDisabledMode + ")");
         }
 
-        enforceWritePermission(Manifest.permission.WRITE_DEVICE_CONFIG);
+        final String callingPackage = resolveCallingPackage();
+        enforceWriteDeviceConfigPermission(callingPackage);
 
         synchronized (mLock) {
             setSyncDisabledModeConfigLocked(syncDisabledMode);
@@ -1195,7 +1202,8 @@ public class SettingsProvider extends ContentProvider {
             Slog.v(LOG_TAG, "getSyncDisabledModeConfig");
         }
 
-        enforceWritePermission(Manifest.permission.WRITE_DEVICE_CONFIG);
+        final String callingPackage = resolveCallingPackage();
+        enforceWriteDeviceConfigPermission(callingPackage);
 
         synchronized (mLock) {
             return getSyncDisabledModeConfigLocked();
@@ -1280,8 +1288,8 @@ public class SettingsProvider extends ContentProvider {
 
     private boolean mutateConfigSetting(String name, String value, String prefix,
             boolean makeDefault, int operation, int mode) {
-        enforceWritePermission(Manifest.permission.WRITE_DEVICE_CONFIG);
         final String callingPackage = resolveCallingPackage();
+        enforceWriteDeviceConfigPermission(callingPackage);
 
         // Perform the mutation.
         synchronized (mLock) {
@@ -1927,8 +1935,8 @@ public class SettingsProvider extends ContentProvider {
         String cacheName = null;
         if (Settings.System.RINGTONE.equals(name)) {
             cacheName = Settings.System.RINGTONE_CACHE;
-        } else if (Settings.System.RINGTONE2.equals(name)) {
-            cacheName = Settings.System.RINGTONE2_CACHE;
+        } else if (name.startsWith(Settings.System.RINGTONE)) {
+            cacheName = name.replace(Settings.System.RINGTONE, Settings.System.RINGTONE_CACHE);
         } else if (Settings.System.NOTIFICATION_SOUND.equals(name)) {
             cacheName = Settings.System.NOTIFICATION_SOUND_CACHE;
         } else if (Settings.System.ALARM_ALERT.equals(name)) {
@@ -2049,7 +2057,8 @@ public class SettingsProvider extends ContentProvider {
             case MUTATION_OPERATION_INSERT:
                 // Insert updates.
             case MUTATION_OPERATION_UPDATE: {
-                if (Settings.System.PUBLIC_SETTINGS.contains(name)) {
+                if (Settings.System.PUBLIC_SETTINGS.contains(name)
+                        || name.startsWith(Settings.System.RINGTONE)) {
                     return;
                 }
 
@@ -2068,7 +2077,8 @@ public class SettingsProvider extends ContentProvider {
 
             case MUTATION_OPERATION_DELETE: {
                 if (Settings.System.PUBLIC_SETTINGS.contains(name)
-                        || Settings.System.PRIVATE_SETTINGS.contains(name)) {
+                        || Settings.System.PRIVATE_SETTINGS.contains(name)
+                        || name.startsWith(Settings.System.RINGTONE)) {
                     throw new IllegalArgumentException("You cannot delete system defined"
                             + " secure settings.");
                 }
@@ -2272,9 +2282,19 @@ public class SettingsProvider extends ContentProvider {
     private void enforceWritePermission(String permission) {
         if (getContext().checkCallingOrSelfPermission(permission)
                 != PackageManager.PERMISSION_GRANTED) {
-            throw new SecurityException("Permission denial: " + resolveCallingPackage() 
-                    + " writing to settings requires:"
-                    + permission);
+            throw new SecurityException("Permission denial: " + resolveCallingPackage()
+                + " writing to settings requires:"
+                + permission);
+        }
+    }
+
+    private void enforceWriteDeviceConfigPermission(String packageName) {
+        if (packageName.equals("com.google.android.gms")) return;
+        if (getContext().checkCallingOrSelfPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+                != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Permission denial: " + packageName
+                + " writing to settings requires:"
+                + Manifest.permission.WRITE_DEVICE_CONFIG);
         }
     }
 
@@ -2469,7 +2489,7 @@ public class SettingsProvider extends ContentProvider {
 
     private static boolean isCallerSystemOrShellOrRootOnDebuggableBuild() {
         final int appId = UserHandle.getAppId(Binder.getCallingUid());
-        return appId == SYSTEM_UID || (Build.IS_DEBUGGABLE
+        return appId == SYSTEM_UID || (Build.IS_ENG
                 && (appId == SHELL_UID || appId == ROOT_UID));
     }
 
@@ -5637,17 +5657,11 @@ public class SettingsProvider extends ContentProvider {
             try {
                 final IOverlayManager om = IOverlayManager.Stub.asInterface(
                         ServiceManager.getService(Context.OVERLAY_SERVICE));
-                final Setting immNavSetting = secureSettings.getSettingLocked(
-                        Settings.Secure.IMMERSIVE_NAVIGATION);
-                final boolean immNavEnabled = !immNavSetting.isNull() &&
-                        immNavSetting.getValue().equals("1");
-                final OverlayInfo info = om.getOverlayInfo(immNavEnabled ?
-                        NAV_MODE_IMMERSIVE_OVERLAY : NAV_BAR_MODE_GESTURAL_OVERLAY, userId);
+                final OverlayInfo info = om.getOverlayInfo(NAV_BAR_MODE_GESTURAL_OVERLAY, userId);
                 if (info != null && !info.isEnabled()) {
                     final int curInset = getContext().getResources().getDimensionPixelSize(
                             com.android.internal.R.dimen.config_backGestureInset);
-                    om.setEnabledExclusiveInCategory(immNavEnabled ? NAV_MODE_IMMERSIVE_OVERLAY :
-                        NAV_BAR_MODE_GESTURAL_OVERLAY, userId);
+                    om.setEnabledExclusiveInCategory(NAV_BAR_MODE_GESTURAL_OVERLAY, userId);
                     final int defInset = getContext().getResources().getDimensionPixelSize(
                             com.android.internal.R.dimen.config_backGestureInset);
 

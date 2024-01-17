@@ -21,7 +21,6 @@ import android.annotation.Nullable;
 import android.app.AppOpsManager;
 import android.content.ContentResolver;
 import android.content.Context;
-import android.database.ContentObserver;
 import android.media.AudioAttributes;
 import android.media.AudioFocusInfo;
 import android.media.AudioManager;
@@ -102,15 +101,13 @@ public class MediaFocusControl implements PlayerFocusEnforcer {
     @GuardedBy("mExtFocusChangeLock")
     private long mExtFocusChangeCounter;
 
-    // Observer to work with per-app volume
-    private SettingsObserver mSettingsObserver;
-
     protected MediaFocusControl(Context cntxt, PlayerFocusEnforcer pfe) {
         mContext = cntxt;
         mAppOps = (AppOpsManager)mContext.getSystemService(Context.APP_OPS_SERVICE);
         mFocusEnforcer = pfe;
         final ContentResolver cr = mContext.getContentResolver();
-        mSettingsObserver = new SettingsObserver();
+        mMultiAudioFocusEnabled = Settings.System.getIntForUser(cr,
+                Settings.System.MULTI_AUDIO_FOCUS_ENABLED, 0, cr.getUserId()) != 0;
         initFocusThreading();
     }
 
@@ -719,9 +716,15 @@ public class MediaFocusControl implements PlayerFocusEnforcer {
 
     /**
      * Called synchronized on mAudioFocusLock
+     * Can be called with or without an external focus policy installed (mFocusPolicy != null)
      */
     void notifyExtPolicyFocusGrant_syncAf(AudioFocusInfo afi, int requestResult) {
         for (IAudioPolicyCallback pcb : mFocusFollowers) {
+            // external focus policy?
+            if (mFocusPolicy != null && pcb.asBinder().equals(mFocusPolicy.asBinder())) {
+                // Do not notify the focus policy itself, it shall be aware already...
+                continue;
+            }
             try {
                 // oneway
                 pcb.notifyAudioFocusGrant(afi, requestResult);
@@ -734,9 +737,15 @@ public class MediaFocusControl implements PlayerFocusEnforcer {
 
     /**
      * Called synchronized on mAudioFocusLock
+     * Can be called with or without an external focus policy installed (mFocusPolicy != null)
      */
     void notifyExtPolicyFocusLoss_syncAf(AudioFocusInfo afi, boolean wasDispatched) {
         for (IAudioPolicyCallback pcb : mFocusFollowers) {
+            // external focus policy?
+            if (mFocusPolicy != null && pcb.asBinder().equals(mFocusPolicy.asBinder())) {
+                // Do not notify the focus policy itself, it shall be aware already...
+                continue;
+            }
             try {
                 // oneway
                 pcb.notifyAudioFocusLoss(afi, wasDispatched);
@@ -806,14 +815,17 @@ public class MediaFocusControl implements PlayerFocusEnforcer {
                 return;
             }
         }
-        final FocusRequester fr;
-        if (requestResult == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
-            fr = mFocusOwnersForFocusPolicy.remove(afi.getClientId());
-        } else {
-            fr = mFocusOwnersForFocusPolicy.get(afi.getClientId());
-        }
-        if (fr != null) {
-            fr.dispatchFocusResultFromExtPolicy(requestResult);
+        synchronized (mAudioFocusLock) {
+            final FocusRequester fr;
+            if (requestResult == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
+                fr = mFocusOwnersForFocusPolicy.remove(afi.getClientId());
+            } else {
+                fr = mFocusOwnersForFocusPolicy.get(afi.getClientId());
+            }
+            if (fr != null) {
+                fr.dispatchFocusResultFromExtPolicy(requestResult);
+                notifyExtPolicyFocusGrant_syncAf(fr.toAudioFocusInfo(), requestResult);
+            }
         }
     }
 
@@ -833,6 +845,9 @@ public class MediaFocusControl implements PlayerFocusEnforcer {
         try {
             //oneway
             mFocusPolicy.notifyAudioFocusAbandon(afi);
+            if (fr != null) {
+                notifyExtPolicyFocusLoss_syncAf(fr.toAudioFocusInfo(), false);
+            }
         } catch (RemoteException e) {
             Log.e(TAG, "Can't call notifyAudioFocusAbandon() on IAudioPolicyCallback "
                     + mFocusPolicy.asBinder(), e);
@@ -860,6 +875,17 @@ public class MediaFocusControl implements PlayerFocusEnforcer {
             if (fr == null) {
                 if (DEBUG) { Log.v(TAG, "> failed: no such focus requester known" ); }
                 return AudioManager.AUDIOFOCUS_REQUEST_FAILED;
+            }
+            if (focusChange == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                    || focusChange == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
+                    || focusChange == AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                    || focusChange == AudioManager.AUDIOFOCUS_GAIN) {
+                notifyExtPolicyFocusGrant_syncAf(
+                        fr.toAudioFocusInfo(), AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+            } else if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK
+                    || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                    || focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+                notifyExtPolicyFocusLoss_syncAf(fr.toAudioFocusInfo(), false);
             }
             return fr.dispatchFocusChange(focusChange);
         }
@@ -1356,25 +1382,6 @@ public class MediaFocusControl implements PlayerFocusEnforcer {
         @Override
         public int hashCode() {
             return mUid;
-        }
-    }
-
-    private class SettingsObserver extends ContentObserver {
-
-        SettingsObserver() {
-            super(new Handler());
-            ContentResolver cr = mContext.getContentResolver();
-            cr.registerContentObserver(Settings.System.getUriFor(
-                Settings.System.SHOW_APP_VOLUME), true, this);
-        }
-
-        @Override
-        public void onChange(boolean selfChange) {
-            super.onChange(selfChange);
-            ContentResolver cr = mContext.getContentResolver();
-            mMultiAudioFocusEnabled = Settings.System.getIntForUser(cr,
-                    Settings.System.SHOW_APP_VOLUME, 1, cr.getUserId()) != 0;
-            updateMultiAudioFocus(mMultiAudioFocusEnabled);
         }
     }
 }

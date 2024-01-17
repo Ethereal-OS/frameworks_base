@@ -472,12 +472,6 @@ public class StatusIconContainer extends AlphaOptimizedLinearLayout {
                 animationProperties = X_ANIMATION_PROPERTIES;
             }
 
-            // HACK: we dont want networktraffic to animate
-            if (icon.getSlot().equals("networktraffic")) {
-                animateVisibility = false;
-                animationProperties = null;
-            }
-
             icon.setVisibleState(visibleState, animateVisibility);
             if (animationProperties != null) {
                 animateTo(view, animationProperties);
@@ -498,7 +492,7 @@ public class StatusIconContainer extends AlphaOptimizedLinearLayout {
         public AnimationFilter getAnimationFilter() {
             return mAnimationFilter;
         }
-    }.setDuration(100);
+    }.setDuration(200).setDelay(50);
 
     private static final AnimationProperties X_ANIMATION_PROPERTIES = new AnimationProperties() {
         private AnimationFilter mAnimationFilter = new AnimationFilter().animateX();
@@ -507,7 +501,7 @@ public class StatusIconContainer extends AlphaOptimizedLinearLayout {
         public AnimationFilter getAnimationFilter() {
             return mAnimationFilter;
         }
-    }.setDuration(100);
+    }.setDuration(200);
 
     private static final AnimationProperties ANIMATE_ALL_PROPERTIES = new AnimationProperties() {
         private AnimationFilter mAnimationFilter = new AnimationFilter().animateX().animateY()
@@ -517,5 +511,5 @@ public class StatusIconContainer extends AlphaOptimizedLinearLayout {
         public AnimationFilter getAnimationFilter() {
             return mAnimationFilter;
         }
-    }.setDuration(100);
+    }.setDuration(200);
 }

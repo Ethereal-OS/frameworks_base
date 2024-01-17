@@ -3562,7 +3562,7 @@ public class DevicePolicyManager {
      * Maximum supported password length. Kind-of arbitrary.
      * @hide
      */
-    public static final int MAX_PASSWORD_LENGTH = 16;
+    public static final int MAX_PASSWORD_LENGTH = 64;
 
     /**
      * Service Action: Service implemented by a device owner or profile owner supervision app to
@@ -6638,6 +6638,13 @@ public class DevicePolicyManager {
     public static final int KEYGUARD_DISABLE_IRIS = 1 << 8;
 
     /**
+     * Disable all keyguard shortcuts.
+     *
+     * @hide
+     */
+    public static final int KEYGUARD_DISABLE_SHORTCUTS_ALL = 1 << 9;
+
+    /**
      * NOTE: Please remember to update the DevicePolicyManagerTest's testKeyguardDisabledFeatures
      * CTS test when adding to the list above.
      */
@@ -6680,7 +6687,8 @@ public class DevicePolicyManager {
      */
     public static final int ORG_OWNED_PROFILE_KEYGUARD_FEATURES_PARENT_ONLY =
             DevicePolicyManager.KEYGUARD_DISABLE_SECURE_CAMERA
-                    | DevicePolicyManager.KEYGUARD_DISABLE_SECURE_NOTIFICATIONS;
+                    | DevicePolicyManager.KEYGUARD_DISABLE_SECURE_NOTIFICATIONS
+                    | DevicePolicyManager.KEYGUARD_DISABLE_SHORTCUTS_ALL;
 
     /**
      * Keyguard features that when set on a normal or organization-owned managed profile, have
@@ -6787,6 +6795,8 @@ public class DevicePolicyManager {
      * {@link #ENCRYPTION_STATUS_UNSUPPORTED}, {@link #ENCRYPTION_STATUS_INACTIVE},
      * {@link #ENCRYPTION_STATUS_ACTIVATING}, {@link #ENCRYPTION_STATUS_ACTIVE_DEFAULT_KEY},
      * {@link #ENCRYPTION_STATUS_ACTIVE}, or {@link #ENCRYPTION_STATUS_ACTIVE_PER_USER}.
+     *
+     * @throws SecurityException if called on a parent instance.
      */
     public int getStorageEncryptionStatus() {
         throwIfParentInstance("getStorageEncryptionStatus");
@@ -9178,7 +9188,8 @@ public class DevicePolicyManager {
      * @see #isProfileOwnerApp
      * @see #isDeviceOwnerApp
      * @param admin Which {@link DeviceAdminReceiver} this request is associate with.
-     * @param profileName The name of the profile.
+     * @param profileName The name of the profile. If the name is longer than 200 characters
+     *                    it will be truncated.
      * @throws SecurityException if {@code admin} is not a device or profile owner.
      */
     public void setProfileName(@NonNull ComponentName admin, String profileName) {
@@ -12391,7 +12402,8 @@ public class DevicePolicyManager {
 
     /**
      * Called by a device admin to set the long support message. This will be displayed to the user
-     * in the device administators settings screen.
+     * in the device administrators settings screen. If the message is longer than 20000 characters
+     * it may be truncated.
      * <p>
      * If the long support message needs to be localized, it is the responsibility of the
      * {@link DeviceAdminReceiver} to listen to the {@link Intent#ACTION_LOCALE_CHANGED} broadcast
@@ -15575,5 +15587,25 @@ public class DevicePolicyManager {
             }
         }
         return false;
+    }
+
+    /**
+     * Lineage: check if secure keyguard is required
+     * @hide
+     */
+    public boolean requireSecureKeyguard() {
+        return requireSecureKeyguard(UserHandle.myUserId());
+    }
+
+    /** @hide */
+    public boolean requireSecureKeyguard(int userHandle) {
+        if (mService != null) {
+            try {
+                return mService.requireSecureKeyguard(userHandle);
+            } catch (RemoteException e) {
+                Log.w(TAG, "Failed to get secure keyguard requirement");
+            }
+        }
+        return true;
     }
 }

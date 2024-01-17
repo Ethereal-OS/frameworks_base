@@ -1927,7 +1927,7 @@ public class AppStandbyController
         }
     }
 
-    @Override    
+    @Override
     public void onAdminDataAvailable() {
         mAdminDataAvailableLatch.countDown();
     }

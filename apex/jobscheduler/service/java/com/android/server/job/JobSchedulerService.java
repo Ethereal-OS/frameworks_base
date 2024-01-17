@@ -156,13 +156,13 @@ import java.util.function.Predicate;
 public class JobSchedulerService extends com.android.server.SystemService
         implements StateChangedListener, JobCompletedListener {
     public static final String TAG = "JobScheduler";
-    public static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
-    public static final boolean DEBUG_STANDBY = DEBUG || false;
+    public static final boolean DEBUG = false;
+    public static final boolean DEBUG_STANDBY = false;
 
     /** The maximum number of jobs that we allow an app to schedule */
     private static final int MAX_JOBS_PER_APP = 150;
     /** The number of the most recently completed jobs to keep track of for debugging purposes. */
-    private static final int NUM_COMPLETED_JOB_HISTORY = 20;
+    private static final int NUM_COMPLETED_JOB_HISTORY = 5;
 
     @VisibleForTesting
     public static Clock sSystemClock = Clock.systemUTC();
@@ -905,6 +905,10 @@ public class JobSchedulerService extends com.android.server.SystemService
                     final int uid = intent.getIntExtra(Intent.EXTRA_UID, -1);
                     synchronized (mLock) {
                         mUidToPackageCache.remove(uid);
+                    }
+                } else {
+                    synchronized (mJobSchedulerStub.mPersistCache) {
+                        mJobSchedulerStub.mPersistCache.remove(pkgUid);
                     }
                 }
             } else if (Intent.ACTION_PACKAGE_FULLY_REMOVED.equals(action)) {
@@ -1755,7 +1759,7 @@ public class JobSchedulerService extends com.android.server.SystemService
             // same job ID), we remove it from the JobStore and tell the JobServiceContext to stop
             // running the job. Once the job stops running, we then call this method again.
             // TODO: rework code so we don't intentionally call this method twice for the same job
-            Slog.w(TAG, "Job didn't exist in JobStore: " + jobStatus.toShortString());
+            //Slog.w(TAG, "Job didn't exist in JobStore: " + jobStatus.toShortString());
         }
         if (mReadyToRock) {
             for (int i = 0; i < mControllers.size(); i++) {

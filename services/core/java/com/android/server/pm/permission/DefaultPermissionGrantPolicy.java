@@ -34,6 +34,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.PackageManagerInternal;
+import android.content.pm.PackageParser;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
@@ -66,8 +67,10 @@ import android.util.TypedXmlPullParser;
 import android.util.Xml;
 
 import com.android.internal.R;
+import com.android.internal.gmscompat.GmsCompatApp;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.XmlUtils;
+import com.android.internal.util.aicp.OmniJawsClient;
 import com.android.server.LocalServices;
 import com.android.server.ServiceThread;
 import com.android.server.pm.KnownPackages;
@@ -307,7 +310,6 @@ final class DefaultPermissionGrantPolicy {
                 return mContext.getPackageManager().getPackageInfo(pkg,
                         DEFAULT_PACKAGE_INFO_QUERY_FLAGS);
             } catch (NameNotFoundException e) {
-                Slog.e(TAG, "Package not found: " + pkg);
                 return null;
             }
         }
@@ -460,25 +462,21 @@ final class DefaultPermissionGrantPolicy {
             grantRuntimePermissionsForSystemPackage(pm, userId, pkg);
         }
 
-        // Re-grant READ_PHONE_STATE as non-fixed to all system apps that have
-        // READ_PRIVILEGED_PHONE_STATE and READ_PHONE_STATE granted -- this is to undo the fixed
-        // grant from R.
+        // Grant READ_PHONE_STATE to all system apps that have READ_PRIVILEGED_PHONE_STATE
         for (PackageInfo pkg : packages) {
             if (pkg == null
                     || !doesPackageSupportRuntimePermissions(pkg)
                     || ArrayUtils.isEmpty(pkg.requestedPermissions)
                     || !pm.isGranted(Manifest.permission.READ_PRIVILEGED_PHONE_STATE,
                             pkg, UserHandle.of(userId))
-                    || !pm.isGranted(Manifest.permission.READ_PHONE_STATE, pkg,
-                            UserHandle.of(userId))
                     || pm.isSysComponentOrPersistentPlatformSignedPrivApp(pkg)) {
                 continue;
             }
 
-            pm.updatePermissionFlags(Manifest.permission.READ_PHONE_STATE, pkg,
-                    PackageManager.FLAG_PERMISSION_SYSTEM_FIXED,
-                    0,
-                    UserHandle.of(userId));
+            grantRuntimePermissions(pm, pkg,
+                    Collections.singleton(Manifest.permission.READ_PHONE_STATE),
+                    true, // systemFixed
+                    userId);
         }
 
     }
@@ -767,19 +765,6 @@ final class DefaultPermissionGrantPolicy {
                         Intent.CATEGORY_APP_EMAIL, userId),
                 userId, CONTACTS_PERMISSIONS, CALENDAR_PERMISSIONS);
 
-        // Browser
-        String browserPackage = ArrayUtils.firstOrNull(getKnownPackages(
-                KnownPackages.PACKAGE_BROWSER, userId));
-        if (browserPackage == null) {
-            browserPackage = getDefaultSystemHandlerActivityPackageForCategory(pm,
-                    Intent.CATEGORY_APP_BROWSER, userId);
-            if (!pm.isSystemPackage(browserPackage)) {
-                browserPackage = null;
-            }
-        }
-        grantPermissionsToPackage(pm, browserPackage, userId, false /* ignoreSystemPackage */,
-                true /*whitelistRestrictedPermissions*/, FOREGROUND_LOCATION_PERMISSIONS);
-
         // Voice interaction
         if (voiceInteractPackageNames != null) {
             for (String voiceInteractPackageName : voiceInteractPackageNames) {
@@ -827,6 +812,7 @@ final class DefaultPermissionGrantPolicy {
                         ACTIVITY_RECOGNITION_PERMISSIONS);
             }
         }
+        grantPermissionsToSystemPackage(pm, GmsCompatApp.PKG_NAME, userId, NOTIFICATION_PERMISSIONS);
 
         // Music
         Intent musicIntent = new Intent(Intent.ACTION_VIEW)
@@ -920,6 +906,112 @@ final class DefaultPermissionGrantPolicy {
         String commonServiceAction = "android.adservices.AD_SERVICES_COMMON_SERVICE";
         grantPermissionsToSystemPackage(pm, getDefaultSystemHandlerServicePackage(pm,
                         commonServiceAction, userId), userId, NOTIFICATION_PERMISSIONS);
+
+        // ContactsProvider2
+        grantSystemFixedPermissionsToSystemPackage(pm,
+                getDefaultProviderAuthorityPackage("com.android.providers.contacts.ContactsProvider2", userId), userId,
+                CONTACTS_PERMISSIONS, STORAGE_PERMISSIONS);
+
+        // DownloadProviders
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.android.providers.downloads.DownloadProvider", userId,
+                STORAGE_PERMISSIONS);
+
+        // Mediascanner
+        grantSystemFixedPermissionsToSystemPackage(pm,
+                getDefaultProviderAuthorityPackage("com.android.providers.media.MediaProvider", userId), userId,
+                STORAGE_PERMISSIONS);
+
+        // Google Chrome
+        grantPermissionsToSystemPackage(pm, "com.android.chrome", userId, ALWAYS_LOCATION_PERMISSIONS,
+                CAMERA_PERMISSIONS, CONTACTS_PERMISSIONS, MICROPHONE_PERMISSIONS, NEARBY_DEVICES_PERMISSIONS,
+                STORAGE_PERMISSIONS);
+
+        // Google Play Store
+        grantPermissionsToSystemPackage(pm, "com.android.vending", userId, CONTACTS_PERMISSIONS,
+                ALWAYS_LOCATION_PERMISSIONS, NEARBY_DEVICES_PERMISSIONS, PHONE_PERMISSIONS, SMS_PERMISSIONS,
+                STORAGE_PERMISSIONS);
+
+        // ThemePicker
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.android.wallpaper", userId, STORAGE_PERMISSIONS);
+
+        // Google Connectivity Services
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.apps.gcs", userId, ALWAYS_LOCATION_PERMISSIONS);
+
+        // Data Restore Tool
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.apps.restore", userId, PHONE_PERMISSIONS,
+                CONTACTS_PERMISSIONS, SMS_PERMISSIONS);
+
+        // Project Fi
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.apps.tycho", userId, CONTACTS_PERMISSIONS,
+                PHONE_PERMISSIONS, MICROPHONE_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS, SMS_PERMISSIONS);
+
+        // Google Wallpapers
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.apps.wallpaper", userId, PHONE_PERMISSIONS,
+                STORAGE_PERMISSIONS);
+
+        // Google Backup Transport
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.backuptransport", userId, CONTACTS_PERMISSIONS);
+
+        // Google Calendar
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.calendar", userId, CALENDAR_PERMISSIONS,
+                CONTACTS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS, PHONE_PERMISSIONS);
+
+        // Google Dialer
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.dialer", userId, PHONE_PERMISSIONS,
+                CAMERA_PERMISSIONS, CONTACTS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS, MICROPHONE_PERMISSIONS,
+                NEARBY_DEVICES_PERMISSIONS, SMS_PERMISSIONS, STORAGE_PERMISSIONS);
+
+        // Google App
+        grantPermissionsToSystemPackage(pm, "com.google.android.googlequicksearchbox", userId,
+                ACTIVITY_RECOGNITION_PERMISSIONS, CALENDAR_PERMISSIONS, CAMERA_PERMISSIONS, CONTACTS_PERMISSIONS,
+                ALWAYS_LOCATION_PERMISSIONS, MICROPHONE_PERMISSIONS, PHONE_PERMISSIONS, SMS_PERMISSIONS,
+                STORAGE_PERMISSIONS);
+
+        // Google Play Services
+        grantPermissionsToSystemPackage(pm, "com.google.android.gms", userId, SENSORS_PERMISSIONS,
+                CALENDAR_PERMISSIONS, CAMERA_PERMISSIONS, CONTACTS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS,
+                MICROPHONE_PERMISSIONS, NEARBY_DEVICES_PERMISSIONS, PHONE_PERMISSIONS, SMS_PERMISSIONS,
+                STORAGE_PERMISSIONS);
+
+        // Persistent Google Play Services
+        grantPermissionsToSystemPackage(pm, "com.google.android.gms.persistent", userId, SENSORS_PERMISSIONS,
+                CALENDAR_PERMISSIONS, CAMERA_PERMISSIONS, CONTACTS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS,
+                MICROPHONE_PERMISSIONS, NEARBY_DEVICES_PERMISSIONS, PHONE_PERMISSIONS, SMS_PERMISSIONS,
+                STORAGE_PERMISSIONS);
+
+        // Google Play Framework
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.gsf", userId, CONTACTS_PERMISSIONS,
+                PHONE_PERMISSIONS);
+
+        // Google Account
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.gsf.login", userId, CONTACTS_PERMISSIONS,
+                PHONE_PERMISSIONS);
+
+        // Google Setup Wizard (Android Setup)
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.setupwizard", userId, CONTACTS_PERMISSIONS,
+                PHONE_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS, CAMERA_PERMISSIONS);
+
+        // Google Sounds
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.soundpicker", userId, STORAGE_PERMISSIONS);
+
+        // Google Contacts Sync
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.syncadapters.contacts", userId,
+                CONTACTS_PERMISSIONS);
+
+        // Carrier Setup
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.android.wfcactivation", userId, SMS_PERMISSIONS);
+
+        // Pixel Live Wallpapers
+        grantSystemFixedPermissionsToSystemPackage(pm, "com.google.pixel.livewallpaper", userId,
+                ALWAYS_LOCATION_PERMISSIONS);
+
+        // Chromium Sign-in
+        grantSystemFixedPermissionsToSystemPackage(pm, "org.chromium.chrome", userId, CONTACTS_PERMISSIONS,
+                STORAGE_PERMISSIONS);
+
+        // OmniJaws
+        String omnijawsServicePackageName = "org.omnirom.omnijaws";
+        grantSystemFixedPermissionsToSystemPackage(pm, omnijawsServicePackageName, userId, ALWAYS_LOCATION_PERMISSIONS);
     }
 
     private String getDefaultSystemHandlerActivityPackageForCategory(PackageManagerWrapper pm,
@@ -1073,8 +1165,6 @@ final class DefaultPermissionGrantPolicy {
 
     public void grantDefaultPermissionsToActiveLuiApp(String packageName, int userId) {
         Log.i(TAG, "Granting permissions to active LUI app for user:" + userId);
-        grantSystemFixedPermissionsToSystemPackage(NO_PM_CACHE, packageName, userId,
-                CAMERA_PERMISSIONS);
     }
 
     public void revokeDefaultPermissionsFromLuiApps(String[] packageNames, int userId) {
@@ -1812,7 +1902,7 @@ final class DefaultPermissionGrantPolicy {
                 int flagMask, int flagValues, @NonNull UserHandle user) {
             PermissionState state = getPermissionState(permission, pkg, user);
             state.initFlags();
-            state.newFlags = (state.newFlags & ~flagMask) | (flagValues & flagMask);
+            state.newFlags |= flagValues & flagMask;
         }
 
         @Override

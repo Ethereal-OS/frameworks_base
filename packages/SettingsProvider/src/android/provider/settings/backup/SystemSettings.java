@@ -87,7 +87,12 @@ public class SystemSettings {
         Settings.System.DISPLAY_COLOR_MODE,
         Settings.System.ALARM_ALERT,
         Settings.System.NOTIFICATION_LIGHT_PULSE,
-        Settings.System.RINGTONE_VIBRATION_PATTERN,
-        Settings.System.CUSTOM_RINGTONE_VIBRATION_PATTERN,
+        Settings.System.NAVIGATION_BAR_INVERSE,
+        Settings.System.VOLUME_BUTTON_MUSIC_CONTROL,
+        Settings.System.USE_OLD_MOBILETYPE,
+        Settings.System.LOCKSCREEN_BATTERY_INFO,
+        Settings.System.OMNIJAWS_WEATHER_ICON_PACK,
+        Settings.System.OMNI_LOCKSCREEN_WEATHER_ENABLED,
+        Settings.System.AICP_LOCKSCREEN_WEATHER_STYLE,
     };
 }

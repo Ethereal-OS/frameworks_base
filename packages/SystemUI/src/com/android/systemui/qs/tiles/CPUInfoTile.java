@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2017-2018 Benzo Rom
- *           (C) 2017-2021 crDroidAndroid Project
+ *           (C) 2017-2023 crDroidAndroid Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,6 @@ import com.android.systemui.qs.SettingObserver;
 import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
-import com.android.systemui.settings.UserTracker;
 import com.android.systemui.util.settings.SecureSettings;
 
 import com.android.internal.logging.MetricsLogger;
@@ -48,6 +47,8 @@ import javax.inject.Inject;
 
 /** Quick settings tile: CPUInfo overlay **/
 public class CPUInfoTile extends QSTileImpl<BooleanState> {
+
+    public static final String TILE_SPEC = "cpuinfo";
 
     private final SettingObserver mSetting;
     private final Icon mIcon = ResourceIcon.get(R.drawable.ic_qs_cpu_info);
@@ -62,13 +63,11 @@ public class CPUInfoTile extends QSTileImpl<BooleanState> {
             StatusBarStateController statusBarStateController,
             ActivityStarter activityStarter,
             QSLogger qsLogger,
-            SecureSettings secureSettings,
-            UserTracker userTracker) {
+            SecureSettings secureSettings) {
         super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
 
-        mSetting = new SettingObserver(secureSettings, mHandler, Secure.SHOW_CPU_OVERLAY,
-                userTracker.getUserId()) {
+        mSetting = new SettingObserver(secureSettings, mHandler, Secure.SHOW_CPU_OVERLAY, getHost().getUserId()) {
             @Override
             protected void handleValueChanged(int value, boolean observedChange) {
                 handleRefreshState(value);
@@ -130,7 +129,7 @@ public class CPUInfoTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.CUSTOM_SETTINGS;
+        return MetricsEvent.VOLTAGE;
     }
 
     @Override

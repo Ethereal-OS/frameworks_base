@@ -29,6 +29,7 @@ import android.app.ambientcontext.AmbientContextManager;
 import android.app.ambientcontext.IAmbientContextManager;
 import android.app.appsearch.AppSearchManagerFrameworkInitializer;
 import android.app.blob.BlobStoreManagerFrameworkInitializer;
+import android.app.compat.gms.GmsCompat;
 import android.app.contentsuggestions.ContentSuggestionsManager;
 import android.app.contentsuggestions.IContentSuggestionsManager;
 import android.app.job.JobSchedulerFrameworkInitializer;
@@ -108,6 +109,7 @@ import android.hardware.iris.IrisManager;
 import android.hardware.lights.LightsManager;
 import android.hardware.lights.SystemLightsManager;
 import android.hardware.location.ContextHubManager;
+import android.hardware.location.IContextHubService;
 import android.hardware.radio.RadioManager;
 import android.hardware.usb.IUsbManager;
 import android.hardware.usb.UsbManager;
@@ -115,6 +117,7 @@ import android.location.CountryDetector;
 import android.location.ICountryDetector;
 import android.location.ILocationManager;
 import android.location.LocationManager;
+import android.location.HookedLocationManager;
 import android.media.AudioDeviceVolumeManager;
 import android.media.AudioManager;
 import android.media.MediaFrameworkInitializer;
@@ -195,6 +198,8 @@ import android.permission.LegacyPermissionManager;
 import android.permission.PermissionCheckerManager;
 import android.permission.PermissionControllerManager;
 import android.permission.PermissionManager;
+import android.pocket.IPocketService;
+import android.pocket.PocketManager;
 import android.print.IPrintManager;
 import android.print.PrintManager;
 import android.safetycenter.SafetyCenterFrameworkInitializer;
@@ -239,15 +244,13 @@ import com.android.internal.app.IAppOpsService;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.app.ISoundTriggerService;
 import com.android.internal.appwidget.IAppWidgetService;
+import com.android.internal.gmscompat.sysservice.GmcUserManager;
 import com.android.internal.graphics.fonts.IFontManager;
 import com.android.internal.net.INetworkWatchlistManager;
 import com.android.internal.os.IBinaryTransparencyService;
 import com.android.internal.os.IDropBoxManagerService;
 import com.android.internal.policy.PhoneLayoutInflater;
 import com.android.internal.util.Preconditions;
-
-import com.oplus.os.ILinearmotorVibratorService;
-import com.oplus.os.LinearmotorVibrator;
 
 import java.util.Map;
 import java.util.Objects;
@@ -556,7 +559,11 @@ public final class SystemServiceRegistry {
             @Override
             public LocationManager createService(ContextImpl ctx) throws ServiceNotFoundException {
                 IBinder b = ServiceManager.getServiceOrThrow(Context.LOCATION_SERVICE);
-                return new LocationManager(ctx, ILocationManager.Stub.asInterface(b));
+                if (HookedLocationManager.isEnabled()) {
+                    return new HookedLocationManager(ctx, ILocationManager.Stub.asInterface(b));
+                } else {
+                    return new LocationManager(ctx, ILocationManager.Stub.asInterface(b));
+                }
             }});
 
         registerService(Context.NETWORK_POLICY_SERVICE, NetworkPolicyManager.class,
@@ -807,6 +814,11 @@ public final class SystemServiceRegistry {
             public UserManager createService(ContextImpl ctx) throws ServiceNotFoundException {
                 IBinder b = ServiceManager.getServiceOrThrow(Context.USER_SERVICE);
                 IUserManager service = IUserManager.Stub.asInterface(b);
+
+                if (GmsCompat.isEnabled()) {
+                    return new GmcUserManager(ctx, service);
+                }
+
                 return new UserManager(ctx, service);
             }});
 
@@ -964,13 +976,13 @@ public final class SystemServiceRegistry {
                 return new TvInteractiveAppManager(service, ctx.getUserId());
             }});
 
-        registerService(Context.LINEARMOTOR_VIBRATOR_SERVICE, LinearmotorVibrator.class,
-                new CachedServiceFetcher<LinearmotorVibrator>() {
+        registerService(Context.POCKET_SERVICE, PocketManager.class,
+                new CachedServiceFetcher<PocketManager>() {
             @Override
-            public LinearmotorVibrator createService(ContextImpl ctx) {
-                IBinder binder = ServiceManager.getService(Context.LINEARMOTOR_VIBRATOR_SERVICE);
-                ILinearmotorVibratorService service = ILinearmotorVibratorService.Stub.asInterface(binder);
-                return new LinearmotorVibrator(ctx.getOuterContext(), service);
+            public PocketManager createService(ContextImpl ctx) {
+                IBinder binder = ServiceManager.getService(Context.POCKET_SERVICE);
+                IPocketService service = IPocketService.Stub.asInterface(binder);
+                return new PocketManager(ctx.getOuterContext(), service);
             }});
 
         registerService(Context.TV_INPUT_SERVICE, TvInputManager.class,
@@ -1029,7 +1041,7 @@ public final class SystemServiceRegistry {
                 new StaticServiceFetcher<OemLockManager>() {
             @Override
             public OemLockManager createService() throws ServiceNotFoundException {
-                IBinder b = ServiceManager.getServiceOrThrow(Context.OEM_LOCK_SERVICE);
+                IBinder b = ServiceManager.getService(Context.OEM_LOCK_SERVICE);
                 IOemLockService oemLockService = IOemLockService.Stub.asInterface(b);
                 if (oemLockService != null) {
                     return new OemLockManager(oemLockService);
@@ -1049,9 +1061,10 @@ public final class SystemServiceRegistry {
         registerService(Context.APPWIDGET_SERVICE, AppWidgetManager.class,
                 new CachedServiceFetcher<AppWidgetManager>() {
             @Override
-            public AppWidgetManager createService(ContextImpl ctx) throws ServiceNotFoundException {
-                IBinder b = ServiceManager.getServiceOrThrow(Context.APPWIDGET_SERVICE);
-                return new AppWidgetManager(ctx, IAppWidgetService.Stub.asInterface(b));
+            public AppWidgetManager createService(ContextImpl ctx) {
+                IBinder b = ServiceManager.getService(Context.APPWIDGET_SERVICE);
+                return b == null ? null : new AppWidgetManager(ctx,
+                        IAppWidgetService.Stub.asInterface(b));
             }});
 
         registerService(Context.MIDI_SERVICE, MidiManager.class,
@@ -1126,8 +1139,12 @@ public final class SystemServiceRegistry {
                 new CachedServiceFetcher<ContextHubManager>() {
             @Override
             public ContextHubManager createService(ContextImpl ctx) throws ServiceNotFoundException {
-                return new ContextHubManager(ctx.getOuterContext(),
-                  ctx.mMainThread.getHandler().getLooper());
+                IBinder b = ServiceManager.getService(Context.CONTEXTHUB_SERVICE);
+                if (b == null) {
+                    return null;
+                }
+                return new ContextHubManager(IContextHubService.Stub.asInterface(b),
+                        ctx.mMainThread.getHandler().getLooper());
             }});
 
         registerService(Context.INCIDENT_SERVICE, IncidentManager.class,
@@ -1532,6 +1549,17 @@ public final class SystemServiceRegistry {
                         IAmbientContextManager manager =
                                 IAmbientContextManager.Stub.asInterface(iBinder);
                         return new AmbientContextManager(ctx.getOuterContext(), manager);
+                    }});
+
+        registerService(Context.APP_LOCK_SERVICE, AppLockManager.class,
+                new CachedServiceFetcher<AppLockManager>() {
+                    @Override
+                    public AppLockManager createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        IBinder binder = ServiceManager.getServiceOrThrow(
+                                Context.APP_LOCK_SERVICE);
+                        return new AppLockManager(ctx,
+                            IAppLockManagerService.Stub.asInterface(binder));
                     }});
 
         sInitializing = true;

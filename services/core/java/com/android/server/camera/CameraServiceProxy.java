@@ -82,6 +82,8 @@ import com.android.server.ServiceThread;
 import com.android.server.SystemService;
 import com.android.server.wm.WindowManagerInternal;
 
+import ink.kaleidoscope.server.ParallelSpaceManagerService;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
@@ -218,6 +220,7 @@ public class CameraServiceProxy extends SystemService
     private static final IBinder nfcInterfaceToken = new Binder();
 
     private final boolean mNotifyNfc;
+    private final boolean mAllowMediaUid;
 
     private ScheduledThreadPoolExecutor mLogWriterService = new ScheduledThreadPoolExecutor(
             /*corePoolSize*/ 1);
@@ -347,6 +350,7 @@ public class CameraServiceProxy extends SystemService
                 case Intent.ACTION_USER_INFO_CHANGED:
                 case Intent.ACTION_MANAGED_PROFILE_ADDED:
                 case Intent.ACTION_MANAGED_PROFILE_REMOVED:
+                case Intent.ACTION_PARALLEL_SPACE_CHANGED:
                     synchronized(mLock) {
                         // Return immediately if we haven't seen any users start yet
                         if (mEnabledCameraUsers == null) return;
@@ -498,7 +502,8 @@ public class CameraServiceProxy extends SystemService
 
             if ((recentTasks != null) && (!recentTasks.getList().isEmpty())) {
                 for (ActivityManager.RecentTaskInfo task : recentTasks.getList()) {
-                    if (packageName.equals(task.topActivityInfo.packageName)) {
+                    if (task.topActivityInfo != null && packageName.equals(
+                            task.topActivityInfo.packageName)) {
                         taskInfo = new TaskInfo();
                         taskInfo.frontTaskId = task.taskId;
                         taskInfo.isResizeable =
@@ -564,7 +569,8 @@ public class CameraServiceProxy extends SystemService
 
         @Override
         public void pingForUserUpdate() {
-            if (Binder.getCallingUid() != Process.CAMERASERVER_UID) {
+            if (Binder.getCallingUid() != Process.CAMERASERVER_UID
+                    && (!mAllowMediaUid || Binder.getCallingUid() != Process.MEDIA_UID)) {
                 Slog.e(TAG, "Calling UID: " + Binder.getCallingUid() + " doesn't match expected " +
                         " camera service UID!");
                 return;
@@ -575,7 +581,8 @@ public class CameraServiceProxy extends SystemService
 
         @Override
         public void notifyCameraState(CameraSessionStats cameraState) {
-            if (Binder.getCallingUid() != Process.CAMERASERVER_UID) {
+            if (Binder.getCallingUid() != Process.CAMERASERVER_UID
+                    && (!mAllowMediaUid || Binder.getCallingUid() != Process.MEDIA_UID)) {
                 Slog.e(TAG, "Calling UID: " + Binder.getCallingUid() + " doesn't match expected " +
                         " camera service UID!");
                 return;
@@ -619,6 +626,8 @@ public class CameraServiceProxy extends SystemService
 
         mNotifyNfc = SystemProperties.getInt(NFC_NOTIFICATION_PROP, 0) > 0;
         if (DEBUG) Slog.v(TAG, "Notify NFC behavior is " + (mNotifyNfc ? "active" : "disabled"));
+        mAllowMediaUid = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_allowMediaUidForCameraServiceProxy);
         // Don't keep any extra logging threads if not needed
         mLogWriterService.setKeepAliveTime(1, TimeUnit.SECONDS);
         mLogWriterService.allowCoreThreadTimeOut(true);
@@ -705,6 +714,7 @@ public class CameraServiceProxy extends SystemService
         filter.addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+        filter.addAction(Intent.ACTION_PARALLEL_SPACE_CHANGED);
         mContext.registerReceiver(mIntentReceiver, filter);
 
         publishBinderService(CAMERA_SERVICE_PROXY_BINDER_NAME, mCameraServiceProxy);
@@ -948,6 +958,7 @@ public class CameraServiceProxy extends SystemService
         for (int id : userProfiles) {
             handles.add(id);
         }
+        handles.addAll(ParallelSpaceManagerService.getCurrentParallelUserIds());
 
         return handles;
     }

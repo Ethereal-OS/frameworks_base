@@ -30,6 +30,7 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ActivityPresentationInfo;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.GosPackageState;
 import android.content.pm.UserInfo;
 import android.net.Uri;
 import android.os.Bundle;
@@ -691,9 +692,6 @@ public abstract class ActivityManagerInternal {
      */
     public abstract @TempAllowListType int getPushMessagingOverQuotaBehavior();
 
-    // Starts a process as empty.
-    public abstract int startActivityAsUserEmpty(Bundle options);
-
     /**
      * Return the startForeground() grace period after calling startForegroundService().
      */
@@ -863,4 +861,12 @@ public abstract class ActivityManagerInternal {
      */
     public abstract void registerNetworkPolicyUidObserver(@NonNull IUidObserver observer,
             int which, int cutpoint, @NonNull String callingPackage);
+
+    public abstract void onGosPackageStateChanged(int uid, @Nullable GosPackageState state);
+
+    public abstract boolean queryActivityAllowed(ComponentName resolvedActivity, Intent intent, int callerUid,
+        int callerPid, String resolvedType, ApplicationInfo resolvedApp);
+    public abstract boolean queryServiceAllowed(ComponentName resolvedService, Intent intent, int callerUid,
+        int callerPid, String resolvedType, ApplicationInfo resolvedApp);
+
 }

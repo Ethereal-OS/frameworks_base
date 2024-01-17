@@ -21,9 +21,9 @@ import static android.app.admin.DevicePolicyResources.Strings.Core.RESOLVER_CANT
 import static android.app.admin.DevicePolicyResources.Strings.Core.RESOLVER_CANT_SHARE_WITH_PERSONAL;
 import static android.app.admin.DevicePolicyResources.Strings.Core.RESOLVER_CANT_SHARE_WITH_WORK;
 import static android.app.admin.DevicePolicyResources.Strings.Core.RESOLVER_CROSS_PROFILE_BLOCKED_TITLE;
+import static android.content.ContentProvider.getUserIdFromUri;
 import static android.stats.devicepolicy.DevicePolicyEnums.RESOLVER_EMPTY_STATE_NO_SHARING_TO_PERSONAL;
 import static android.stats.devicepolicy.DevicePolicyEnums.RESOLVER_EMPTY_STATE_NO_SHARING_TO_WORK;
-import static android.content.ContentProvider.getUserIdFromUri;
 
 import static com.android.internal.util.LatencyTracker.ACTION_LOAD_SHARE_SHEET;
 
@@ -202,7 +202,7 @@ public class ChooserActivity extends ResolverActivity implements
     private static final String CHIP_LABEL_METADATA_KEY = "android.service.chooser.chip_label";
     private static final String CHIP_ICON_METADATA_KEY = "android.service.chooser.chip_icon";
 
-    private static final boolean DEBUG = true;
+    private static final boolean DEBUG = false;
 
     private static final boolean USE_PREDICTION_MANAGER_FOR_SHARE_ACTIVITIES = true;
     // TODO(b/123088566) Share these in a better way.
@@ -1433,7 +1433,7 @@ public class ChooserActivity extends ResolverActivity implements
             if (!validForContentPreview(uri)) {
                 contentPreviewLayout.setVisibility(View.GONE);
                 return contentPreviewLayout;
-            }            
+            }
             imagePreview.findViewById(R.id.content_preview_image_1_large)
                     .setTransitionName(ChooserActivity.FIRST_IMAGE_PREVIEW_TRANSITION_NAME);
             mPreviewCoord.loadUriIntoView(R.id.content_preview_image_1_large, uri, 0);
@@ -1556,13 +1556,13 @@ public class ChooserActivity extends ResolverActivity implements
             if (!validForContentPreview(uri)) {
                 contentPreviewLayout.setVisibility(View.GONE);
                 return contentPreviewLayout;
-            }            
+            }
             loadFileUriIntoView(uri, contentPreviewLayout);
         } else {
             List<Uri> uris = targetIntent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
             uris = uris.stream()
                     .filter(ChooserActivity::validForContentPreview)
-                    .collect(Collectors.toList());            
+                    .collect(Collectors.toList());
             int uriCount = uris.size();
 
             if (uriCount == 0) {
@@ -1620,7 +1620,7 @@ public class ChooserActivity extends ResolverActivity implements
             fileIconView.setImageResource(R.drawable.chooser_file_generic);
         }
     }
- 
+
     /**
      * Indicate if the incoming content URI should be allowed.
      *
@@ -2987,9 +2987,21 @@ public class ChooserActivity extends ResolverActivity implements
 
     private boolean shouldShowStickyContentPreviewNoOrientationCheck() {
         return shouldShowTabs()
-                && mMultiProfilePagerAdapter.getListAdapterForUserHandle(
-                UserHandle.of(UserHandle.myUserId())).getCount() > 0
+                && (mMultiProfilePagerAdapter.getListAdapterForUserHandle(
+                        UserHandle.of(UserHandle.myUserId())).getCount() > 0
+                    || shouldShowContentPreviewWhenEmpty())
                 && shouldShowContentPreview();
+    }
+
+    /**
+     * This method could be used to override the default behavior when we hide the preview area
+     * when the current tab doesn't have any items.
+     *
+     * @return true if we want to show the content preview area even if the tab for the current
+     *         user is empty
+     */
+    protected boolean shouldShowContentPreviewWhenEmpty() {
+        return false;
     }
 
     /**

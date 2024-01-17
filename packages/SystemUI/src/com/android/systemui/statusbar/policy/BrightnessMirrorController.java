@@ -47,7 +47,7 @@ public class BrightnessMirrorController
         implements CallbackController<BrightnessMirrorController.BrightnessMirrorListener> {
 
     private static final String QS_SHOW_AUTO_BRIGHTNESS =
-            "customsecure:" + Settings.Secure.QS_SHOW_AUTO_BRIGHTNESS;
+            Settings.Secure.QS_SHOW_AUTO_BRIGHTNESS;
 
     private final NotificationShadeWindowView mStatusBarWindow;
     private final Consumer<Boolean> mVisibilityCallback;

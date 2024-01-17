@@ -31,6 +31,7 @@ import android.app.ActivityManager;
 import android.app.ActivityThread;
 import android.app.AppGlobals;
 import android.app.UriGrantsManager;
+import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
@@ -71,6 +72,11 @@ import android.util.Size;
 import android.util.SparseArray;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.app.ContentProviderRedirector;
+import com.android.internal.gmscompat.GmsCompatApp;
+import com.android.internal.gmscompat.GmsHooks;
+import com.android.internal.gmscompat.PlayStoreHooks;
+import com.android.internal.gmscompat.dynamite.GmsDynamiteClientHooks;
 import com.android.internal.util.MimeIconUtils;
 
 import dalvik.system.CloseGuard;
@@ -1245,12 +1251,27 @@ public abstract class ContentResolver implements ContentInterface {
             final CursorWrapperInner wrapper = new CursorWrapperInner(qCursor, provider);
             stableProvider = null;
             qCursor = null;
+
+            if (GmsCompat.isEnabled()) {
+                Cursor modified = GmsHooks.maybeModifyQueryResult(uri, projection, queryArgs, wrapper);
+                if (modified != null) {
+                    return modified;
+                }
+            }
+
             return wrapper;
         } catch (RemoteException e) {
             // Arbitrary and not worth documenting, as Activity
             // Manager will kill this process shortly anyway.
             return null;
-        } finally {
+        } catch (SecurityException se) {
+            if (GmsCompat.isEnabled()) {
+                Log.d("GmsCompat", "", se);
+                return null;
+            }
+            throw se;
+        }
+        finally {
             if (qCursor != null) {
                 qCursor.close();
             }
@@ -2177,6 +2198,9 @@ public abstract class ContentResolver implements ContentInterface {
     public final @Nullable Uri insert(@RequiresPermission.Write @NonNull Uri url,
             @Nullable ContentValues values, @Nullable Bundle extras) {
         Objects.requireNonNull(url, "url");
+        if (GmsCompat.isEnabled()) {
+            GmsHooks.filterContentValues(url, values);
+        }
 
         try {
             if (mWrapped != null) return mWrapped.insert(url, values, extras);
@@ -2474,6 +2498,8 @@ public abstract class ContentResolver implements ContentInterface {
         }
         final String auth = uri.getAuthority();
         if (auth != null) {
+            GmsDynamiteClientHooks.maybeInit(auth);
+
             return acquireProvider(mContext, auth);
         }
         return null;
@@ -2552,7 +2578,18 @@ public abstract class ContentResolver implements ContentInterface {
      */
     public final @Nullable ContentProviderClient acquireContentProviderClient(@NonNull Uri uri) {
         Objects.requireNonNull(uri, "uri");
-        IContentProvider provider = acquireProvider(uri);
+
+        IContentProvider provider;
+        try {
+            provider = acquireProvider(uri);
+        } catch (SecurityException se) {
+            if (GmsCompat.isEnabled()) {
+                Log.d("GmsCompat", "uri: " + uri, se);
+                return null;
+            }
+            throw se;
+        }
+
         if (provider != null) {
             return new ContentProviderClient(this, provider, uri.getAuthority(), true);
         }
@@ -2708,11 +2745,27 @@ public abstract class ContentResolver implements ContentInterface {
     @UnsupportedAppUsage
     public final void registerContentObserver(Uri uri, boolean notifyForDescendents,
             ContentObserver observer, @UserIdInt int userHandle) {
+        if (ContentProviderRedirector.shouldSkipRegisterContentObserver(uri, notifyForDescendents,
+                observer, userHandle)) {
+            return;
+        }
+
+        if (GmsCompat.isEnabled()) {
+            if (GmsCompatApp.registerObserver(uri, observer)) {
+                return;
+            }
+        }
+
         try {
             getContentService().registerContentObserver(uri, notifyForDescendents,
                     observer.getContentObserver(), userHandle, mTargetSdkVersion);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
+        } catch (SecurityException se) {
+            if ("com.google.android.gsf.gservices".equals(uri.getAuthority())) {
+                return;
+            }
+            throw se;
         }
     }
 
@@ -2724,6 +2777,17 @@ public abstract class ContentResolver implements ContentInterface {
      */
     public final void unregisterContentObserver(@NonNull ContentObserver observer) {
         Objects.requireNonNull(observer, "observer");
+
+        if (ContentProviderRedirector.shouldSkipUnregisterContentObserver(observer)) {
+            return;
+        }
+
+        if (GmsCompat.isEnabled()) {
+            if (GmsCompatApp.unregisterObserver(observer)) {
+                return;
+            }
+        }
+
         try {
             IContentObserver contentObserver = observer.releaseContentObserver();
             if (contentObserver != null) {
@@ -2818,6 +2882,11 @@ public abstract class ContentResolver implements ContentInterface {
     public void notifyChange(@NonNull Uri uri, @Nullable ContentObserver observer,
             @NotifyFlags int flags) {
         Objects.requireNonNull(uri, "uri");
+
+        if (ContentProviderRedirector.shouldSkipNotifyChange(uri, observer, flags)) {
+            return;
+        }
+
         notifyChange(
                 ContentProvider.getUriWithoutUserId(uri),
                 observer,
@@ -2865,6 +2934,10 @@ public abstract class ContentResolver implements ContentInterface {
         // Cluster based on user ID
         final SparseArray<ArrayList<Uri>> clusteredByUser = new SparseArray<>();
         for (Uri uri : uris) {
+            if (ContentProviderRedirector.shouldSkipNotifyChange(uri, observer, flags)) {
+                continue;
+            }
+
             final int userId = ContentProvider.getUserIdFromUri(uri, mContext.getUserId());
             ArrayList<Uri> list = clusteredByUser.get(userId);
             if (list == null) {
@@ -3939,6 +4012,11 @@ public abstract class ContentResolver implements ContentInterface {
     private static volatile IContentService sContentService;
     @UnsupportedAppUsage
     private final Context mContext;
+
+    /** @hide */
+    public Context getContext() {
+        return mContext;
+    }
 
     @Deprecated
     @UnsupportedAppUsage

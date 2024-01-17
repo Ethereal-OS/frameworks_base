@@ -77,6 +77,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.GosPackageState;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
@@ -107,7 +108,6 @@ import android.system.Os;
 import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
-import android.util.BoostFramework;
 import android.util.DebugUtils;
 import android.util.EventLog;
 import android.util.LongSparseArray;
@@ -136,12 +136,15 @@ import com.android.server.am.ActivityManagerService.ProcessChangeItem;
 import com.android.server.compat.PlatformCompat;
 import com.android.server.pm.dex.DexManager;
 import com.android.server.pm.parsing.pkg.AndroidPackage;
+import com.android.server.pm.pkg.GosPackageStatePm;
 import com.android.server.pm.pkg.PackageStateInternal;
 import com.android.server.wm.ActivityServiceConnectionsHolder;
 import com.android.server.wm.WindowManagerService;
 import com.android.server.wm.WindowProcessController;
 
 import dalvik.system.VMRuntime;
+
+import ink.kaleidoscope.server.ParallelSpaceManagerService;
 
 import java.io.DataInputStream;
 import java.io.File;
@@ -527,11 +530,6 @@ public final class ProcessList {
 
     ActivityManagerGlobalLock mProcLock;
 
-    /**
-     * BoostFramework Object
-     */
-    public static BoostFramework mPerfServiceStartHint = new BoostFramework();
-
     final class IsolatedUidRange {
         @VisibleForTesting
         public final int mFirstUid;
@@ -726,8 +724,8 @@ public final class ProcessList {
                     break;
                 case LMKD_RECONNECT_MSG:
                     if (!sLmkdConnection.connect()) {
-                        Slog.i(TAG, "Failed to connect to lmkd, retry after " +
-                                LMKD_RECONNECT_DELAY_MS + " ms");
+                        //Slog.i(TAG, "Failed to connect to lmkd, retry after " +
+                                //LMKD_RECONNECT_DELAY_MS + " ms");
                         // retry after LMKD_RECONNECT_DELAY_MS
                         sKillHandler.sendMessageDelayed(sKillHandler.obtainMessage(
                                 KillHandler.LMKD_RECONNECT_MSG), LMKD_RECONNECT_DELAY_MS);
@@ -1622,6 +1620,22 @@ public final class ProcessList {
             // EmulatedVolumes: /data/media and /mnt/expand/<volume>/data/media
             // PublicVolumes: /mnt/media_rw/<volume>
             gidList.add(Process.MEDIA_RW_GID);
+
+            // HACK: For legacy devices running fuse above sdcardfs. We have to grant it
+            // gids of other users to make the cross-user file management possible.
+            // This is dirty. But I can't come up with a better idea which doesn't need
+            // to hack the kernel.
+            for (int userId : ParallelSpaceManagerService.getCurrentParallelUserIds()) {
+                gidList.add(UserHandle.getUserGid(userId));
+                // Not needed in theory. Add it just in case. This could happened when
+                // dropping sdcardfs without wiping data and things get broken.
+                gidList.add(UserHandle.getUid(userId, Process.MEDIA_RW_GID));
+            }
+            // Make sure parallel spaces are ready to visit the owner too.
+            if (ParallelSpaceManagerService.isCurrentParallelUser(UserHandle.getUserId(uid))) {
+                int ownerId = ParallelSpaceManagerService.getCurrentParallelOwnerId();
+                gidList.add(UserHandle.getUserGid(ownerId));
+            }
         }
         if (externalStorageAccess) {
             // Apps with MANAGE_EXTERNAL_STORAGE PERMISSION need the external_storage gid to access
@@ -1676,6 +1690,7 @@ public final class ProcessList {
                 AppGlobals.getPackageManager().checkPackageStartable(app.info.packageName, userId);
             } catch (RemoteException e) {
                 throw e.rethrowAsRuntimeException();
+            } catch (SecurityException e) {
             }
 
             int uid = app.uid;
@@ -2345,16 +2360,6 @@ public final class ProcessList {
                 storageManagerInternal.prepareStorageDirs(userId, pkgDataInfoMap.keySet(),
                         app.processName);
             }
-            if (mPerfServiceStartHint != null) {
-                if ((hostingRecord.getType() != null)
-                       && (hostingRecord.getType().equals(HostingRecord.HOSTING_TYPE_NEXT_ACTIVITY)
-                               || hostingRecord.getType().equals(HostingRecord.HOSTING_TYPE_NEXT_TOP_ACTIVITY))) {
-                                   //TODO: not acting on pre-activity
-                    if (startResult != null) {
-                        mPerfServiceStartHint.perfHint(BoostFramework.VENDOR_HINT_FIRST_LAUNCH_BOOST, app.processName, startResult.pid, BoostFramework.Launch.TYPE_START_PROC);
-                    }
-                }
-            }
             checkSlow(startTime, "startProcess: returned from zygote!");
             return startResult;
         } finally {
@@ -2497,6 +2502,10 @@ public final class ProcessList {
             if (predecessor != null) {
                 app.mPredecessor = predecessor;
                 predecessor.mSuccessor = app;
+            }
+            if ((info.flags & PERSISTENT_MASK) == PERSISTENT_MASK) {
+                app.setPersistent(true);
+                app.mState.setMaxAdj(ProcessList.PERSISTENT_PROC_ADJ);
             }
             checkSlow(startTime, "startProcess: done creating new process record");
         } else {
@@ -3021,9 +3030,10 @@ public final class ProcessList {
                 hostingRecord.getDefiningUid(), hostingRecord.getDefiningProcessName());
         final ProcessStateRecord state = r.mState;
 
-        if (!mService.mBooted && !mService.mBooting
+        if (!isolated && !isSdkSandbox
                 && userId == UserHandle.USER_SYSTEM
-                && (info.flags & PERSISTENT_MASK) == PERSISTENT_MASK) {
+                && (info.flags & PERSISTENT_MASK) == PERSISTENT_MASK
+                && (TextUtils.equals(proc, info.processName))) {
             // The system process is initialized to SCHED_GROUP_DEFAULT in init.rc.
             state.setCurrentSchedulingGroup(ProcessList.SCHED_GROUP_DEFAULT);
             state.setSetSchedGroup(ProcessList.SCHED_GROUP_DEFAULT);
@@ -3202,6 +3212,27 @@ public final class ProcessList {
                 } catch (RemoteException ex) {
                     Slog.w(TAG, "Failed to handle trust storage update for: " +
                             r.info.processName);
+                }
+            }
+        }
+    }
+
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
+    void onGosPackageStateChangedLOSP(int uid, @Nullable GosPackageState state) {
+        for (int i = mLruProcesses.size() - 1; i >= 0; i--) {
+            ProcessRecord r = mLruProcesses.get(i);
+            if (r.uid != uid) {
+                // isolated and "sdk sandbox" processes are skipped intentionally (they run in
+                // separate UIDs)
+                continue;
+            }
+            final IApplicationThread thread = r.getThread();
+            if (thread != null) {
+                try {
+                    thread.onGosPackageStateChanged(state);
+                } catch (RemoteException ex) {
+                    Slog.d(TAG, "onGosPackageStateChanged failed; uid " + uid
+                            + ", processName " + r.info.processName);
                 }
             }
         }
@@ -4561,7 +4592,8 @@ public final class ProcessList {
     }
 
     @GuardedBy("mService")
-    ProcessChangeItem enqueueProcessChangeItemLocked(int pid, int uid) {
+    ProcessChangeItem enqueueProcessChangeItemLocked(int pid, int uid, int changes,
+            boolean foregroundActivities, int foregroundServiceTypes, int capacity) {
         synchronized (mProcessChangeLock) {
             int i = mPendingProcessChanges.size() - 1;
             ActivityManagerService.ProcessChangeItem item = null;
@@ -4576,6 +4608,7 @@ public final class ProcessList {
                 i--;
             }
 
+            boolean needNotify = false;
             if (i < 0) {
                 // No existing item in pending changes; need a new one.
                 final int num = mAvailProcessChanges.size();
@@ -4594,13 +4627,21 @@ public final class ProcessList {
                 item.pid = pid;
                 item.uid = uid;
                 if (mPendingProcessChanges.size() == 0) {
-                    if (DEBUG_PROCESS_OBSERVERS) {
-                        Slog.i(TAG_PROCESS_OBSERVERS, "*** Enqueueing dispatch processes changed!");
-                    }
-                    mService.mUiHandler.obtainMessage(DISPATCH_PROCESSES_CHANGED_UI_MSG)
-                            .sendToTarget();
+                    needNotify = true;
                 }
                 mPendingProcessChanges.add(item);
+            }
+
+            item.changes |= changes;
+            item.foregroundActivities = foregroundActivities;
+            item.foregroundServiceTypes = foregroundServiceTypes;
+            item.capability = capacity;
+            if (needNotify) {
+                if (DEBUG_PROCESS_OBSERVERS) {
+                    Slog.i(TAG_PROCESS_OBSERVERS, "*** Enqueueing dispatch processes changed!");
+                }
+                mService.mUiHandler.obtainMessage(DISPATCH_PROCESSES_CHANGED_UI_MSG)
+                        .sendToTarget();
             }
 
             return item;

@@ -175,6 +175,8 @@ public class LockPatternUtils {
     private static final String LOCK_SCREEN_OWNER_INFO_ENABLED =
             Settings.Secure.LOCK_SCREEN_OWNER_INFO_ENABLED;
 
+    private static final String LOCK_PIN_ENHANCED_PRIVACY = "pin_enhanced_privacy";
+
     private static final String LOCK_SCREEN_DEVICE_OWNER_INFO = "lockscreen.device_owner_info";
 
     private static final String ENABLED_TRUST_AGENTS = "lockscreen.enabledtrustagents";
@@ -1040,6 +1042,27 @@ public class LockPatternUtils {
     }
 
     /**
+     * @return Whether enhanced pin privacy is enabled.
+     */
+    public boolean isPinEnhancedPrivacyEnabled(int userId) {
+        return getBoolean(LOCK_PIN_ENHANCED_PRIVACY, true, userId);
+    }
+
+    /**
+     * Set whether enhanced pin privacy is enabled.
+     */
+    public void setPinEnhancedPrivacyEnabled(boolean enabled, int userId) {
+        setBoolean(LOCK_PIN_ENHANCED_PRIVACY, enabled, userId);
+    }
+
+    /**
+     * @return Whether enhanced pin privacy was ever chosen.
+     */
+    public boolean isPinEnhancedPrivacyEverChosen(int userId) {
+        return getString(LOCK_PIN_ENHANCED_PRIVACY, userId) != null;
+    }
+
+    /**
      * Set whether the visible password is enabled for cryptkeeper screen.
      */
     public void setVisiblePasswordEnabled(boolean enabled, int userId) {
@@ -1859,5 +1882,19 @@ public class LockPatternUtils {
         } catch (RemoteException re) {
             re.rethrowFromSystemServer();
         }
+    }
+
+    /**
+     * Returns the length of current credential.
+     *
+     * @return length of the current credential or -1, if the user hasn't authenticated yet.
+     */
+    public int getCredentialLength(int userId) {
+        try {
+            return getLockSettings().getCredentialLength(userId);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+        return -1;
     }
 }

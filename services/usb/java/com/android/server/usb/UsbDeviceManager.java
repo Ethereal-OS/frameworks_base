@@ -61,6 +61,7 @@ import android.hardware.usb.gadget.V1_2.UsbSpeed;
 import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
 import android.os.BatteryManager;
+import android.os.Build;
 import android.os.Environment;
 import android.os.FileUtils;
 import android.os.Handler;
@@ -215,6 +216,16 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
 
     private static UsbDeviceLogger sEventLogger;
 
+    /* Omni add-on */
+    private static boolean mUseMultiUsbController;
+    private static String udc_change;
+    private static final long FUNCTION_UDC_SWITCH = 128;
+    private static final String USB_CONTROLLER_PROPERTY = "sys.usb.controller";
+    private static final String UDC1_MODE = "/sys/devices/platform/soc/a600000.ssusb/mode";
+    private static final String UDC2_MODE = "/sys/devices/platform/soc/a800000.ssusb/mode";
+    private static final String UDC1_NAME_MATCH = "DEVPATH=/devices/platform/soc/a600000.ssusb/a600000.dwc3";
+    private static final String UDC2_NAME_MATCH = "DEVPATH=/devices/platform/soc/a800000.ssusb/a800000.dwc3";
+
     static {
         sDenyInterfaces = new HashSet<>();
         sDenyInterfaces.add(UsbConstants.USB_CLASS_AUDIO);
@@ -262,6 +273,17 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                 mHandler.removeMessages(MSG_ACCESSORY_HANDSHAKE_TIMEOUT);
                 mHandler.setStartAccessoryTrue();
                 startAccessoryMode();
+            }
+            if (mUseMultiUsbController) {
+                String udcname = event.get("UDC_NAME");
+                if (udcname != null) {
+                    String controller = SystemProperties.get(USB_CONTROLLER_PROPERTY);
+                    if (!controller.equals(udcname)) {
+                        String unused = udc_change = udcname;
+                        setCurrentFunctions(FUNCTION_UDC_SWITCH);
+                    }
+                    Slog.i(TAG, "Controller=" + controller + " UDC_NAME=" + udcname);
+                }
             }
         }
     }
@@ -390,12 +412,20 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
         mContext.registerReceiver(languageChangedReceiver,
                 new IntentFilter(Intent.ACTION_LOCALE_CHANGED));
 
+        mUseMultiUsbController = mContext.getResources().getBoolean(
+                                    com.android.internal.R.bool.config_switchUsbController);
+
         // Watch for USB configuration changes
         mUEventObserver = new UsbUEventObserver();
         mUEventObserver.startObserving(USB_STATE_MATCH);
         mUEventObserver.startObserving(ACCESSORY_START_MATCH);
 
         sEventLogger = new UsbDeviceLogger(DUMPSYS_LOG_BUFFER, "UsbDeviceManager activity");
+
+        if (mUseMultiUsbController) {
+            mUEventObserver.startObserving(UDC1_NAME_MATCH);
+            mUEventObserver.startObserving(UDC2_NAME_MATCH);
+        }
     }
 
     UsbProfileGroupSettingsManager getCurrentSettings() {
@@ -510,7 +540,6 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
         private boolean mUsbAccessoryConnected;
         private boolean mSourcePower;
         private boolean mSinkPower;
-        private boolean mConfigured;
         private boolean mAudioAccessoryConnected;
         private boolean mAudioAccessorySupported;
 
@@ -543,7 +572,12 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
         private final UsbPermissionManager mPermissionManager;
         private NotificationManager mNotificationManager;
 
+        /**
+         * Do not debounce for the first disconnect after resetUsbGadget.
+         */
+        protected boolean mResetUsbGadgetDisableDebounce;
         protected boolean mConnected;
+        protected boolean mConfigured;
         protected long mScreenUnlockedFunctions;
         protected boolean mBootCompleted;
         protected boolean mCurrentFunctionsApplied;
@@ -650,15 +684,29 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                 Slog.e(TAG, "unknown state " + state);
                 return;
             }
-            if (configured == 0) removeMessages(MSG_UPDATE_STATE);
             if (connected == 1) removeMessages(MSG_FUNCTION_SWITCH_TIMEOUT);
             Message msg = Message.obtain(this, MSG_UPDATE_STATE);
             msg.arg1 = connected;
             msg.arg2 = configured;
-            // debounce disconnects to avoid problems bringing up USB tethering
-            sendMessageDelayed(msg,
+            if (DEBUG) {
+                Slog.i(TAG, "mResetUsbGadgetDisableDebounce:" + mResetUsbGadgetDisableDebounce
+                       + " connected:" + connected + "configured:" + configured);
+            }
+            if (mResetUsbGadgetDisableDebounce) {
+                // Do not debounce disconnect after resetUsbGadget.
+                sendMessage(msg);
+                if (connected == 1) mResetUsbGadgetDisableDebounce = false;
+            } else {
+                if (configured == 0) {
+                    removeMessages(MSG_UPDATE_STATE);
+                    if (DEBUG) Slog.i(TAG, "removeMessages MSG_UPDATE_STATE");
+                }
+                if (connected == 1) removeMessages(MSG_FUNCTION_SWITCH_TIMEOUT);
+                // debounce disconnects to avoid problems bringing up USB tethering.
+                sendMessageDelayed(msg,
                     (connected == 0) ? (mScreenLocked ? DEVICE_STATE_UPDATE_DELAY
                                                       : DEVICE_STATE_UPDATE_DELAY_EXT) : 0);
+            }
         }
 
         public void updateHostState(UsbPort port, UsbPortStatus status) {
@@ -904,7 +952,10 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                 case MSG_UPDATE_STATE:
                     mConnected = (msg.arg1 == 1);
                     mConfigured = (msg.arg2 == 1);
-
+                    if (DEBUG) {
+                        Slog.i(TAG, "handleMessage MSG_UPDATE_STATE " + "mConnected:" + mConnected
+                               + " mConfigured:" + mConfigured);
+                    }
                     updateUsbNotification(false);
                     updateAdbNotification(false);
                     if (mBootCompleted) {
@@ -1012,6 +1063,20 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                     break;
                 case MSG_SET_CURRENT_FUNCTIONS:
                     long functions = (Long) msg.obj;
+                    if (mUseMultiUsbController) {
+                        if (FUNCTION_UDC_SWITCH == functions) {
+                            SystemProperties.set(USB_CONTROLLER_PROPERTY, udc_change);
+                            if (!mScreenLocked) {
+                                long unlockfunctions = mScreenUnlockedFunctions;
+                                if (unlockfunctions != 0) {
+                                    setEnabledFunctions(unlockfunctions, true);
+                                    break;
+                                }
+                            }
+                            setEnabledFunctions(0, true);
+                            break;
+                        }
+                    }
                     setEnabledFunctions(functions, false);
                     break;
                 case MSG_SET_SCREEN_UNLOCKED_FUNCTIONS:
@@ -1131,15 +1196,38 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
 
         protected void finishBoot() {
             if (mBootCompleted && mCurrentUsbFunctionsReceived && mSystemReady) {
+                boolean switchudc = false;
                 if (mPendingBootBroadcast) {
                     updateUsbStateBroadcastIfNeeded(getAppliedFunctions(mCurrentFunctions));
                     mPendingBootBroadcast = false;
+                }
+                if (mUseMultiUsbController) {
+                    String controller = SystemProperties.get(USB_CONTROLLER_PROPERTY);
+                    try {
+                        String usb1mode = FileUtils.readTextFile(new File(UDC1_MODE), 0, null).trim();
+                        String usb2mode = FileUtils.readTextFile(new File(UDC2_MODE), 0, null).trim();
+                        if ("peripheral".equals(usb1mode) && !"a600000.dwc3".equals(controller)) {
+                            switchudc = true;
+                            SystemProperties.set(USB_CONTROLLER_PROPERTY, "a600000.dwc3");
+                        } else if ("peripheral".equals(usb2mode) && !"a800000.dwc3".equals(controller)) {
+                            switchudc = true;
+                            SystemProperties.set(USB_CONTROLLER_PROPERTY, "a800000.dwc3");
+                        }
+                        String str = TAG;
+                        Slog.i(str, "usb1_mode=" + usb1mode + " usb2_mode=" + usb2mode + " controller=" + controller);
+                    } catch (IOException e) {
+                        Slog.e(TAG, "Error read usb mode", e);
+                    }
                 }
                 if (!mScreenLocked
                         && mScreenUnlockedFunctions != UsbManager.FUNCTION_NONE) {
                     setScreenUnlockedFunctions();
                 } else {
-                    setEnabledFunctions(UsbManager.FUNCTION_NONE, false);
+                    if (mUseMultiUsbController) {
+                        setEnabledFunctions(UsbManager.FUNCTION_NONE, switchudc);
+                    } else {
+                        setEnabledFunctions(UsbManager.FUNCTION_NONE, false);
+                    }
                 }
                 if (mCurrentAccessory != null) {
                     mUsbDeviceManager.getCurrentSettings().accessoryAttached(mCurrentAccessory);
@@ -1302,7 +1390,7 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                     }
 
                     Notification.Builder builder = new Notification.Builder(mContext, channel)
-                            .setSmallIcon(com.android.internal.R.drawable.stat_sys_adb)
+                            .setSmallIcon(com.android.internal.R.drawable.stat_sys_data_usb)
                             .setWhen(0)
                             .setOngoing(true)
                             .setTicker(title)
@@ -1312,6 +1400,7 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                                             .system_notification_accent_color))
                             .setContentTitle(title)
                             .setContentText(message)
+                            .setSubText(Build.ID)
                             .setContentIntent(pi)
                             .setVisibility(Notification.VISIBILITY_PUBLIC);
 
@@ -2010,12 +2099,19 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
                         }
 
                         try {
+                            // MSG_ACCESSORY_MODE_ENTER_TIMEOUT has to be removed to allow exiting
+                            // AOAP mode during resetUsbGadget.
+                            removeMessages(MSG_ACCESSORY_MODE_ENTER_TIMEOUT);
+                            if (mConfigured) {
+                                mResetUsbGadgetDisableDebounce = true;
+                            }
                             android.hardware.usb.gadget.V1_1.IUsbGadget gadgetProxy =
                                     android.hardware.usb.gadget.V1_1.IUsbGadget
                                             .castFrom(mGadgetProxy);
                             gadgetProxy.reset();
                         } catch (RemoteException e) {
                             Slog.e(TAG, "reset Usb Gadget failed", e);
+                            mResetUsbGadgetDisableDebounce = false;
                         }
                     }
                     break;
