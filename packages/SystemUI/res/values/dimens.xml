@@ -570,6 +570,7 @@
 
     <!-- The size of the gesture span needed to activate the "pull" notification expansion -->
     <dimen name="pull_span_min">25dp</dimen>
+
     <dimen name="qs_corner_radius">@*android:dimen/config_dialogCornerRadius</dimen>
     <dimen name="qs_tile_height">84dp</dimen>
     <dimen name="qs_tile_margin_horizontal">8dp</dimen>
@@ -633,7 +634,7 @@
     <dimen name="qs_security_footer_height">88dp</dimen>
     <dimen name="qs_security_footer_single_line_height">48dp</dimen>
     <dimen name="qs_footers_margin_bottom">8dp</dimen>
-    <dimen name="qs_security_footer_background_inset">0dp</dimen>2
+    <dimen name="qs_security_footer_background_inset">0dp</dimen>
     <dimen name="qs_security_footer_corner_radius">@*android:dimen/config_dialogCornerRadius</dimen>
 
     <dimen name="segmented_button_spacing">0dp</dimen>
@@ -1500,7 +1501,7 @@
     <dimen name="ongoing_call_chip_side_padding">12dp</dimen>
     <dimen name="ongoing_call_chip_icon_size">16dp</dimen>
     <!-- The padding between the icon and the text. -->
-    <dimen name="ongoing_call_chip_icon_text_padding">4dp</dimen>2
+    <dimen name="ongoing_call_chip_icon_text_padding">4dp</dimen>
     <dimen name="ongoing_call_chip_corner_radius">@*android:dimen/config_dialogCornerRadius</dimen>
 
     <!-- Status bar user chip -->
