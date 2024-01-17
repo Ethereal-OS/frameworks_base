@@ -4,7 +4,6 @@
      SPDX-License-Identifier: Apache-2.0
 -->
 <resources>
-
     <!-- Pocket Mode -->
     <style name="pocket_view_title">
         <item name="android:fontFamily">@string/config_headlineFontFamily</item>

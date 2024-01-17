@@ -4,7 +4,6 @@
      SPDX-License-Identifier: Apache-2.0
 -->
 <resources>
-
     <string-array name="app_exceptions" translatable="false">
         <item>org.kde.kdeconnect_tp</item>
         <item>#FF808080</item>
@@ -15,7 +14,7 @@
         <item>com.google.android.youtube</item>
         <item>#FFDE4B4B</item>
     </string-array>
-
+  
     <!-- Cardinal directions for the compass tile -->
     <string-array name="cardinal_directions">
         <item>@string/quick_settings_compass_N</item>  <!-- North -->

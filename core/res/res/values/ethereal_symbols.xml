@@ -18,7 +18,7 @@
 
     <!-- Whether to handle audio direction changes between major call states -->
     <java-symbol type="bool" name="config_handleAudioDirectionChangesBetweenCallStateChanges" />
-
+  
     <!-- Light / Regular style fonts -->
     <java-symbol type="string" name="config_lightFontFamily" />
     <java-symbol type="string" name="config_regularFontFamily" />
@@ -223,5 +223,4 @@
     <java-symbol type="string" name="charging_control_notification_content_limit_reached" />
     <java-symbol type="string" name="charging_control_notification_content_target" />
     <java-symbol type="string" name="charging_control_notification_content_target_reached" />
-
 </resources>
