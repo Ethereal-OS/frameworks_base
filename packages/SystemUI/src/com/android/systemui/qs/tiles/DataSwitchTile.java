@@ -227,7 +227,7 @@ public class DataSwitchTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.VOLTAGE;
+        return MetricsEvent.ETHEREAL;
     }
 
     /**

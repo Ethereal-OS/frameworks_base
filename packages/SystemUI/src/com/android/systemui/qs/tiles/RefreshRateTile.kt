@@ -136,7 +136,7 @@ class RefreshRateTile @Inject constructor(
         logD("secondaryLabel = ${state.secondaryLabel}")
     }
 
-    override fun getMetricsCategory(): Int = MetricsEvent.VOLTAGE
+    override fun getMetricsCategory(): Int = MetricsEvent.ETHEREAL
 
     override fun destroy() {
         settingsObserver.unobserve()

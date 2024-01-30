@@ -171,7 +171,7 @@ public class LiveDisplayTile extends QSTileImpl<LiveDisplayState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.VOLTAGE;
+        return MetricsEvent.ETHEREAL;
     }
 
     @Override
