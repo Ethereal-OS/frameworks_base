@@ -41,6 +41,13 @@ jobject android_view_InputDevice_create(JNIEnv* env, const InputDeviceInfo& devi
     if (!nameObj.get()) {
         return NULL;
     }
+    
+    // b/274058082: Pass a copy of the key character map to avoid concurrent
+    // access
+    std::shared_ptr<KeyCharacterMap> map = deviceInfo.getKeyCharacterMap();
+    if (map != nullptr) {
+        map = std::make_shared<KeyCharacterMap>(*map);
+    }
 
     ScopedLocalRef<jstring> descriptorObj(env,
             env->NewStringUTF(deviceInfo.getIdentifier().descriptor.c_str()));
@@ -49,8 +56,7 @@ jobject android_view_InputDevice_create(JNIEnv* env, const InputDeviceInfo& devi
     }
 
     ScopedLocalRef<jobject> kcmObj(env,
-            android_view_KeyCharacterMap_create(env, deviceInfo.getId(),
-            deviceInfo.getKeyCharacterMap()));
+            android_view_KeyCharacterMap_create(env, deviceInfo.getId(), map));
     if (!kcmObj.get()) {
         return NULL;
     }
