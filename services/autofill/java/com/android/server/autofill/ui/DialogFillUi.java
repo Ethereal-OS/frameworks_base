@@ -236,7 +236,7 @@ final class DialogFillUi {
         RemoteViews presentation = Helper.sanitizeRemoteView(
                 response.getDialogPresentation());
         if (presentation == null) {
-            presepresentation = Helper.sanitizeRemoteView(response.getPresentation());
+            presentation = Helper.sanitizeRemoteView(response.getPresentation());
         }
         if (presentation == null) {
             throw new RuntimeException("No presentation for fill dialog authentication");
