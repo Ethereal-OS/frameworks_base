@@ -74,7 +74,7 @@ public class ApkSignatureSchemeV2Verifier {
 
     private static final int APK_SIGNATURE_SCHEME_V2_BLOCK_ID = 0x7109871a;
 
-    /**    
+    /**
      * The maximum number of signers supported by the v2 APK signature scheme.
      */
     private static final int MAX_V2_SIGNERS = 10;
