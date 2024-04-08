@@ -43,6 +43,7 @@ import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Provider
 import kotlin.math.max
+import kotlin.math.min
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -149,9 +150,14 @@ class FooterActionsViewModel(
                 R.drawable.ic_settings,
                 ContentDescription.Resource(R.string.accessibility_quick_settings_settings)
             ),
-            iconTint = null,
+            iconTint =
+                Utils.getColorAttrDefaultColor(
+                    context,
+                    com.android.internal.R.attr.textColorPrimary,
+                ),
             backgroundColor = R.attr.offStateColor,
             this::onSettingsButtonClicked,
+            this::onSettingsButtonLongClicked
         )
 
     /** The model for the power button. */
@@ -166,10 +172,11 @@ class FooterActionsViewModel(
                 iconTint =
                     Utils.getColorAttrDefaultColor(
                         context,
-                        com.android.internal.R.attr.textColorOnAccent,
+                        com.android.internal.R.attr.textColorPrimaryInverse,
                     ),
                 backgroundColor = com.android.internal.R.attr.colorAccent,
                 this::onPowerButtonClicked,
+                this::doNothingLongClick,
             )
         } else {
             null
@@ -181,18 +188,18 @@ class FooterActionsViewModel(
     }
 
     /** Called when the expansion of the Quick Settings changed. */
-    fun onQuickSettingsExpansionChanged(expansion: Float, isInSplitShade: Boolean) {
+    fun onQuickSettingsExpansionChanged(expansion: Float, isInSplitShade: Boolean, customAlpha: Float) {
         if (isInSplitShade) {
             // In split shade, we want to fade in the background only at the very end (see
             // b/240563302).
             val delay = 0.99f
             _alpha.value = expansion
-            _backgroundAlpha.value = max(0f, expansion - delay) / (1f - delay)
+            _backgroundAlpha.value = min(customAlpha, max(0f, expansion - delay) / (1f - delay))
         } else {
             // Only start fading in the footer actions when we are at least 90% expanded.
             val delay = 0.9f
             _alpha.value = max(0f, expansion - delay) / (1 - delay)
-            _backgroundAlpha.value = 1f
+            _backgroundAlpha.value = customAlpha
         }
     }
 
@@ -245,6 +252,18 @@ class FooterActionsViewModel(
         footerActionsInteractor.showSettings(expandable)
     }
 
+    private fun onSettingsButtonLongClicked(expandable: Expandable): Boolean {
+        if (falsingManager.isFalseTap(FalsingManager.LOW_PENALTY)) {
+            return false
+        }
+
+        return footerActionsInteractor.showCustomSettings(expandable)
+    }
+
+    private fun doNothingLongClick(expandable: Expandable): Boolean {
+        return false
+    }
+
     private fun onPowerButtonClicked(expandable: Expandable) {
         val mKeyguard = Dependency.get(KeyguardStateController::class.java)
         if (mKeyguard.isShowing() && mKeyguard.isMethodSecure() 
@@ -276,6 +295,7 @@ class FooterActionsViewModel(
             iconTint = null,
             backgroundColor = R.attr.offStateColor,
             onClick = this::onUserSwitcherClicked,
+            onLongClick = this::doNothingLongClick,
         )
     }
 
