@@ -12981,7 +12981,7 @@ public class ActivityManagerService extends IActivityManager.Stub
         enforceCallingPackage(agentPackageName, callingUid);
     
         // Resolve the target user id and enforce permissions.
-        userId = mUserController.handleIncomingUser(Binder.getCallingPid(), Binder.getCallingUid(),
+        userId = mUserController.handleIncomingUser(Binder.getCallingPid(), callingUid,
                 userId, /* allowAll */ false, ALLOW_FULL_ONLY, "backupAgentCreated", null);
         if (DEBUG_BACKUP) {
             Slog.v(TAG_BACKUP, "backupAgentCreated: " + agentPackageName + " = " + agent
@@ -14570,7 +14570,7 @@ public class ActivityManagerService extends IActivityManager.Stub
             throw new IllegalArgumentException("File descriptors passed in Intent");
         }
 
-        userId = mUserController.handleIncomingUser(Binder.getCallingPid(), callingUid,
+        userId = mUserController.handleIncomingUser(Binder.getCallingPid(), Binder.getCallingUid(),
                 userId, true, ALLOW_NON_FULL, "removeStickyBroadcast", null);
 
         synchronized(this) {
