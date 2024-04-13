@@ -43,15 +43,25 @@
     <dimen name="right_tri_state_up_top_left_radius">24.0dip</dimen>
     <dimen name="right_tri_state_up_top_right_radius">24.0dip</dimen>
 
+    <!-- QS Header height full -->
+    <dimen name="qs_header_height_full">200dp</dimen>
+
+    <!-- QS A11 Style -->
+    <dimen name="custom_notification_row_padding">16dp</dimen>
+    <dimen name="custom_qs_panel_padding_top">0dp</dimen>
+
     <!-- QQS Brightness slider -->
     <dimen name="qqs_top_brightness_margin_top">4dp</dimen>
-    <dimen name="qqs_top_brightness_margin_bottom">12dp</dimen>
-    <dimen name="qqs_bottom_brightness_margin_top">12dp</dimen>
+    <dimen name="qqs_top_brightness_margin_bottom">8dp</dimen>
+    <dimen name="qqs_bottom_brightness_margin_top">8dp</dimen>
+    <dimen name="qqs_bottom_brightness_margin_bottom">4dp</dimen>
 
     <!-- QS Brightness slider -->
-    <dimen name="qs_top_brightness_margin_top">8dp</dimen>
-    <dimen name="qs_top_brightness_margin_bottom">10dp</dimen>
-    <dimen name="qs_bottom_brightness_margin_top">10dp</dimen>
+    <dimen name="qs_top_brightness_margin_top">4dp</dimen>
+    <dimen name="qs_top_brightness_margin_bottom">8dp</dimen>
+    <dimen name="qs_bottom_brightness_margin_top">8dp</dimen>
+    <dimen name="qs_bottom_brightness_margin_bottom">4dp</dimen>
+
 
     <!-- Old style mobile data indicators -->
     <dimen name="status_bar_mobile_signal_with_type_width">18dp</dimen>
