@@ -4885,7 +4885,10 @@ public class AccountManagerService
             	EventLog.writeEvent(0x534e4554, "250588548", authUid, "");
                 return false;
             }
-            Intent intent = bundle.getParcelable(AccountManager.KEY_INTENT, Intent.class);
+            Intent intent = bundle.getParcelable(AccountManager.KEY_INTENT);
+            if (intent != null && intent.getClass() != Intent.class) {
+                return false;
+            }
             if (intent == null) {
                 return true;
             }
