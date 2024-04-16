@@ -44,14 +44,15 @@ final class RemoteInlineSuggestionViewConnector {
     @NonNull private final InlinePresentation mInlinePresentation;
     @Nullable private final IBinder mHostInputToken;
     private final int mDisplayId;
-    private final int mDisplayId;
     private final int mUserId;
     private final int mSessionId;
 
-    @NonNull private final Runnable mOnAutofillCallback;
-    @NonNull private final Runnable mOnErrorCallback;
-    @NonNull private final Runnable mOnInflateCallback;
-    @NonNull private final Consumer<IntentSender> mStartIntentSenderFromClientApp;
+    @NonNull
+    private final Runnable mOnAutofillCallback;
+    @NonNull
+    private final Runnable mOnErrorCallback;
+    @NonNull
+    private final Consumer<IntentSender> mStartIntentSenderFromClientApp;
 
     RemoteInlineSuggestionViewConnector(
             @NonNull InlineFillUi.InlineFillUiInfo inlineFillUiInfo,
