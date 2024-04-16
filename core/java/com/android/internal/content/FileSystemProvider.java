@@ -62,8 +62,9 @@ import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Arrays;
 import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -443,7 +444,7 @@ public abstract class FileSystemProvider extends DocumentsProvider {
      * @see ContentResolver#EXTRA_HONORED_ARGS
      */
     protected final Cursor querySearchDocuments(File folder, String[] projection,
-            Set<St
+            Set<String> exclusion, Bundle queryArgs) throws FileNotFoundException {
         final MatrixCursor result = new MatrixCursor(resolveProjection(projection));
 
         // We'll be a running a BFS here.
