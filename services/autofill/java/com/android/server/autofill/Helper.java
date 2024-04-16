@@ -23,7 +23,10 @@ import android.app.ActivityManager;
 import android.app.assist.AssistStructure;
 import android.app.assist.AssistStructure.ViewNode;
 import android.app.assist.AssistStructure.WindowNode;
+import android.app.slice.Slice;
+import android.app.slice.SliceItem;
 import android.content.ComponentName;
+import android.graphics.drawable.Icon;
 import android.metrics.LogMaker;
 import android.service.autofill.Dataset;
 import android.service.autofill.InternalSanitizer;
@@ -84,7 +87,7 @@ public final class Helper {
         final AtomicBoolean permissionsOk = new AtomicBoolean(true);
 
         rView.visitUris(uri -> {
-            int uriOwnerId = android.content.ContentProvider.getUserIdFromUri(uri);
+            int uriOwnerId = android.content.ContentProvider.getUserIdFromUri(uri, userId);
             boolean allowed = uriOwnerId == userId;
             permissionsOk.set(allowed && permissionsOk.get());
         });
@@ -116,6 +119,47 @@ public final class Helper {
         return (ok ? rView : null);
     }
 
+    /**
+     * Checks the URI permissions of the icon in the slice, to see if the current userId is able to
+     * access it.
+     *
+     * <p>Returns null if slice contains user inaccessible icons
+     *
+     * <p>TODO: instead of returning a null Slice when the current userId cannot access an icon,
+     * return a reconstructed Slice without the icons. This is currently non-trivial since there are
+     * no public methods to generically add SliceItems to Slices
+     */
+    public static @Nullable Slice sanitizeSlice(Slice slice) {
+        if (slice == null) {
+            return null;
+        }
+
+        int userId = ActivityManager.getCurrentUser();
+
+        // Recontruct the Slice, filtering out bad icons
+        for (SliceItem sliceItem : slice.getItems()) {
+            if (!sliceItem.getFormat().equals(SliceItem.FORMAT_IMAGE)) {
+                // Not an image slice
+                continue;
+            }
+
+            Icon icon = sliceItem.getIcon();
+            if (icon.getType() !=  Icon.TYPE_URI
+                    && icon.getType() != Icon.TYPE_URI_ADAPTIVE_BITMAP) {
+                // No URIs to sanitize
+                continue;
+            }
+
+            int iconUriId = android.content.ContentProvider.getUserIdFromUri(icon.getUri(), userId);
+
+            if (iconUriId != userId) {
+                Slog.w(TAG, "sanitizeSlice() user: " + userId + " cannot access icons in Slice");
+                return null;
+            }
+        }
+
+        return slice;
+    }
 
 
     @Nullable
