@@ -685,6 +685,12 @@ class MediaDataManager(
         // Album art
         var artworkBitmap = desc.iconBitmap
         if (artworkBitmap == null && desc.iconUri != null) {
+            val appUid = try {
+                context.packageManager.getApplicationInfo(packageName, 0)?.uid!!
+            } catch (e: PackageManager.NameNotFoundException) {
+                Log.w(TAG, "Could not get app UID for $packageName", e)
+                Process.INVALID_UID
+            }
             artworkBitmap = loadBitmapFromUriForUser(desc.iconUri!!, userId, appUid, packageName)
         }
         val artworkIcon =
@@ -1676,3 +1682,4 @@ class MediaDataManager(
             println("allowMediaRecommendations: $allowMediaRecommendations")
         }
     }
+}
