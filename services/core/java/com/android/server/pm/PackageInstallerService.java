@@ -50,7 +50,7 @@ import android.content.pm.PackageItemInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.VersionedPackage;
-import android.content.pm.parsing.ParsingPackageUtils;
+import android.content.pm.parsing.FrameworkParsingPackageUtils;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Binder;
@@ -129,7 +129,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
     private static final String TAG = "PackageInstaller";
     private static final boolean LOGD = Log.isLoggable(TAG, Log.DEBUG);
 
-    private static final boolean DEBUG = Build.IS_ENG;
+    private static final boolean DEBUG = Build.IS_DEBUGGABLE;
 
     // TODO: remove outstanding sessions when installer package goes away
     // TODO: notify listeners in other users when package has been installed there
@@ -483,7 +483,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         } catch (FileNotFoundException e) {
             // Missing sessions are okay, probably first boot
-        } catch (IOException | XmlPullParserException e) {
+        } catch (IOException | XmlPullParserException | ArrayIndexOutOfBoundsException e) {
             Slog.wtf(TAG, "Failed reading install sessions", e);
         } finally {
             IoUtils.closeQuietly(fis);
@@ -646,7 +646,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             params.installerPackageName = null;
         }
 
-        String requestedInstallerPackageName =
+        var requestedInstallerPackageName =
                 params.installerPackageName != null ? params.installerPackageName
                         : installerPackageName;
 
@@ -693,7 +693,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         }
 
-        if (Build.IS_ENG || isCalledBySystemOrShell(callingUid)) {
+        if (Build.IS_DEBUGGABLE || isCalledBySystemOrShell(callingUid)) {
             params.installFlags |= PackageManager.INSTALL_ALLOW_DOWNGRADE;
         } else {
             params.installFlags &= ~PackageManager.INSTALL_ALLOW_DOWNGRADE;
@@ -735,8 +735,12 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         }
 
-        if ((params.installFlags & PackageManager.INSTALL_INSTANT_APP) != 0) {
-            throw new SecurityException("Installing instant apps is forbidden");
+        if ((params.installFlags & PackageManager.INSTALL_INSTANT_APP) != 0
+                && !isCalledBySystemOrShell(callingUid)
+                && (snapshot.getFlagsForUid(callingUid) & ApplicationInfo.FLAG_SYSTEM)
+                == 0) {
+            throw new SecurityException(
+                    "Only system apps could use the PackageManager.INSTALL_INSTANT_APP flag.");
         }
 
         if (params.isStaged && !isCalledBySystemOrShell(callingUid)) {
@@ -1006,7 +1010,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             return false;
         }
         // "android" is a valid package name
-        String errorMessage = ParsingPackageUtils.validateName(
+        var errorMessage = FrameworkParsingPackageUtils.validateName(
                 packageName, /* requireSeparator= */ false, /* requireFilename */ true);
         if (errorMessage != null) {
             return false;
