@@ -560,6 +560,9 @@ final class InstallPackageHelper {
                 if (pkgSetting == null) {
                     return PackageManager.INSTALL_FAILED_INVALID_URI;
                 }
+                if (instantApp && (pkgSetting.isSystem() || pkgSetting.isUpdatedSystemApp())) {
+                    return PackageManager.INSTALL_FAILED_INVALID_URI;
+                }
                 if (!snapshot.canViewInstantApps(callingUid, UserHandle.getUserId(callingUid))) {
                     // only allow the existing package to be used if it's installed as a full
                     // application for at least one user
@@ -601,7 +604,6 @@ final class InstallPackageHelper {
                         permissionParamsBuilder.setAllowlistedRestrictedPermissions(
                                 pkgSetting.getPkg().getRequestedPermissions());
                     }
-                    permissionParamsBuilder.setNewlyInstalledInUserId(userId);
                     mPm.mPermissionManager.onPackageInstalled(pkgSetting.getPkg(),
                             Process.INVALID_UID /* previousAppId */,
                             permissionParamsBuilder.build(), userId);
@@ -2037,6 +2039,15 @@ final class InstallPackageHelper {
                     if (DEBUG_INSTALL) {
                         Slog.d(TAG, "Implicitly enabling system package on upgrade: " + pkgName);
                     }
+                    // Enable system package for requested users
+                    if (res.mOrigUsers != null) {
+                        for (int origUserId : res.mOrigUsers) {
+                            if (userId == UserHandle.USER_ALL || userId == origUserId) {
+                                ps.setEnabled(COMPONENT_ENABLED_STATE_DEFAULT,
+                                        origUserId, installerPackageName);
+                            }
+                        }
+                    }
                     // Also convey the prior install/uninstall state
                     if (allUsers != null && installedForUsers != null) {
                         for (int currentUserId : allUsers) {
@@ -2081,6 +2092,7 @@ final class InstallPackageHelper {
                     // It's implied that when a user requests installation, they want the app to
                     // be installed and enabled.
                     ps.setInstalled(true, userId);
+                    ps.setEnabled(COMPONENT_ENABLED_STATE_DEFAULT, userId, installerPackageName);
                 } else if (allUsers != null) {
                     // The caller explicitly specified INSTALL_ALL_USERS flag.
                     // Thus, updating the settings to install the app for all users.
@@ -2098,12 +2110,23 @@ final class InstallPackageHelper {
                                 || mPm.isUserRestricted(currentUserId,
                                         UserManager.DISALLOW_DEBUGGING_FEATURES);
                         if (installedForCurrentUser || !restrictedByPolicy) {
+                            UserInfo userInfo =
+                                UserManagerService.getInstance().getUserInfo(currentUserId);
+                            if (userInfo != null && userInfo.isParallel()) {
+                                if (DEBUG_INSTALL) {
+                                    Slog.d(TAG, "User " + currentUserId + " is parallel space, skip install");
+                                }
+                                break;
+                            }
                             ps.setInstalled(true, currentUserId);
+                            ps.setEnabled(COMPONENT_ENABLED_STATE_DEFAULT, currentUserId,
+                                    installerPackageName);
                         } else {
                             ps.setInstalled(false, currentUserId);
                         }
                     }
                 }
+
                 mPm.mSettings.addInstallerPackageNames(ps.getInstallSource());
 
                 // When replacing an existing package, preserve the original install reason for all
@@ -2127,10 +2150,6 @@ final class InstallPackageHelper {
                     }
                 }
 
-                final PermissionManagerServiceInternal.PackageInstalledParams.Builder
-                        permissionParamsBuilder =
-                        new PermissionManagerServiceInternal.PackageInstalledParams.Builder();
-
                 // Set install reason for users that are having the package newly installed.
                 final int[] allUsersList = mPm.mUserManager.getUserIds();
                 if (userId == UserHandle.USER_ALL) {
@@ -2138,12 +2157,10 @@ final class InstallPackageHelper {
                         if (!previousUserIds.contains(currentUserId)
                                 && ps.getInstalled(currentUserId)) {
                             ps.setInstallReason(installReason, currentUserId);
-                            permissionParamsBuilder.setNewlyInstalledInUserId(currentUserId);
                         }
                     }
                 } else if (!previousUserIds.contains(userId)) {
                     ps.setInstallReason(installReason, userId);
-                    permissionParamsBuilder.setNewlyInstalledInUserId(userId);
                 }
 
                 // TODO(b/169721400): generalize Incremental States and create a Callback object
@@ -2164,6 +2181,9 @@ final class InstallPackageHelper {
 
                 mPm.mSettings.writeKernelMappingLPr(ps);
 
+                final PermissionManagerServiceInternal.PackageInstalledParams.Builder
+                        permissionParamsBuilder =
+                        new PermissionManagerServiceInternal.PackageInstalledParams.Builder();
                 final boolean grantPermissions = (installArgs.mInstallFlags
                         & PackageManager.INSTALL_GRANT_RUNTIME_PERMISSIONS) != 0;
                 if (grantPermissions) {
@@ -3410,11 +3430,6 @@ final class InstallPackageHelper {
                 // remove the package from the system and re-scan it without any
                 // special privileges
                 mRemovePackageHelper.removePackageLI(pkg, true);
-                PackageSetting ps = mPm.mSettings.getPackageLPr(packageName);
-                if (ps != null) {
-                    ps.getPkgState().setUpdatedSystemApp(false);
-                }
-
                 try {
                     final File codePath = new File(pkg.getPath());
                     scanSystemPackageTracedLI(codePath, 0, scanFlags, null);
@@ -3978,10 +3993,14 @@ final class InstallPackageHelper {
                     deletePackageHelper.deletePackageLIF(parsedPackage.getPackageName(), null, true,
                             mPm.mUserManager.getUserIds(), 0, null, false);
                 }
-            } else if (newPkgVersionGreater) {
+            } else if (newPkgVersionGreater || newSharedUserSetting) {
                 // The application on /system is newer than the application on /data.
                 // Simply remove the application on /data [keeping application data]
                 // and replace it with the version on /system.
+                // Also, if the sharedUserSetting of the application on /system is different
+                // from the sharedUserSetting on data, we should trust the sharedUserSetting
+                // on /system, even if the application version on /system is smaller than
+                // the version on /data.
                 logCriticalInfo(Log.WARN,
                         "System package enabled;"
                                 + " name: " + pkgSetting.getPackageName()

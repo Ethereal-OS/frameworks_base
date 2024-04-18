@@ -50,6 +50,7 @@ import android.content.pm.PackageItemInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.VersionedPackage;
+import android.content.pm.parsing.FrameworkParsingPackageUtils;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Binder;
@@ -128,7 +129,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
     private static final String TAG = "PackageInstaller";
     private static final boolean LOGD = Log.isLoggable(TAG, Log.DEBUG);
 
-    private static final boolean DEBUG = Build.IS_ENG;
+    private static final boolean DEBUG = Build.IS_DEBUGGABLE;
 
     // TODO: remove outstanding sessions when installer package goes away
     // TODO: notify listeners in other users when package has been installed there
@@ -482,7 +483,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         } catch (FileNotFoundException e) {
             // Missing sessions are okay, probably first boot
-        } catch (IOException | XmlPullParserException e) {
+        } catch (IOException | XmlPullParserException | ArrayIndexOutOfBoundsException e) {
             Slog.wtf(TAG, "Failed reading install sessions", e);
         } finally {
             IoUtils.closeQuietly(fis);
@@ -632,17 +633,22 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
 
         // App package name and label length is restricted so that really long strings aren't
         // written to disk.
-        if (params.appPackageName != null
-                && params.appPackageName.length() > SessionParams.MAX_PACKAGE_NAME_LENGTH) {
+        if (params.appPackageName != null && !isValidPackageName(params.appPackageName)) {
             params.appPackageName = null;
         }
 
         params.appLabel = TextUtils.trimToSize(params.appLabel,
                 PackageItemInfo.MAX_SAFE_LABEL_LENGTH);
 
-        String requestedInstallerPackageName = (params.installerPackageName != null
-                && params.installerPackageName.length() < SessionParams.MAX_PACKAGE_NAME_LENGTH)
-                ? params.installerPackageName : installerPackageName;
+        // Validate installer package name.
+        if (params.installerPackageName != null && !isValidPackageName(
+                params.installerPackageName)) {
+            params.installerPackageName = null;
+        }
+
+        var requestedInstallerPackageName =
+                params.installerPackageName != null ? params.installerPackageName
+                        : installerPackageName;
 
         if ((callingUid == Process.SHELL_UID) || (callingUid == Process.ROOT_UID)
                 || PackageInstallerSession.isSystemDataLoaderInstallation(params)) {
@@ -687,7 +693,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         }
 
-        if (Build.IS_ENG || isCalledBySystemOrShell(callingUid)) {
+        if (Build.IS_DEBUGGABLE || isCalledBySystemOrShell(callingUid)) {
             params.installFlags |= PackageManager.INSTALL_ALLOW_DOWNGRADE;
         } else {
             params.installFlags &= ~PackageManager.INSTALL_ALLOW_DOWNGRADE;
@@ -729,8 +735,12 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
             }
         }
 
-        if ((params.installFlags & PackageManager.INSTALL_INSTANT_APP) != 0) {
-            throw new SecurityException("Installing instant apps is forbidden");
+        if ((params.installFlags & PackageManager.INSTALL_INSTANT_APP) != 0
+                && !isCalledBySystemOrShell(callingUid)
+                && (snapshot.getFlagsForUid(callingUid) & ApplicationInfo.FLAG_SYSTEM)
+                == 0) {
+            throw new SecurityException(
+                    "Only system apps could use the PackageManager.INSTALL_INSTANT_APP flag.");
         }
 
         if (params.isStaged && !isCalledBySystemOrShell(callingUid)) {
@@ -993,6 +1003,19 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
         String sessionId = tmpSessionDir.substring("vmdl".length(),
                 tmpSessionDir.length() - ".tmp".length());
         return Integer.parseInt(sessionId);
+    }
+
+    private static boolean isValidPackageName(@NonNull String packageName) {
+        if (packageName.length() > SessionParams.MAX_PACKAGE_NAME_LENGTH) {
+            return false;
+        }
+        // "android" is a valid package name
+        var errorMessage = FrameworkParsingPackageUtils.validateName(
+                packageName, /* requireSeparator= */ false, /* requireFilename */ true);
+        if (errorMessage != null) {
+            return false;
+        }
+        return true;
     }
 
     private File getTmpSessionDir(String volumeUuid) {
