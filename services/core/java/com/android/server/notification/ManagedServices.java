@@ -1487,7 +1487,7 @@ abstract public class ManagedServices {
                     Slog.w(TAG, "Not binding " + getCaption() + " service " + component
                             + ": service not found");
                     continue;
-                 }
+                }
                 if (!mConfig.bindPermission.equals(info.permission)) {
                     Slog.w(TAG, "Not binding " + getCaption() + " service " + component
                             + ": it does not require the permission " + mConfig.bindPermission);
@@ -1495,8 +1495,7 @@ abstract public class ManagedServices {
                 }
                 Slog.v(TAG,
                         "enabling " + getCaption() + " for " + userId + ": " + component);
-                registerService(info, userId);                
-                }
+                registerService(info, userId);
             }
         }
     }
