@@ -2269,7 +2269,7 @@ public class ShortcutService extends IShortcutService.Stub {
 
         packageShortcutsChanged(ps, changedShortcuts, removedShortcuts);
 
-        reportShortcutUsedInternal(packageName, shortcut.getId(), userId);
+	ps.reportShortcutUsed(mUsageStatsManagerInternal, shortcut.getId());
 
         verifyStates();
     }
@@ -2676,6 +2676,7 @@ public class ShortcutService extends IShortcutService.Stub {
             Slog.d(TAG, String.format("reportShortcutUsed: Shortcut %s package %s used on user %d",
                     shortcutId, packageName, userId));
         }
+        final ShortcutPackage ps;
         synchronized (mLock) {
             throwIfUserLockedL(userId);
             final ShortcutPackage ps = getPackageShortcutsForPublisherLocked(packageName, userId);
