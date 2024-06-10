@@ -1524,16 +1524,7 @@ abstract public class ManagedServices {
                 || isPackageOrComponentAllowed(cn.flattenToString(), userId)) {
             registerService(cn, userId);
         }
-    }
-
-    @VisibleForTesting
-    void reregisterService(final ComponentName cn, final int userId) {
-        // If rebinding a package that died, ensure it still has permission
-        // after the rebind delay
-        if (isPackageOrComponentAllowedWithPermission(cn, userId)) {
-            registerService(cn, userId);
-        }
-    }    
+    }   
 
     /**
      * Inject a system service into the management list.
