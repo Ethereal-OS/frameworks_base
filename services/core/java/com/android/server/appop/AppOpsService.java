@@ -2209,7 +2209,7 @@ public class AppOpsService extends IAppOpsService.Stub {
                 if (opRestrictsRead(curOp.op) && !shouldReturnRestrictedAppOps) {
                     continue;
                 }
-                resOps.add(getOpEntryForResult(curOp));
+                resOps.add(getOpEntryForResult(curOp, elapsedNow));
             }
         } else {
             for (int j = 0; j < ops.length; j++) {
