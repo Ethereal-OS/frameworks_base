@@ -47,6 +47,7 @@ public class PluginManagerImpl extends BroadcastReceiver implements PluginManage
 
     private static final String TAG = PluginManagerImpl.class.getSimpleName();
     static final String DISABLE_PLUGIN = "com.android.systemui.action.DISABLE_PLUGIN";
+    private static final String CLOCK_PLUGINS_PREFIX = "com.android.systemui.clocks";
 
     private final ArrayMap<PluginListener<?>, PluginActionManager<?>> mPluginMap
             = new ArrayMap<>();
@@ -235,10 +236,12 @@ public class PluginManagerImpl extends BroadcastReceiver implements PluginManage
         for (String componentNameOrPackage : mPrivilegedPlugins) {
             ComponentName componentName = ComponentName.unflattenFromString(componentNameOrPackage);
             if (componentName != null) {
-                if (componentName.equals(pluginName)) {
+                if (componentName.equals(pluginName) 
+                    || componentName.getPackageName().startsWith(CLOCK_PLUGINS_PREFIX)) {
                     return true;
                 }
-            } else if (componentNameOrPackage.equals(pluginName.getPackageName())) {
+            } else if (componentNameOrPackage.equals(pluginName.getPackageName())
+                || componentNameOrPackage.startsWith(CLOCK_PLUGINS_PREFIX)) {
                 return true;
             }
         }
@@ -248,19 +251,23 @@ public class PluginManagerImpl extends BroadcastReceiver implements PluginManage
     // This allows plugins to include any libraries or copied code they want by only including
     // classes from the plugin library.
     static class ClassLoaderFilter extends ClassLoader {
-        private final String mPackage;
+        private final String[] mPackages;
         private final ClassLoader mBase;
 
-        public ClassLoaderFilter(ClassLoader base, String pkg) {
+        ClassLoaderFilter(ClassLoader base, String... pkgs) {
             super(ClassLoader.getSystemClassLoader());
             mBase = base;
-            mPackage = pkg;
+            mPackages = pkgs;
         }
 
         @Override
         protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-            if (!name.startsWith(mPackage)) super.loadClass(name, resolve);
-            return mBase.loadClass(name);
+            for (String pkg : mPackages) {
+                if (name.startsWith(pkg)) {
+                    return mBase.loadClass(name);
+                }
+            }
+            return super.loadClass(name, resolve);
         }
     }
 

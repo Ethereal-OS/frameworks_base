@@ -17,30 +17,54 @@
 package com.android.systemui.navigationbar.gestural;
 
 import android.animation.ArgbEvaluator;
+import android.animation.ObjectAnimator;
 import android.annotation.ColorInt;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
+import android.os.UserHandle;
 import android.provider.Settings;
 import android.util.AttributeSet;
+import android.util.FloatProperty;
 import android.view.ContextThemeWrapper;
 import android.view.View;
+import android.view.animation.Interpolator;
 
+import com.android.app.animation.Interpolators;
 import com.android.settingslib.Utils;
-import com.android.systemui.R;
 import com.android.systemui.navigationbar.buttons.ButtonInterface;
+import com.android.systemui.res.R;
 
 public class NavigationHandle extends View implements ButtonInterface {
 
-    private final Context mContext;
-    protected final Paint mPaint = new Paint();
+    private final Paint mPaint = new Paint();
     private @ColorInt final int mLightColor;
     private @ColorInt final int mDarkColor;
     protected float mRadius;
     protected final float mBottom;
+    private final float mAdditionalWidthForAnimation;
+    private final float mAdditionalHeightForAnimation;
+    private final float mShrinkWidthForAnimation;
     private boolean mRequiresInvalidate;
+    private boolean mShrink;
+
+    private ObjectAnimator mPulseAnimator = null;
+    private float mPulseAnimationProgress;
+
+    private static final FloatProperty<NavigationHandle> PULSE_ANIMATION_PROGRESS =
+            new FloatProperty<>("pulseAnimationProgress") {
+                @Override
+                public Float get(NavigationHandle controller) {
+                    return controller.getPulseAnimationProgress();
+                }
+
+                @Override
+                public void setValue(NavigationHandle controller, float progress) {
+                    controller.setPulseAnimationProgress(progress);
+                }
+            };
 
     public NavigationHandle(Context context) {
         this(context, null);
@@ -48,9 +72,14 @@ public class NavigationHandle extends View implements ButtonInterface {
 
     public NavigationHandle(Context context, AttributeSet attr) {
         super(context, attr);
-        mContext = context;
         final Resources res = context.getResources();
         mBottom = res.getDimension(R.dimen.navigation_handle_bottom);
+        mAdditionalWidthForAnimation =
+                res.getDimension(R.dimen.navigation_home_handle_additional_width_for_animation);
+        mAdditionalHeightForAnimation =
+                res.getDimension(R.dimen.navigation_home_handle_additional_height_for_animation);
+        mShrinkWidthForAnimation =
+                res.getDimension(R.dimen.navigation_home_handle_shrink_width_for_animation);
 
         final int dualToneDarkTheme = Utils.getThemeAttr(context, R.attr.darkIconTheme);
         final int dualToneLightTheme = Utils.getThemeAttr(context, R.attr.lightIconTheme);
@@ -77,38 +106,55 @@ public class NavigationHandle extends View implements ButtonInterface {
 
         // Draw that bar
         int navHeight = getHeight();
-        int width = getWidth();
-        int radiusType = Settings.System.getInt(mContext.getContentResolver(),
-            Settings.System.GESTURE_NAVBAR_RADIUS, 0);
-        final Resources res = mContext.getResources();
+        int radiusType = Settings.System.getIntForUser(getContext().getContentResolver(),
+            Settings.System.GESTURE_NAVBAR_RADIUS, 3, UserHandle.USER_CURRENT);
         switch (radiusType) {
             case 0:
-                mRadius = res.getDimensionPixelSize(R.dimen.navigation_handle_radius);
+                mRadius = getResources().getDimensionPixelSize(R.dimen.navigation_handle_radius1);
                 break;
             case 1:
-                mRadius = res.getDimensionPixelSize(R.dimen.navigation_handle_radius2);
+                mRadius = getResources().getDimensionPixelSize(R.dimen.navigation_handle_radius2);
                 break;
             case 2:
-                mRadius = res.getDimensionPixelSize(R.dimen.navigation_handle_radius3);
+                mRadius = getResources().getDimensionPixelSize(R.dimen.navigation_handle_radius3);
+                break;
             case 3:
-                mRadius = res.getDimensionPixelSize(R.dimen.navigation_handle_radius4);
+            default:
+                mRadius = getResources().getDimensionPixelSize(R.dimen.navigation_handle_radius);
+                break;
+            case 4:
+                mRadius = getResources().getDimensionPixelSize(R.dimen.navigation_handle_radius4);
+                break;
+            case 5:
+                mRadius = getResources().getDimensionPixelSize(R.dimen.navigation_handle_radius5);
+                break;
         }
-        float height = mRadius * 2;
-        float y = (navHeight - mBottom - height);
-        canvas.drawRoundRect(0, y, width, y + height, mRadius, mRadius, mPaint);
+        float additionalHeight;
+        float additionalWidth;
+        if (mShrink) {
+            additionalHeight = 0;
+            additionalWidth = -mShrinkWidthForAnimation * mPulseAnimationProgress;
+        } else {
+            additionalHeight = mAdditionalHeightForAnimation * mPulseAnimationProgress;
+            additionalWidth = mAdditionalWidthForAnimation * mPulseAnimationProgress;
+        }
+
+        float height = mRadius * 2 + additionalHeight;
+        float width = getWidth() + additionalWidth;
+        float x = -additionalWidth;
+        float y = navHeight - mBottom - height + (additionalHeight / 2);
+        float adjustedRadius = height / 2;
+        canvas.drawRoundRect(x, y, width, y + height, adjustedRadius, adjustedRadius, mPaint);
     }
 
     @Override
-    public void setImageDrawable(Drawable drawable) {
-    }
+    public void setImageDrawable(Drawable drawable) {}
 
     @Override
-    public void abortCurrentGesture() {
-    }
+    public void abortCurrentGesture() {}
 
     @Override
-    public void setVertical(boolean vertical) {
-    }
+    public void setVertical(boolean vertical) {}
 
     @Override
     public void setDarkIntensity(float intensity) {
@@ -125,6 +171,49 @@ public class NavigationHandle extends View implements ButtonInterface {
     }
 
     @Override
-    public void setDelayTouchFeedback(boolean shouldDelay) {
+    public void setDelayTouchFeedback(boolean shouldDelay) {}
+
+    @Override
+    public void animateLongPress(boolean isTouchDown, boolean shrink, long durationMs) {
+        if (mPulseAnimator != null) {
+            mPulseAnimator.cancel();
+        }
+
+        mShrink = shrink;
+        Interpolator interpolator;
+        if (shrink) {
+            interpolator = Interpolators.LEGACY_DECELERATE;
+        } else {
+            if (isTouchDown) {
+                // For now we animate the navbar expanding and contracting so that the navbar is
+                // the original size by the end of {@code duration}. This is because a screenshot
+                // is taken at that point and we don't want to capture the larger navbar.
+                // TODO(b/306400785): Determine a way to exclude navbar from the screenshot.
+
+                // Fraction of the touch down animation to expand; remaining is used to contract
+                // again.
+                float expandFraction = 0.9f;
+                interpolator = t -> t <= expandFraction
+                        ? Interpolators.clampToProgress(Interpolators.LEGACY, t, 0, expandFraction)
+                        : 1 - Interpolators.clampToProgress(
+                                Interpolators.LINEAR, t, expandFraction, 1);
+            } else {
+                interpolator = Interpolators.LEGACY_DECELERATE;
+            }
+        }
+
+        mPulseAnimator =
+                ObjectAnimator.ofFloat(this, PULSE_ANIMATION_PROGRESS, isTouchDown ? 1 : 0);
+        mPulseAnimator.setDuration(durationMs).setInterpolator(interpolator);
+        mPulseAnimator.start();
+    }
+
+    private void setPulseAnimationProgress(float pulseAnimationProgress) {
+        mPulseAnimationProgress = pulseAnimationProgress;
+        invalidate();
+    }
+
+    private float getPulseAnimationProgress() {
+        return mPulseAnimationProgress;
     }
 }

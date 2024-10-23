@@ -16,7 +16,6 @@
 
 package com.android.settingslib.graph;
 
-import android.annotation.Nullable;
 import android.content.Context;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
@@ -34,6 +33,8 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.util.TypedValue;
+
+import androidx.annotation.Nullable;
 
 import com.android.settingslib.R;
 import com.android.settingslib.Utils;
@@ -431,7 +432,7 @@ public class BatteryMeterDrawableBase extends Drawable {
         if (!mCharging && !mPowerSaveEnabled && level > mCriticalLevel && mShowPercent) {
             mTextPaint.setColor(getColorForLevel(level));
             mTextPaint.setTextSize(height *
-                    (SINGLE_DIGIT_PERCENT ? 0.75f
+                    (SINGLE_DIGIT_PERCENT ? 0.86f
                             : (mLevel == 100 ? 0.38f : 0.5f)));
             mTextHeight = -mTextPaint.getFontMetrics().ascent;
             pctText = String.valueOf(SINGLE_DIGIT_PERCENT ? (level / 10) : level);

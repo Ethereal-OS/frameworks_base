@@ -16,16 +16,20 @@
 
 package com.android.systemui.statusbar.notification.collection.inflation
 
+import android.content.Context
 import android.database.ContentObserver
 import android.os.Handler
+import android.os.HandlerExecutor
 import android.os.UserHandle
 import android.provider.Settings.Secure.SHOW_NOTIFICATION_SNOOZE
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Main
+import com.android.systemui.settings.UserTracker
 import com.android.systemui.statusbar.NotificationLockscreenUserManager
 import com.android.systemui.statusbar.notification.collection.GroupEntry
 import com.android.systemui.statusbar.notification.collection.NotificationEntry
 import com.android.systemui.statusbar.notification.collection.provider.SectionStyleProvider
+import com.android.systemui.statusbar.notification.collection.render.GroupMembershipManager
 import com.android.systemui.util.ListenerSet
 import com.android.systemui.util.settings.SecureSettings
 import javax.inject.Inject
@@ -39,10 +43,25 @@ class NotifUiAdjustmentProvider @Inject constructor(
     @Main private val handler: Handler,
     private val secureSettings: SecureSettings,
     private val lockscreenUserManager: NotificationLockscreenUserManager,
-    private val sectionStyleProvider: SectionStyleProvider
+    private val sectionStyleProvider: SectionStyleProvider,
+    private val userTracker: UserTracker,
+    private val groupMembershipManager: GroupMembershipManager,
 ) {
     private val dirtyListeners = ListenerSet<Runnable>()
-    private var isSnoozeEnabled = false
+    private var isSnoozeSettingsEnabled = false
+
+    /**
+     *  Update the snooze enabled value on user switch
+     */
+    private val userTrackerCallback = object : UserTracker.Callback {
+        override fun onUserChanged(newUser: Int, userContext: Context) {
+            updateSnoozeEnabled()
+        }
+    }
+
+    init {
+        userTracker.addCallback(userTrackerCallback, HandlerExecutor(handler))
+    }
 
     fun addDirtyListener(listener: Runnable) {
         if (dirtyListeners.isEmpty()) {
@@ -78,7 +97,8 @@ class NotifUiAdjustmentProvider @Inject constructor(
     }
 
     private fun updateSnoozeEnabled() {
-        isSnoozeEnabled = secureSettings.getInt(SHOW_NOTIFICATION_SNOOZE, 0) == 1
+        isSnoozeSettingsEnabled =
+            secureSettings.getIntForUser(SHOW_NOTIFICATION_SNOOZE, 0, UserHandle.USER_CURRENT) == 1
     }
 
     private fun isEntryMinimized(entry: NotificationEntry): Boolean {
@@ -100,8 +120,10 @@ class NotifUiAdjustmentProvider @Inject constructor(
         smartActions = entry.ranking.smartActions,
         smartReplies = entry.ranking.smartReplies,
         isConversation = entry.ranking.isConversation,
-        isSnoozeEnabled = isSnoozeEnabled,
+        isSnoozeEnabled = isSnoozeSettingsEnabled && !entry.isCanceled,
         isMinimized = isEntryMinimized(entry),
         needsRedaction = entry.sbn.isContentSecure || lockscreenUserManager.needsRedaction(entry),
+        isChildInGroup = entry.sbn.isAppOrSystemGroupChild,
+        isGroupSummary = entry.sbn.isAppOrSystemGroupSummary,
     )
 }

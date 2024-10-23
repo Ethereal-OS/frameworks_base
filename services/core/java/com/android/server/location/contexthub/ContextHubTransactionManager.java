@@ -19,15 +19,13 @@ package com.android.server.location.contexthub;
 import android.hardware.location.ContextHubTransaction;
 import android.hardware.location.IContextHubTransactionCallback;
 import android.hardware.location.NanoAppBinary;
+import android.hardware.location.NanoAppMessage;
 import android.hardware.location.NanoAppState;
 import android.os.RemoteException;
 import android.util.Log;
 
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.Collections;
-import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ScheduledFuture;
@@ -54,11 +52,6 @@ import java.util.concurrent.atomic.AtomicInteger;
     private static final int MAX_PENDING_REQUESTS = 10000;
 
     /*
-     * The DateFormat for printing TransactionRecord.
-     */
-    private static final DateFormat DATE_FORMAT = new SimpleDateFormat("MM/dd HH:mm:ss.SSS");
-
-    /*
      * The proxy to talk to the Context Hub
      */
     private final IContextHubWrapper mContextHubProxy;
@@ -82,6 +75,11 @@ import java.util.concurrent.atomic.AtomicInteger;
      * The next available transaction ID
      */
     private final AtomicInteger mNextAvailableId = new AtomicInteger();
+
+    /**
+     * The next available message sequence number
+     */
+    private final AtomicInteger mNextAvailableMessageSequenceNumber = new AtomicInteger();
 
     /*
      * An executor and the future object for scheduling timeout timers
@@ -112,7 +110,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
         @Override
         public String toString() {
-            return DATE_FORMAT.format(new Date(mTimestamp)) + " " + mTransaction;
+            return ContextHubServiceUtil.formatDateFromTimestamp(mTimestamp) + " " + mTransaction;
         }
     }
 
@@ -159,6 +157,13 @@ import java.util.concurrent.atomic.AtomicInteger;
                         ContextHubStatsLog
                             .CHRE_CODE_DOWNLOAD_TRANSACTED__TRANSACTION_TYPE__TYPE_LOAD,
                         toStatsTransactionResult(result));
+
+                ContextHubEventLogger.getInstance().logNanoappLoad(
+                        contextHubId,
+                        nanoAppBinary.getNanoAppId(),
+                        nanoAppBinary.getNanoAppVersion(),
+                        nanoAppBinary.getBinary().length,
+                        result == ContextHubTransaction.RESULT_SUCCESS);
 
                 if (result == ContextHubTransaction.RESULT_SUCCESS) {
                     // NOTE: The legacy JNI code used to do a query right after a load success
@@ -214,6 +219,11 @@ import java.util.concurrent.atomic.AtomicInteger;
                         ContextHubStatsLog
                             .CHRE_CODE_DOWNLOAD_TRANSACTED__TRANSACTION_TYPE__TYPE_UNLOAD,
                         toStatsTransactionResult(result));
+
+                ContextHubEventLogger.getInstance().logNanoappUnload(
+                        contextHubId,
+                        nanoAppId,
+                        result == ContextHubTransaction.RESULT_SUCCESS);
 
                 if (result == ContextHubTransaction.RESULT_SUCCESS) {
                     mNanoAppStateManager.removeNanoAppInstance(contextHubId, nanoAppId);
@@ -297,6 +307,47 @@ import java.util.concurrent.atomic.AtomicInteger;
                 /* package */ void onTransactionComplete(@ContextHubTransaction.Result int result) {
                 try {
                     onCompleteCallback.onTransactionComplete(result);
+                } catch (RemoteException e) {
+                    Log.e(TAG, "RemoteException while calling client onTransactionComplete", e);
+                }
+            }
+        };
+    }
+
+    /**
+     * Creates a transaction to send a reliable message.
+     *
+     * @param hostEndpointId      The ID of the host endpoint sending the message.
+     * @param contextHubId        The ID of the hub to send the message to.
+     * @param message             The message to send.
+     * @param transactionCallback The callback of the transactions.
+     * @param packageName         The host package associated with this transaction.
+     * @return The generated transaction.
+     */
+    /* package */ ContextHubServiceTransaction createMessageTransaction(
+            short hostEndpointId, int contextHubId, NanoAppMessage message,
+            IContextHubTransactionCallback transactionCallback, String packageName) {
+        return new ContextHubServiceTransaction(mNextAvailableId.getAndIncrement(),
+                ContextHubTransaction.TYPE_RELIABLE_MESSAGE, packageName,
+                mNextAvailableMessageSequenceNumber.getAndIncrement()) {
+            @Override
+            /* package */ int onTransact() {
+                try {
+                    message.setIsReliable(/* isReliable= */ true);
+                    message.setMessageSequenceNumber(getMessageSequenceNumber());
+
+                    return mContextHubProxy.sendMessageToContextHub(hostEndpointId, contextHubId,
+                            message);
+                } catch (RemoteException e) {
+                    Log.e(TAG, "RemoteException while trying to send a reliable message", e);
+                    return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
+                }
+            }
+
+            @Override
+            /* package */ void onTransactionComplete(@ContextHubTransaction.Result int result) {
+                try {
+                    transactionCallback.onTransactionComplete(result);
                 } catch (RemoteException e) {
                     Log.e(TAG, "RemoteException while calling client onTransactionComplete", e);
                 }
@@ -393,6 +444,30 @@ import java.util.concurrent.atomic.AtomicInteger;
         removeTransactionAndStartNext();
     }
 
+    /* package */
+    synchronized void onMessageDeliveryResponse(int messageSequenceNumber, boolean success) {
+        ContextHubServiceTransaction transaction = mTransactionQueue.peek();
+        if (transaction == null) {
+            Log.w(TAG, "Received unexpected transaction response (no transaction pending)");
+            return;
+        }
+
+        Integer transactionMessageSequenceNumber = transaction.getMessageSequenceNumber();
+        if (transaction.getTransactionType() != ContextHubTransaction.TYPE_RELIABLE_MESSAGE
+                || transactionMessageSequenceNumber == null
+                || transactionMessageSequenceNumber != messageSequenceNumber) {
+            Log.w(TAG, "Received unexpected message transaction response (expected message "
+                    + "sequence number = "
+                    + transaction.getMessageSequenceNumber()
+                    + ", received messageSequenceNumber = " + messageSequenceNumber + ")");
+            return;
+        }
+
+        transaction.onTransactionComplete(success ? ContextHubTransaction.RESULT_SUCCESS :
+                        ContextHubTransaction.RESULT_FAILED_AT_HUB);
+        removeTransactionAndStartNext();
+    }
+
     /**
      * Handles a query response from a Context Hub.
      *
@@ -477,10 +552,10 @@ import java.util.concurrent.atomic.AtomicInteger;
                     }
                 };
 
-                long timeoutSeconds = transaction.getTimeout(TimeUnit.SECONDS);
+                long timeoutMs = transaction.getTimeout(TimeUnit.MILLISECONDS);
                 try {
-                    mTimeoutFuture = mTimeoutExecutor.schedule(onTimeoutFunc, timeoutSeconds,
-                        TimeUnit.SECONDS);
+                    mTimeoutFuture = mTimeoutExecutor.schedule(
+                            onTimeoutFunc, timeoutMs, TimeUnit.MILLISECONDS);
                 } catch (Exception e) {
                     Log.e(TAG, "Error when schedule a timer", e);
                 }
@@ -519,9 +594,9 @@ import java.util.concurrent.atomic.AtomicInteger;
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder(100);
-        TransactionRecord[] arr;
+        ContextHubServiceTransaction[] arr;
         synchronized (this) {
-            arr = mTransactionQueue.toArray(new TransactionRecord[0]);
+            arr = mTransactionQueue.toArray(new ContextHubServiceTransaction[0]);
         }
         for (int i = 0; i < arr.length; i++) {
             sb.append(i + ": " + arr[i] + "\n");

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2021 Chaldeaprjkt
+ * Copyright (C) 2022-2024 crDroid Android Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,7 +72,7 @@ class GameSpaceManager @Inject constructor(
         }
     }
 
-    private inner class GameSpaceHandler(looper: Looper?) : Handler(looper, null, true) {
+    private inner class GameSpaceHandler(looper: Looper) : Handler(looper, null, true) {
         override fun handleMessage(msg: Message) {
             when (msg.what) {
                 MSG_UPDATE_FOREGROUND_APP -> checkForegroundApp()
@@ -103,7 +104,7 @@ class GameSpaceManager @Inject constructor(
             addFlags(Intent.FLAG_RECEIVER_REPLACE_PENDING
                 or Intent.FLAG_RECEIVER_FOREGROUND
                 or Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND)
-            context.sendBroadcastAsUser(this, UserHandle.SYSTEM,
+            context.sendBroadcastAsUser(this, UserHandle.CURRENT,
                 android.Manifest.permission.MANAGE_GAME_MODE)
         }
     }
@@ -118,19 +119,35 @@ class GameSpaceManager @Inject constructor(
         handler.sendEmptyMessage(MSG_UPDATE_FOREGROUND_APP)
         context.registerReceiver(interactivityReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
-        })
+        }, Context.RECEIVER_NOT_EXPORTED)
         keyguardStateController.addCallback(keyguardStateCallback)
+    }
+
+    fun unobserve() {
+        val taskStackChangeListeners = TaskStackChangeListeners.getInstance();
+        if (!isRegistered) {
+            taskStackChangeListeners.unregisterTaskStackListener(taskStackChangeListener)
+        }
+        isRegistered = false;
+        context.unregisterReceiver(interactivityReceiver)
+        keyguardStateController.removeCallback(keyguardStateCallback)
     }
 
     fun isGameActive() = activeGame != null
 
     fun shouldSuppressFullScreenIntent() =
-        Settings.System.getInt(context.contentResolver,
-            Settings.System.GAMESPACE_SUPPRESS_FULLSCREEN_INTENT, 0) == 1 && isGameActive()
+        Settings.System.getIntForUser(
+            context.contentResolver,
+            Settings.System.GAMESPACE_SUPPRESS_FULLSCREEN_INTENT, 0,
+            UserHandle.USER_CURRENT) == 1 && isGameActive()
 
     private fun checkGameList(packageName: String?): String? {
         packageName ?: return null
-        val games = Settings.System.getString(context.contentResolver, Settings.System.GAMESPACE_GAME_LIST)
+        val games = Settings.System.getStringForUser(
+            context.contentResolver,
+            Settings.System.GAMESPACE_GAME_LIST,
+            UserHandle.USER_CURRENT)
+
         if (games.isNullOrEmpty())
             return null
 

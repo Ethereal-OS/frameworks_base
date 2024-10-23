@@ -27,6 +27,7 @@ import android.net.Uri;
 import android.os.Handler;
 import android.os.HandlerExecutor;
 import android.os.Looper;
+import android.os.UserHandle;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.provider.Settings.Secure;
@@ -38,7 +39,7 @@ import androidx.annotation.WorkerThread;
 
 import com.android.internal.util.ArrayUtils;
 import com.android.systemui.DejankUtils;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.demomode.DemoModeController;
@@ -46,8 +47,9 @@ import com.android.systemui.qs.QSHost;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.phone.StatusBarIconController;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
-import com.android.systemui.statusbar.policy.Clock;
 import com.android.systemui.util.leak.LeakDetector;
+
+import dagger.Lazy;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -57,7 +59,11 @@ import javax.inject.Inject;
 
 
 /**
+ * @deprecated Don't use this class to listen to Secure Settings. Use {@code SecureSettings} instead
+ * or {@code SettingsObserver} to be able to specify the handler.
+ * This class will interact with SecureSettings using the main looper.
  */
+@Deprecated
 @SysUISingleton
 public class TunerServiceImpl extends TunerService {
 
@@ -69,14 +75,6 @@ public class TunerServiceImpl extends TunerService {
     // Things that use the tunable infrastructure but are now real user settings and
     // shouldn't be reset with tuner settings.
     private static final String[] RESET_EXCEPTION_LIST = new String[] {
-            Clock.STATUS_BAR_CLOCK_SECONDS,
-            Clock.STATUS_BAR_CLOCK_DATE_DISPLAY,
-            Clock.STATUS_BAR_CLOCK_DATE_STYLE,
-            Clock.STATUS_BAR_CLOCK_DATE_POSITION,
-            Clock.STATUS_BAR_CLOCK_DATE_FORMAT,
-            Clock.STATUS_BAR_CLOCK_AUTO_HIDE,
-            Clock.STATUS_BAR_CLOCK_AUTO_HIDE_HDURATION,
-            Clock.STATUS_BAR_CLOCK_AUTO_HIDE_SDURATION,
             QSHost.TILES_SETTING,
             Settings.Secure.DOZE_ALWAYS_ON,
             Settings.Secure.MEDIA_CONTROLS_RESUME,
@@ -92,6 +90,7 @@ public class TunerServiceImpl extends TunerService {
     // Set of all tunables, used for leak detection.
     private final HashSet<Tunable> mTunables = LeakDetector.ENABLED ? new HashSet<>() : null;
     private final Context mContext;
+    private final Lazy<SystemUIDialog.Factory> mSystemUIDialogFactoryLazy;
     private final LeakDetector mLeakDetector;
     private final DemoModeController mDemoModeController;
 
@@ -109,9 +108,11 @@ public class TunerServiceImpl extends TunerService {
             @Main Handler mainHandler,
             LeakDetector leakDetector,
             DemoModeController demoModeController,
-            UserTracker userTracker) {
+            UserTracker userTracker,
+            Lazy<SystemUIDialog.Factory> systemUIDialogFactoryLazy) {
         super(context);
         mContext = context;
+        mSystemUIDialogFactoryLazy = systemUIDialogFactoryLazy;
         mContentResolver = mContext.getContentResolver();
         mLeakDetector = leakDetector;
         mDemoModeController = demoModeController;
@@ -158,31 +159,48 @@ public class TunerServiceImpl extends TunerService {
                         TextUtils.join(",", iconHideList), mCurrentUser);
             }
         }
-        if (oldVersion < 2) {
+        if (oldVersion < 5) {
             setTunerEnabled(false);
         }
         setValue(TUNER_VERSION, newVersion);
+    }
+
+    private boolean isCustomSetting(String key) {
+        return isCustomGlobal(key) || isCustomSystem(key) || isCustomSecure(key);
+    }
+
+    private boolean isCustomGlobal(String key) {
+        return key.startsWith("customglobal:");
+    }
+
+    private boolean isCustomSystem(String key) {
+        return key.startsWith("customsystem:");
+    }
+
+    private boolean isCustomSecure(String key) {
+        return key.startsWith("customsecure:");
     }
 
     private boolean isSystem(String key) {
         return key.startsWith("system:");
     }
 
-    private boolean isGlobal(String key) {
-        return key.startsWith("global:");
-    }
-
     private String chomp(String key) {
-        return key.replaceFirst("^(system|global):", "");
+        return key.replaceFirst("^(customglobal|customsecure|customsystem|system):", "");
     }
 
     @Override
     public String getValue(String setting) {
-        if (isSystem(setting)) {
+        if (isCustomGlobal(setting)) {
+            return Settings.Global.getString(mContentResolver, chomp(setting));
+        } else if (isCustomSecure(setting)) {
+            return Settings.Secure.getStringForUser(
+                    mContentResolver, chomp(setting), mCurrentUser);
+        } else if (isCustomSystem(setting)) {
             return Settings.System.getStringForUser(
                     mContentResolver, chomp(setting), mCurrentUser);
-        } else if (isGlobal(setting)) {
-            return Settings.Global.getStringForUser(
+        } else if (isSystem(setting)) {
+            return Settings.System.getStringForUser(
                     mContentResolver, chomp(setting), mCurrentUser);
         } else {
             return Settings.Secure.getStringForUser(mContentResolver, setting, mCurrentUser);
@@ -191,11 +209,16 @@ public class TunerServiceImpl extends TunerService {
 
     @Override
     public void setValue(String setting, String value) {
-        if (isSystem(setting)) {
+        if (isCustomGlobal(setting)) {
+            Settings.Global.putString(mContentResolver, chomp(setting), value);
+        } else if (isCustomSecure(setting)) {
+            Settings.Secure.putStringForUser(
+                    mContentResolver, chomp(setting), value, mCurrentUser);
+        } else if (isCustomSystem(setting)) {
             Settings.System.putStringForUser(
                     mContentResolver, chomp(setting), value, mCurrentUser);
-        } else if (isGlobal(setting)) {
-            Settings.Global.putStringForUser(
+        } else if (isSystem(setting)) {
+            Settings.System.putStringForUser(
                     mContentResolver, chomp(setting), value, mCurrentUser);
         } else {
             Settings.Secure.putStringForUser(mContentResolver, setting, value, mCurrentUser);
@@ -204,12 +227,17 @@ public class TunerServiceImpl extends TunerService {
 
     @Override
     public int getValue(String setting, int def) {
-        if (isSystem(setting)) {
+        if (isCustomGlobal(setting)) {
+            return Settings.Global.getInt(mContentResolver, chomp(setting), def);
+        } else if (isCustomSecure(setting)) {
+            return Settings.Secure.getIntForUser(
+                    mContentResolver, chomp(setting), def, mCurrentUser);
+        } else if (isCustomSystem(setting)) {
             return Settings.System.getIntForUser(
                     mContentResolver, chomp(setting), def, mCurrentUser);
-        } else if (isGlobal(setting)) {
-            return Settings.Global.getInt(
-                    mContentResolver, chomp(setting), def);
+        } else if (isSystem(setting)) {
+            return Settings.System.getIntForUser(
+                    mContentResolver, chomp(setting), def, mCurrentUser);
         } else {
             return Settings.Secure.getIntForUser(mContentResolver, setting, def, mCurrentUser);
         }
@@ -218,11 +246,16 @@ public class TunerServiceImpl extends TunerService {
     @Override
     public String getValue(String setting, String def) {
         String ret;
-        if (isSystem(setting)) {
+        if (isCustomGlobal(setting)) {
+            ret = Settings.Global.getString(mContentResolver, chomp(setting));
+        } else if (isCustomSecure(setting)) {
+            ret = Settings.Secure.getStringForUser(
+                    mContentResolver, chomp(setting), mCurrentUser);
+        } else if (isCustomSystem(setting)) {
             ret = Settings.System.getStringForUser(
                     mContentResolver, chomp(setting), mCurrentUser);
-        } else if (isGlobal(setting)) {
-            ret = Settings.Global.getStringForUser(
+        } else if (isSystem(setting)) {
+            ret = Settings.System.getStringForUser(
                     mContentResolver, chomp(setting), mCurrentUser);
         } else {
             ret = Secure.getStringForUser(mContentResolver, setting, mCurrentUser);
@@ -233,10 +266,16 @@ public class TunerServiceImpl extends TunerService {
 
     @Override
     public void setValue(String setting, int value) {
-        if (isSystem(setting)) {
-            Settings.System.putIntForUser(mContentResolver, chomp(setting), value, mCurrentUser);
-        } else if (isGlobal(setting)) {
+        if (isCustomGlobal(setting)) {
             Settings.Global.putInt(mContentResolver, chomp(setting), value);
+        } else if (isCustomSecure(setting)) {
+            Settings.Secure.putIntForUser(
+                    mContentResolver, chomp(setting), value, mCurrentUser);
+        } else if (isCustomSystem(setting)) {
+            Settings.System.putIntForUser(
+                    mContentResolver, chomp(setting), value, mCurrentUser);
+        } else if (isSystem(setting)) {
+            Settings.System.putIntForUser(mContentResolver, chomp(setting), value, mCurrentUser);
         } else {
             Settings.Secure.putIntForUser(mContentResolver, setting, value, mCurrentUser);
         }
@@ -259,16 +298,21 @@ public class TunerServiceImpl extends TunerService {
             mLeakDetector.trackCollection(mTunables, "TunerService.mTunables");
         }
         final Uri uri;
-        if (isSystem(key)) {
-            uri = Settings.System.getUriFor(chomp(key));
-        } else if (isGlobal(key)) {
+        if (isCustomGlobal(key)) {
             uri = Settings.Global.getUriFor(chomp(key));
+        } else if (isCustomSecure(key)) {
+            uri = Settings.Secure.getUriFor(chomp(key));
+        } else if (isCustomSystem(key)) {
+            uri = Settings.System.getUriFor(chomp(key));
+        } else if (isSystem(key)) {
+            uri = Settings.System.getUriFor(chomp(key));
         } else {
             uri = Settings.Secure.getUriFor(key);
         }
         if (!mListeningUris.containsKey(uri)) {
             mListeningUris.put(uri, key);
-            mContentResolver.registerContentObserver(uri, false, mObserver, mCurrentUser);
+            mContentResolver.registerContentObserver(uri, false, mObserver,
+                    isCustomGlobal(key) ? UserHandle.USER_ALL : mCurrentUser);
         }
         // Send the first state.
         String value = DejankUtils.whitelistIpcs(() -> getValue(key));
@@ -291,7 +335,9 @@ public class TunerServiceImpl extends TunerService {
         }
         mContentResolver.unregisterContentObserver(mObserver);
         for (Uri uri : mListeningUris.keySet()) {
-            mContentResolver.registerContentObserver(uri, false, mObserver, mCurrentUser);
+            String key = mListeningUris.get(uri);
+            mContentResolver.registerContentObserver(uri, false, mObserver,
+                    isCustomGlobal(key) ? UserHandle.USER_ALL : mCurrentUser);
         }
     }
 
@@ -311,8 +357,9 @@ public class TunerServiceImpl extends TunerService {
 
     private void reloadAll() {
         for (String key : mTunableLookup.keySet()) {
-           if (ArrayUtils.contains(RESET_EXCEPTION_LIST, key) || key.startsWith("system:"))
+            if (ArrayUtils.contains(RESET_EXCEPTION_LIST, key) || isCustomSetting(key) || key.startsWith("system:")) {
                 continue;
+            }
             String value = getValue(key);
             for (Tunable tunable : mTunableLookup.get(key)) {
                 if (tunable != null) {
@@ -334,7 +381,7 @@ public class TunerServiceImpl extends TunerService {
 
         // A couple special cases.
         for (String key : mTunableLookup.keySet()) {
-            Settings.Secure.putStringForUser(mContentResolver, key, null, user);
+            setValue(key, null);
         }
     }
 
@@ -358,7 +405,7 @@ public class TunerServiceImpl extends TunerService {
 
     @Override
     public void showResetRequest(Runnable onDisabled) {
-        SystemUIDialog dialog = new SystemUIDialog(mContext);
+        SystemUIDialog dialog = mSystemUIDialogFactoryLazy.get().create();
         dialog.setShowForAllUsers(true);
         dialog.setMessage(R.string.remove_from_settings_prompt);
         dialog.setButton(DialogInterface.BUTTON_NEGATIVE, mContext.getString(R.string.cancel),
@@ -387,8 +434,9 @@ public class TunerServiceImpl extends TunerService {
         @Override
         public void onChange(boolean selfChange, java.util.Collection<Uri> uris,
                 int flags, int userId) {
-            if (userId == mUserTracker.getUserId()) {
-                for (Uri u : uris) {
+            for (Uri u : uris) {
+                String key = mListeningUris.get(u);
+                if (userId == mUserTracker.getUserId() || isCustomGlobal(key)) {
                     reloadSetting(u);
                 }
             }

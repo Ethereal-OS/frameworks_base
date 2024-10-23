@@ -16,6 +16,7 @@
 package android.app.prediction;
 
 import android.annotation.CallbackExecutor;
+import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
@@ -24,9 +25,12 @@ import android.app.prediction.IPredictionCallback.Stub;
 import android.content.Context;
 import android.content.pm.ParceledListSlice;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
+import android.os.IRemoteCallback;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.service.appprediction.flags.Flags;
 import android.util.ArrayMap;
 import android.util.Log;
 
@@ -84,8 +88,6 @@ public final class AppPredictor {
     @GuardedBy("itself")
     private final ArrayMap<Callback, CallbackWrapper> mRegisteredCallbacks = new ArrayMap<>();
 
-    private final IBinder mToken = new Binder();
-
     /**
      * Creates a new Prediction client.
      * <p>
@@ -101,7 +103,7 @@ public final class AppPredictor {
         mSessionId = new AppPredictionSessionId(
                 context.getPackageName() + ":" + UUID.randomUUID(), context.getUserId());
         try {
-            mPredictionManager.createPredictionSession(predictionContext, mSessionId, mToken);
+            mPredictionManager.createPredictionSession(predictionContext, mSessionId, getToken());
         } catch (RemoteException e) {
             Log.e(TAG, "Failed to create predictor", e);
             e.rethrowAsRuntimeException();
@@ -265,6 +267,34 @@ public final class AppPredictor {
     }
 
     /**
+     * Requests a Bundle which includes service features info or {@code null} if the service is not
+     * available.
+     *
+     * @param callbackExecutor The callback executor to use when calling the callback. It cannot be
+     *                        null.
+     * @param callback The callback to return the Bundle which includes service features info. It
+     *                cannot be null.
+     *
+     * @throws IllegalStateException If this AppPredictor has already been destroyed.
+     * @throws RuntimeException If there is a failure communicating with the remote service.
+     */
+    @FlaggedApi(Flags.FLAG_SERVICE_FEATURES_API)
+    public void requestServiceFeatures(@NonNull Executor callbackExecutor,
+            @NonNull Consumer<Bundle> callback) {
+        if (mIsClosed.get()) {
+            throw new IllegalStateException("This client has already been destroyed.");
+        }
+
+        try {
+            mPredictionManager.requestServiceFeatures(mSessionId,
+                    new RemoteCallbackWrapper(callbackExecutor, callback));
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to request service feature info", e);
+            e.rethrowAsRuntimeException();
+        }
+    }
+
+    /**
      * Destroys the client and unregisters the callback. Any method on this class after this call
      * with throw {@link IllegalStateException}.
      */
@@ -347,5 +377,35 @@ public final class AppPredictor {
                 Binder.restoreCallingIdentity(identity);
             }
         }
+    }
+
+    static class RemoteCallbackWrapper extends IRemoteCallback.Stub {
+
+        private final Consumer<Bundle> mCallback;
+        private final Executor mExecutor;
+
+        RemoteCallbackWrapper(@NonNull Executor callbackExecutor,
+                @NonNull Consumer<Bundle> callback) {
+            mExecutor = callbackExecutor;
+            mCallback = callback;
+        }
+
+        @Override
+        public void sendResult(Bundle result) {
+            final long identity = Binder.clearCallingIdentity();
+            try {
+                mExecutor.execute(() -> mCallback.accept(result));
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+    }
+
+    private static class Token {
+        static final IBinder sBinder = new Binder(TAG);
+    }
+
+    private static IBinder getToken() {
+        return Token.sBinder;
     }
 }

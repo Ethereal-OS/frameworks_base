@@ -20,33 +20,41 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.when;
 
 import android.hardware.input.IInputDevicesChangedListener;
 import android.hardware.input.IInputManager;
-import android.hardware.input.InputManager;
+import android.hardware.input.InputManagerGlobal;
 import android.os.RemoteException;
 import android.testing.TestableLooper;
+import android.view.Display;
 import android.view.InputDevice;
 
 import org.mockito.invocation.InvocationOnMock;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.IntStream;
 
 /**
- * A test utility class used to share the logic for setting up {@link InputManager}'s callback for
+ * A test utility class used to share the logic for setting up
+ * {@link  android.hardware.input.InputManager}'s callback for
  * when a virtual input device being added.
  */
 class InputManagerMockHelper {
     private final TestableLooper mTestableLooper;
     private final InputController.NativeWrapper mNativeWrapperMock;
     private final IInputManager mIInputManagerMock;
+    private final InputManagerGlobal.TestSession mInputManagerGlobalSession;
     private final List<InputDevice> mDevices = new ArrayList<>();
     private IInputDevicesChangedListener mDevicesChangedListener;
+    private final Map<String /* uniqueId */, Integer /* displayId */> mDisplayIdMapping =
+            new HashMap<>();
+    private final Map<String /* phys */, String /* uniqueId */> mUniqueIdAssociation =
+            new HashMap<>();
 
     InputManagerMockHelper(TestableLooper testableLooper,
             InputController.NativeWrapper nativeWrapperMock, IInputManager iInputManagerMock)
@@ -56,6 +64,8 @@ class InputManagerMockHelper {
         mIInputManagerMock = iInputManagerMock;
 
         doAnswer(this::handleNativeOpenInputDevice).when(mNativeWrapperMock).openUinputMouse(
+                anyString(), anyInt(), anyInt(), anyString());
+        doAnswer(this::handleNativeOpenInputDevice).when(mNativeWrapperMock).openUinputDpad(
                 anyString(), anyInt(), anyInt(), anyString());
         doAnswer(this::handleNativeOpenInputDevice).when(mNativeWrapperMock).openUinputKeyboard(
                 anyString(), anyInt(), anyInt(), anyString());
@@ -69,24 +79,43 @@ class InputManagerMockHelper {
         when(mIInputManagerMock.getInputDeviceIds()).thenReturn(new int[0]);
         doAnswer(inv -> mDevices.get(inv.getArgument(0)))
                 .when(mIInputManagerMock).getInputDevice(anyInt());
-        doNothing().when(mIInputManagerMock).addUniqueIdAssociation(anyString(), anyString());
-        doNothing().when(mIInputManagerMock).removeUniqueIdAssociation(anyString());
+        doAnswer(inv -> mUniqueIdAssociation.put(inv.getArgument(0), inv.getArgument(1))).when(
+                mIInputManagerMock).addUniqueIdAssociation(anyString(), anyString());
+        doAnswer(inv -> mUniqueIdAssociation.remove(inv.getArgument(0))).when(
+                mIInputManagerMock).removeUniqueIdAssociation(anyString());
 
         // Set a new instance of InputManager for testing that uses the IInputManager mock as the
         // interface to the server.
-        InputManager.resetInstance(mIInputManagerMock);
+        mInputManagerGlobalSession = InputManagerGlobal.createTestSession(mIInputManagerMock);
     }
 
-    private Void handleNativeOpenInputDevice(InvocationOnMock inv) {
+    public void tearDown() {
+        if (mInputManagerGlobalSession != null) {
+            mInputManagerGlobalSession.close();
+        }
+    }
+
+    public void addDisplayIdMapping(String uniqueId, int displayId) {
+        mDisplayIdMapping.put(uniqueId, displayId);
+    }
+
+    private long handleNativeOpenInputDevice(InvocationOnMock inv) {
         Objects.requireNonNull(mDevicesChangedListener,
                 "InputController did not register an InputDevicesChangedListener.");
-        // We only use a subset of the fields of InputDevice in InputController.
-        final InputDevice device = new InputDevice(mDevices.size() /*id*/, 1 /*generation*/, 0,
-                inv.getArgument(0) /*name*/, inv.getArgument(1) /*vendorId*/,
-                inv.getArgument(2) /*productId*/, inv.getArgument(3) /*descriptor*/,
-                true /*isExternal*/, 0 /*sources*/, 0 /*keyboardType*/,
-                null /*keyCharacterMap*/, false /*hasVibrator*/, false /*hasMic*/,
-                false /*hasButtonUnderPad*/, false /*hasSensor*/, false /*hasBattery*/);
+
+        final String phys = inv.getArgument(3);
+        final InputDevice device = new InputDevice.Builder()
+                .setId(mDevices.size())
+                .setName(inv.getArgument(0))
+                .setVendorId(inv.getArgument(1))
+                .setProductId(inv.getArgument(2))
+                .setDescriptor(phys)
+                .setExternal(true)
+                .setAssociatedDisplayId(
+                        mDisplayIdMapping.getOrDefault(mUniqueIdAssociation.get(phys),
+                                Display.INVALID_DISPLAY))
+                .build();
+
         mDevices.add(device);
         try {
             mDevicesChangedListener.onInputDevicesChanged(
@@ -96,6 +125,7 @@ class InputManagerMockHelper {
         }
         // Process the device added notification.
         mTestableLooper.processAllMessages();
-        return null;
+        // Return a placeholder pointer to the native input device.
+        return 1L;
     }
 }

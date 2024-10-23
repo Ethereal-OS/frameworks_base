@@ -16,11 +16,16 @@
 
 package android.media;
 
+import static android.media.MediaRouter2.SCANNING_STATE_NOT_SCANNING;
+import static android.media.MediaRouter2.SCANNING_STATE_WHILE_INTERACTIVE;
+
 import static com.android.internal.util.function.pooled.PooledLambda.obtainMessage;
 
+import android.Manifest;
 import android.annotation.CallbackExecutor;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.RequiresPermission;
 import android.content.Context;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
@@ -28,6 +33,7 @@ import android.os.Handler;
 import android.os.Message;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.UserHandle;
 import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
@@ -35,6 +41,7 @@ import android.util.Log;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.util.Preconditions;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -75,13 +82,7 @@ public final class MediaRouter2Manager {
     private static MediaRouter2Manager sInstance;
 
     private final MediaSessionManager mMediaSessionManager;
-
-    final String mPackageName;
-
-    private final Context mContext;
-
     private final Client mClient;
-
     private final IMediaRouterService mMediaRouterService;
     private final AtomicInteger mScanRequestCount = new AtomicInteger(/* initialValue= */ 0);
     final Handler mHandler;
@@ -93,6 +94,11 @@ public final class MediaRouter2Manager {
     @NonNull
     final ConcurrentMap<String, RouteDiscoveryPreference> mDiscoveryPreferenceMap =
             new ConcurrentHashMap<>();
+    // TODO(b/241888071): Merge mDiscoveryPreferenceMap and mPackageToRouteListingPreferenceMap into
+    //     a single record object maintained by a single package-to-record map.
+    @NonNull
+    private final ConcurrentMap<String, RouteListingPreference>
+            mPackageToRouteListingPreferenceMap = new ConcurrentHashMap<>();
 
     private final AtomicInteger mNextRequestId = new AtomicInteger(1);
     private final CopyOnWriteArrayList<TransferRequest> mTransferRequests =
@@ -114,16 +120,14 @@ public final class MediaRouter2Manager {
     }
 
     private MediaRouter2Manager(Context context) {
-        mContext = context.getApplicationContext();
         mMediaRouterService = IMediaRouterService.Stub.asInterface(
                 ServiceManager.getService(Context.MEDIA_ROUTER_SERVICE));
         mMediaSessionManager = (MediaSessionManager) context
                 .getSystemService(Context.MEDIA_SESSION_SERVICE);
-        mPackageName = mContext.getPackageName();
         mHandler = new Handler(context.getMainLooper());
         mClient = new Client();
         try {
-            mMediaRouterService.registerManager(mClient, mPackageName);
+            mMediaRouterService.registerManager(mClient, context.getPackageName());
         } catch (RemoteException ex) {
             throw ex.rethrowFromSystemServer();
         }
@@ -173,7 +177,7 @@ public final class MediaRouter2Manager {
     public void registerScanRequest() {
         if (mScanRequestCount.getAndIncrement() == 0) {
             try {
-                mMediaRouterService.startScan(mClient);
+                mMediaRouterService.updateScanningState(mClient, SCANNING_STATE_WHILE_INTERACTIVE);
             } catch (RemoteException ex) {
                 throw ex.rethrowFromSystemServer();
             }
@@ -200,7 +204,7 @@ public final class MediaRouter2Manager {
                 })
                 == 0) {
             try {
-                mMediaRouterService.stopScan(mClient);
+                mMediaRouterService.updateScanningState(mClient, SCANNING_STATE_NOT_SCANNING);
             } catch (RemoteException ex) {
                 throw ex.rethrowFromSystemServer();
             }
@@ -248,7 +252,6 @@ public final class MediaRouter2Manager {
         List<RoutingSessionInfo> sessions = getRoutingSessions(packageName);
         return getTransferableRoutes(sessions.get(sessions.size() - 1));
     }
-
 
     /**
      * Gets available routes for the given routing session.
@@ -315,9 +318,15 @@ public final class MediaRouter2Manager {
                 mDiscoveryPreferenceMap.getOrDefault(packageName, RouteDiscoveryPreference.EMPTY);
 
         for (MediaRoute2Info route : getSortedRoutes(discoveryPreference)) {
-            if (sessionInfo.getTransferableRoutes().contains(route.getId())
-                    || (includeSelectedRoutes
-                    && sessionInfo.getSelectedRoutes().contains(route.getId()))) {
+            if (!route.isVisibleTo(packageName)) {
+                continue;
+            }
+            boolean transferableRoutesContainRoute =
+                    sessionInfo.getTransferableRoutes().contains(route.getId());
+            boolean selectedRoutesContainRoute =
+                    sessionInfo.getSelectedRoutes().contains(route.getId());
+            if (transferableRoutesContainRoute
+                    || (includeSelectedRoutes && selectedRoutesContainRoute)) {
                 routes.add(route);
                 continue;
             }
@@ -355,6 +364,16 @@ public final class MediaRouter2Manager {
     }
 
     /**
+     * Returns the {@link RouteListingPreference} of the app with the given {@code packageName}, or
+     * null if the app has not set any.
+     */
+    @Nullable
+    public RouteListingPreference getRouteListingPreference(@NonNull String packageName) {
+        Preconditions.checkArgument(!TextUtils.isEmpty(packageName));
+        return mPackageToRouteListingPreferenceMap.get(packageName);
+    }
+
+    /**
      * Gets the system routing session for the given {@code packageName}.
      * Apps can select a route that is not the global route. (e.g. an app can select the device
      * route while BT route is available.)
@@ -364,7 +383,7 @@ public final class MediaRouter2Manager {
     @Nullable
     public RoutingSessionInfo getSystemRoutingSession(@Nullable String packageName) {
         try {
-            return mMediaRouterService.getSystemSessionInfoForPackage(mClient, packageName);
+            return mMediaRouterService.getSystemSessionInfoForPackage(packageName);
         } catch (RemoteException ex) {
             throw ex.rethrowFromSystemServer();
         }
@@ -448,34 +467,48 @@ public final class MediaRouter2Manager {
     }
 
     /**
-     * Selects media route for the specified package name.
+     * Transfers a {@link RoutingSessionInfo routing session} belonging to a specified package name
+     * to a {@link MediaRoute2Info media route}.
+     *
+     * <p>Same as {@link #transfer(RoutingSessionInfo, MediaRoute2Info)}, but resolves the routing
+     * session based on the provided package name.
      */
-    public void selectRoute(@NonNull String packageName, @NonNull MediaRoute2Info route) {
+    @RequiresPermission(Manifest.permission.MEDIA_CONTENT_CONTROL)
+    public void transfer(
+            @NonNull String packageName,
+            @NonNull MediaRoute2Info route,
+            @NonNull UserHandle userHandle) {
         Objects.requireNonNull(packageName, "packageName must not be null");
         Objects.requireNonNull(route, "route must not be null");
 
-        Log.v(TAG, "Selecting route. packageName= " + packageName + ", route=" + route);
-
         List<RoutingSessionInfo> sessionInfos = getRoutingSessions(packageName);
         RoutingSessionInfo targetSession = sessionInfos.get(sessionInfos.size() - 1);
-        transfer(targetSession, route);
+        transfer(targetSession, route, userHandle, packageName);
     }
 
     /**
      * Transfers a routing session to a media route.
+     *
      * <p>{@link Callback#onTransferred} or {@link Callback#onTransferFailed} will be called
      * depending on the result.
      *
      * @param sessionInfo the routing session info to transfer
      * @param route the route transfer to
-     *
+     * @param transferInitiatorUserHandle the user handle of an app initiated the transfer
+     * @param transferInitiatorPackageName the package name of an app initiated the transfer
      * @see Callback#onTransferred(RoutingSessionInfo, RoutingSessionInfo)
      * @see Callback#onTransferFailed(RoutingSessionInfo, MediaRoute2Info)
      */
-    public void transfer(@NonNull RoutingSessionInfo sessionInfo,
-            @NonNull MediaRoute2Info route) {
+    @RequiresPermission(Manifest.permission.MEDIA_CONTENT_CONTROL)
+    public void transfer(
+            @NonNull RoutingSessionInfo sessionInfo,
+            @NonNull MediaRoute2Info route,
+            @NonNull UserHandle transferInitiatorUserHandle,
+            @NonNull String transferInitiatorPackageName) {
         Objects.requireNonNull(sessionInfo, "sessionInfo must not be null");
         Objects.requireNonNull(route, "route must not be null");
+        Objects.requireNonNull(transferInitiatorUserHandle);
+        Objects.requireNonNull(transferInitiatorPackageName);
 
         Log.v(TAG, "Transferring routing session. session= " + sessionInfo + ", route=" + route);
 
@@ -488,9 +521,11 @@ public final class MediaRouter2Manager {
         }
 
         if (sessionInfo.getTransferableRoutes().contains(route.getId())) {
-            transferToRoute(sessionInfo, route);
+            transferToRoute(
+                    sessionInfo, route, transferInitiatorUserHandle, transferInitiatorPackageName);
         } else {
-            requestCreateSession(sessionInfo, route);
+            requestCreateSession(sessionInfo, route, transferInitiatorUserHandle,
+                    transferInitiatorPackageName);
         }
     }
 
@@ -550,37 +585,15 @@ public final class MediaRouter2Manager {
         }
     }
 
-    void addRoutesOnHandler(List<MediaRoute2Info> routes) {
+    void updateRoutesOnHandler(@NonNull List<MediaRoute2Info> routes) {
         synchronized (mRoutesLock) {
+            mRoutes.clear();
             for (MediaRoute2Info route : routes) {
                 mRoutes.put(route.getId(), route);
             }
         }
-        if (routes.size() > 0) {
-            notifyRoutesAdded(routes);
-        }
-    }
 
-    void removeRoutesOnHandler(List<MediaRoute2Info> routes) {
-        synchronized (mRoutesLock) {
-            for (MediaRoute2Info route : routes) {
-                mRoutes.remove(route.getId());
-            }
-        }
-        if (routes.size() > 0) {
-            notifyRoutesRemoved(routes);
-        }
-    }
-
-    void changeRoutesOnHandler(List<MediaRoute2Info> routes) {
-        synchronized (mRoutesLock) {
-            for (MediaRoute2Info route : routes) {
-                mRoutes.put(route.getId(), route);
-            }
-        }
-        if (routes.size() > 0) {
-            notifyRoutesChanged(routes);
-        }
+        notifyRoutesUpdated();
     }
 
     void createSessionOnHandler(int requestId, RoutingSessionInfo sessionInfo) {
@@ -654,24 +667,9 @@ public final class MediaRouter2Manager {
         notifySessionUpdated(sessionInfo);
     }
 
-    private void notifyRoutesAdded(List<MediaRoute2Info> routes) {
+    private void notifyRoutesUpdated() {
         for (CallbackRecord record: mCallbackRecords) {
-            record.mExecutor.execute(
-                    () -> record.mCallback.onRoutesAdded(routes));
-        }
-    }
-
-    private void notifyRoutesRemoved(List<MediaRoute2Info> routes) {
-        for (CallbackRecord record: mCallbackRecords) {
-            record.mExecutor.execute(
-                    () -> record.mCallback.onRoutesRemoved(routes));
-        }
-    }
-
-    private void notifyRoutesChanged(List<MediaRoute2Info> routes) {
-        for (CallbackRecord record: mCallbackRecords) {
-            record.mExecutor.execute(
-                    () -> record.mCallback.onRoutesChanged(routes));
+            record.mExecutor.execute(() -> record.mCallback.onRoutesUpdated());
         }
     }
 
@@ -718,6 +716,24 @@ public final class MediaRouter2Manager {
         for (CallbackRecord record : mCallbackRecords) {
             record.mExecutor.execute(() -> record.mCallback
                     .onDiscoveryPreferenceChanged(packageName, preference));
+        }
+    }
+
+    private void updateRouteListingPreference(
+            @NonNull String packageName, @Nullable RouteListingPreference routeListingPreference) {
+        RouteListingPreference oldRouteListingPreference =
+                routeListingPreference == null
+                        ? mPackageToRouteListingPreferenceMap.remove(packageName)
+                        : mPackageToRouteListingPreferenceMap.put(
+                                packageName, routeListingPreference);
+        if (Objects.equals(oldRouteListingPreference, routeListingPreference)) {
+            return;
+        }
+        for (CallbackRecord record : mCallbackRecords) {
+            record.mExecutor.execute(
+                    () ->
+                            record.mCallback.onRouteListingPreferenceUpdated(
+                                    packageName, routeListingPreference));
         }
     }
 
@@ -877,19 +893,30 @@ public final class MediaRouter2Manager {
      *
      * @hide
      */
-    private void transferToRoute(@NonNull RoutingSessionInfo session,
-            @NonNull MediaRoute2Info route) {
+    @RequiresPermission(Manifest.permission.MEDIA_CONTENT_CONTROL)
+    private void transferToRoute(
+            @NonNull RoutingSessionInfo session,
+            @NonNull MediaRoute2Info route,
+            @NonNull UserHandle transferInitiatorUserHandle,
+            @NonNull String transferInitiatorPackageName) {
         int requestId = createTransferRequest(session, route);
 
         try {
             mMediaRouterService.transferToRouteWithManager(
-                    mClient, requestId, session.getId(), route);
+                    mClient,
+                    requestId,
+                    session.getId(),
+                    route,
+                    transferInitiatorUserHandle,
+                    transferInitiatorPackageName);
         } catch (RemoteException ex) {
             throw ex.rethrowFromSystemServer();
         }
     }
 
-    private void requestCreateSession(RoutingSessionInfo oldSession, MediaRoute2Info route) {
+    private void requestCreateSession(RoutingSessionInfo oldSession, MediaRoute2Info route,
+            @NonNull UserHandle transferInitiatorUserHandle,
+            @NonNull String transferInitiationPackageName) {
         if (TextUtils.isEmpty(oldSession.getClientPackageName())) {
             Log.w(TAG, "requestCreateSession: Can't create a session without package name.");
             notifyTransferFailed(oldSession, route);
@@ -900,7 +927,8 @@ public final class MediaRouter2Manager {
 
         try {
             mMediaRouterService.requestCreateSessionWithManager(
-                    mClient, requestId, oldSession, route);
+                    mClient, requestId, oldSession, route, transferInitiatorUserHandle,
+                    transferInitiationPackageName);
         } catch (RemoteException ex) {
             throw ex.rethrowFromSystemServer();
         }
@@ -950,23 +978,12 @@ public final class MediaRouter2Manager {
      * Interface for receiving events about media routing changes.
      */
     public interface Callback {
-        /**
-         * Called when routes are added.
-         * @param routes the list of routes that have been added. It's never empty.
-         */
-        default void onRoutesAdded(@NonNull List<MediaRoute2Info> routes) {}
 
         /**
-         * Called when routes are removed.
-         * @param routes the list of routes that have been removed. It's never empty.
+         * Called when the routes list changes. This includes adding, modifying, or removing
+         * individual routes.
          */
-        default void onRoutesRemoved(@NonNull List<MediaRoute2Info> routes) {}
-
-        /**
-         * Called when routes are changed.
-         * @param routes the list of routes that have been changed. It's never empty.
-         */
-        default void onRoutesChanged(@NonNull List<MediaRoute2Info> routes) {}
+        default void onRoutesUpdated() {}
 
         /**
          * Called when a session is changed.
@@ -1015,6 +1032,19 @@ public final class MediaRouter2Manager {
                 @NonNull RouteDiscoveryPreference discoveryPreference) {
             onPreferredFeaturesChanged(packageName, discoveryPreference.getPreferredFeatures());
         }
+
+        /**
+         * Called when the app with the given {@code packageName} updates its {@link
+         * MediaRouter2#setRouteListingPreference route listing preference}.
+         *
+         * @param packageName The package name of the app that changed its listing preference.
+         * @param routeListingPreference The new {@link RouteListingPreference} set by the app with
+         *     the given {@code packageName}. Maybe null if an app has unset its preference (by
+         *     passing null to {@link MediaRouter2#setRouteListingPreference}).
+         */
+        default void onRouteListingPreferenceUpdated(
+                @NonNull String packageName,
+                @Nullable RouteListingPreference routeListingPreference) {}
 
         /**
          * Called when a previous request has failed.
@@ -1102,21 +1132,23 @@ public final class MediaRouter2Manager {
         }
 
         @Override
-        public void notifyRoutesAdded(List<MediaRoute2Info> routes) {
-            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::addRoutesOnHandler,
-                    MediaRouter2Manager.this, routes));
+        public void notifyRouteListingPreferenceChange(
+                String packageName, @Nullable RouteListingPreference routeListingPreference) {
+            mHandler.sendMessage(
+                    obtainMessage(
+                            MediaRouter2Manager::updateRouteListingPreference,
+                            MediaRouter2Manager.this,
+                            packageName,
+                            routeListingPreference));
         }
 
         @Override
-        public void notifyRoutesRemoved(List<MediaRoute2Info> routes) {
-            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::removeRoutesOnHandler,
-                    MediaRouter2Manager.this, routes));
-        }
-
-        @Override
-        public void notifyRoutesChanged(List<MediaRoute2Info> routes) {
-            mHandler.sendMessage(obtainMessage(MediaRouter2Manager::changeRoutesOnHandler,
-                    MediaRouter2Manager.this, routes));
+        public void notifyRoutesUpdated(List<MediaRoute2Info> routes) {
+            mHandler.sendMessage(
+                    obtainMessage(
+                            MediaRouter2Manager::updateRoutesOnHandler,
+                            MediaRouter2Manager.this,
+                            routes));
         }
     }
 }

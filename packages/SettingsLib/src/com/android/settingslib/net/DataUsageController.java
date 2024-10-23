@@ -23,11 +23,9 @@ import static android.text.format.DateUtils.FORMAT_SHOW_DATE;
 import android.app.usage.NetworkStats.Bucket;
 import android.app.usage.NetworkStatsManager;
 import android.content.Context;
-import android.net.ConnectivityManager;
 import android.net.NetworkPolicy;
 import android.net.NetworkPolicyManager;
 import android.net.NetworkTemplate;
-import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
@@ -42,6 +40,7 @@ import com.android.internal.util.ArrayUtils;
 import java.time.ZonedDateTime;
 import java.util.Iterator;
 import java.util.Locale;
+import java.util.Set;
 
 public class DataUsageController {
 
@@ -154,7 +153,7 @@ public class DataUsageController {
         } else {
             usage.warningLevel = getDefaultWarningLevel();
         }
-        if (usage != null && mNetworkController != null) {
+        if (mNetworkController != null) {
             usage.carrier = mNetworkController.getMobileDataNetworkName();
         }
         return usage;
@@ -215,25 +214,12 @@ public class DataUsageController {
         if (mPolicyManager == null || template == null) return null;
         final NetworkPolicy[] policies = mPolicyManager.getNetworkPolicies();
         if (policies == null) return null;
-        final int N = policies.length;
-        for (int i = 0; i < N; i++) {
-            final NetworkPolicy policy = policies[i];
+        for (final NetworkPolicy policy : policies) {
             if (policy != null && template.equals(policy.template)) {
                 return policy;
             }
         }
         return null;
-    }
-
-    private static String statsBucketToString(Bucket bucket) {
-        return bucket == null ? null : new StringBuilder("Entry[")
-            .append("bucketDuration=").append(bucket.getEndTimeStamp() - bucket.getStartTimeStamp())
-            .append(",bucketStart=").append(bucket.getStartTimeStamp())
-            .append(",rxBytes=").append(bucket.getRxBytes())
-            .append(",rxPackets=").append(bucket.getRxPackets())
-            .append(",txBytes=").append(bucket.getTxBytes())
-            .append(",txPackets=").append(bucket.getTxPackets())
-            .append(']').toString();
     }
 
     @VisibleForTesting
@@ -253,8 +239,8 @@ public class DataUsageController {
             }
         }
 
-        return mContext.getSystemService(
-                TelephonyManager.class).createForSubscriptionId(subscriptionId);
+        return mContext.getSystemService(TelephonyManager.class)
+                .createForSubscriptionId(subscriptionId);
     }
 
     public void setMobileDataEnabled(boolean enabled) {
@@ -273,28 +259,6 @@ public class DataUsageController {
 
     public boolean isMobileDataEnabled() {
         return getTelephonyManager().isDataEnabled();
-    }
-
-    static int getNetworkType(NetworkTemplate networkTemplate) {
-        if (networkTemplate == null) {
-            return ConnectivityManager.TYPE_NONE;
-        }
-        final int matchRule = networkTemplate.getMatchRule();
-        switch (matchRule) {
-            case NetworkTemplate.MATCH_MOBILE:
-                return ConnectivityManager.TYPE_MOBILE;
-            case NetworkTemplate.MATCH_WIFI:
-                return  ConnectivityManager.TYPE_WIFI;
-            case NetworkTemplate.MATCH_ETHERNET:
-                return  ConnectivityManager.TYPE_ETHERNET;
-            default:
-                return ConnectivityManager.TYPE_MOBILE;
-        }
-    }
-
-    private String getActiveSubscriberId() {
-        final String actualSubscriberId = getTelephonyManager().getSubscriberId();
-        return actualSubscriberId;
     }
 
     private String formatDateRange(long start, long end) {

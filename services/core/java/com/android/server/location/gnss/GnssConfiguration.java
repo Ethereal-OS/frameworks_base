@@ -17,8 +17,7 @@
 package com.android.server.location.gnss;
 
 import android.content.Context;
-import android.ext.settings.ExtSettings;
-import android.ext.settings.GnssConstants;
+import android.location.flags.Flags;
 import android.os.PersistableBundle;
 import android.os.SystemProperties;
 import android.telephony.CarrierConfigManager;
@@ -26,7 +25,6 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Log;
-import android.util.Slog;
 
 import com.android.internal.util.FrameworkStatsLog;
 
@@ -39,6 +37,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
@@ -57,7 +56,9 @@ public class GnssConfiguration {
 
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
-    private static final String DEBUG_PROPERTIES_FILE = "/etc/gps_debug.conf";
+    private static final String DEBUG_PROPERTIES_SYSTEM_FILE = "/etc/gps_debug.conf";
+
+    private static final String DEBUG_PROPERTIES_VENDOR_FILE = "/vendor/etc/gps_debug.conf";
 
     // config.xml properties
     private static final String CONFIG_SUPL_HOST = "SUPL_HOST";
@@ -79,6 +80,8 @@ public class GnssConfiguration {
             "ENABLE_PSDS_PERIODIC_DOWNLOAD";
     private static final String CONFIG_ENABLE_ACTIVE_SIM_EMERGENCY_SUPL =
             "ENABLE_ACTIVE_SIM_EMERGENCY_SUPL";
+    private static final String CONFIG_ENABLE_NI_SUPL_MESSAGE_INJECTION =
+            "ENABLE_NI_SUPL_MESSAGE_INJECTION";
     static final String CONFIG_LONGTERM_PSDS_SERVER_1 = "LONGTERM_PSDS_SERVER_1";
     static final String CONFIG_LONGTERM_PSDS_SERVER_2 = "LONGTERM_PSDS_SERVER_2";
     static final String CONFIG_LONGTERM_PSDS_SERVER_3 = "LONGTERM_PSDS_SERVER_3";
@@ -93,6 +96,8 @@ public class GnssConfiguration {
     // Represents an HAL interface version. Instances of this class are created in the JNI layer
     // and returned through native methods.
     static class HalInterfaceVersion {
+        // mMajor being this value denotes AIDL HAL. In this case, mMinor denotes the AIDL version.
+        static final int AIDL_INTERFACE = 3;
         final int mMajor;
         final int mMinor;
 
@@ -221,6 +226,14 @@ public class GnssConfiguration {
     }
 
     /**
+     * Returns true if NI SUPL message injection is enabled; Returns false otherwise.
+     * Default false if not set.
+     */
+    boolean isNiSuplMessageInjectionEnabled() {
+        return getBooleanConfig(CONFIG_ENABLE_NI_SUPL_MESSAGE_INJECTION, false);
+    }
+
+    /**
      * Returns true if a long-term PSDS server is configured.
      */
     boolean isLongTermPsdsServerConfigured() {
@@ -264,6 +277,11 @@ public class GnssConfiguration {
         }
         loadPropertiesFromCarrierConfig(inEmergency, activeSubId);
 
+        if (Flags.gnssConfigurationFromResource()) {
+            // Overlay carrier properties from resources.
+            loadPropertiesFromResource(mContext, mProperties);
+        }
+
         if (isSimAbsent(mContext)) {
             // Use the default SIM's LPP profile when SIM is absent.
             String lpp_prof = SystemProperties.get(LPP_PROFILE);
@@ -276,10 +294,9 @@ public class GnssConfiguration {
         /*
          * Overlay carrier properties from a debug configuration file.
          */
-        loadPropertiesFromGpsDebugConfig(mProperties);
+        loadPropertiesFromGpsDebugConfig(mProperties, DEBUG_PROPERTIES_VENDOR_FILE);
+        loadPropertiesFromGpsDebugConfig(mProperties, DEBUG_PROPERTIES_SYSTEM_FILE);
         mEsExtensionSec = getRangeCheckedConfigEsExtensionSec();
-
-        applyConfigOverrides(mContext, mProperties);
 
         logConfigurations();
 
@@ -291,26 +308,24 @@ public class GnssConfiguration {
                 Log.e(TAG, "Unable to set " + CONFIG_ES_EXTENSION_SEC + ": " + mEsExtensionSec);
             }
 
-            Map<String, SetCarrierProperty> map = new HashMap<String, SetCarrierProperty>() {
-                {
-                    put(CONFIG_SUPL_VER, GnssConfiguration::native_set_supl_version);
-                    put(CONFIG_SUPL_MODE, GnssConfiguration::native_set_supl_mode);
+            Map<String, SetCarrierProperty> map = new HashMap<String, SetCarrierProperty>();
 
-                    if (isConfigSuplEsSupported(gnssConfigurationIfaceVersion)) {
-                        put(CONFIG_SUPL_ES, GnssConfiguration::native_set_supl_es);
-                    }
+            map.put(CONFIG_SUPL_VER, GnssConfiguration::native_set_supl_version);
+            map.put(CONFIG_SUPL_MODE, GnssConfiguration::native_set_supl_mode);
 
-                    put(CONFIG_LPP_PROFILE, GnssConfiguration::native_set_lpp_profile);
-                    put(CONFIG_A_GLONASS_POS_PROTOCOL_SELECT,
-                            GnssConfiguration::native_set_gnss_pos_protocol_select);
-                    put(CONFIG_USE_EMERGENCY_PDN_FOR_EMERGENCY_SUPL,
-                            GnssConfiguration::native_set_emergency_supl_pdn);
+            if (isConfigSuplEsSupported(gnssConfigurationIfaceVersion)) {
+                map.put(CONFIG_SUPL_ES, GnssConfiguration::native_set_supl_es);
+            }
 
-                    if (isConfigGpsLockSupported(gnssConfigurationIfaceVersion)) {
-                        put(CONFIG_GPS_LOCK, GnssConfiguration::native_set_gps_lock);
-                    }
-                }
-            };
+            map.put(CONFIG_LPP_PROFILE, GnssConfiguration::native_set_lpp_profile);
+            map.put(CONFIG_A_GLONASS_POS_PROTOCOL_SELECT,
+                    GnssConfiguration::native_set_gnss_pos_protocol_select);
+            map.put(CONFIG_USE_EMERGENCY_PDN_FOR_EMERGENCY_SUPL,
+                    GnssConfiguration::native_set_emergency_supl_pdn);
+
+            if (isConfigGpsLockSupported(gnssConfigurationIfaceVersion)) {
+                map.put(CONFIG_GPS_LOCK, GnssConfiguration::native_set_gps_lock);
+            }
 
             for (Entry<String, SetCarrierProperty> entry : map.entrySet()) {
                 String propertyName = entry.getKey();
@@ -371,10 +386,10 @@ public class GnssConfiguration {
             configs = CarrierConfigManager.getDefaultConfig();
         }
         for (String configKey : configs.keySet()) {
-            if (configKey.startsWith(CarrierConfigManager.Gps.KEY_PREFIX)) {
+            if (configKey != null && configKey.startsWith(CarrierConfigManager.Gps.KEY_PREFIX)) {
                 String key = configKey
                         .substring(CarrierConfigManager.Gps.KEY_PREFIX.length())
-                        .toUpperCase();
+                        .toUpperCase(Locale.ROOT);
                 Object value = configs.get(configKey);
                 if (DEBUG) Log.d(TAG, "Gps config: " + key + " = " + value);
                 if (value instanceof String) {
@@ -387,9 +402,9 @@ public class GnssConfiguration {
         }
     }
 
-    private void loadPropertiesFromGpsDebugConfig(Properties properties) {
+    private void loadPropertiesFromGpsDebugConfig(Properties properties, String filePath) {
         try {
-            File file = new File(DEBUG_PROPERTIES_FILE);
+            File file = new File(filePath);
             FileInputStream stream = null;
             try {
                 stream = new FileInputStream(file);
@@ -398,7 +413,25 @@ public class GnssConfiguration {
                 IoUtils.closeQuietly(stream);
             }
         } catch (IOException e) {
-            if (DEBUG) Log.d(TAG, "Could not open GPS configuration file " + DEBUG_PROPERTIES_FILE);
+            if (DEBUG) Log.d(TAG, "Could not open GPS configuration file " + filePath);
+        }
+    }
+
+    private void loadPropertiesFromResource(Context context,
+            Properties properties) {
+        String[] configValues = context.getResources().getStringArray(
+                com.android.internal.R.array.config_gnssParameters);
+        for (String item : configValues) {
+            if (DEBUG) Log.d(TAG, "GnssParamsResource: " + item);
+            // We need to support "KEY =", but not "=VALUE".
+            int index = item.indexOf("=");
+            if (index > 0 && index + 1 < item.length()) {
+                String key = item.substring(0, index);
+                String value = item.substring(index + 1);
+                properties.setProperty(key.trim().toUpperCase(Locale.ROOT), value);
+            } else {
+                Log.w(TAG, "malformed contents: " + item);
+            }
         }
     }
 
@@ -481,66 +514,4 @@ public class GnssConfiguration {
     private static native boolean native_set_satellite_blocklist(int[] constellations, int[] svIds);
 
     private static native boolean native_set_es_extension_sec(int emergencyExtensionSeconds);
-
-    private static void applyConfigOverrides(Context ctx, Properties props) {
-        final int suplMode = ExtSettings.GNSS_SUPL.get(ctx);
-
-        switch (suplMode) {
-            case GnssConstants.SUPL_SERVER_STANDARD:
-                Slog.d(TAG, "SUPL: using the standard server");
-                break;
-            case GnssConstants.SUPL_DISABLED:
-                Slog.d(TAG, "SUPL is disabled");
-                props.setProperty(CONFIG_SUPL_MODE, "0");
-                break;
-            case GnssConstants.SUPL_SERVER_GRAPHENEOS_PROXY:
-                Slog.d(TAG, "SUPL: using the GrapheneOS proxy");
-                props.setProperty(CONFIG_SUPL_HOST, "supl.grapheneos.org");
-                props.setProperty(CONFIG_SUPL_PORT, "7275");
-                break;
-        }
-
-        applyPsdsConfigOverrides(ctx, props);
-    }
-
-    private static void applyPsdsConfigOverrides(Context ctx, Properties props) {
-        final int psdsMode = ExtSettings.GNSS_PSDS_STANDARD.get(ctx);
-
-        final String psdsType = ctx.getString(com.android.internal.R.string.config_gnssPsdsType);
-        Slog.d(TAG, "PSDS type: " + psdsType);
-
-        switch (psdsMode) {
-            case GnssConstants.PSDS_SERVER_GRAPHENEOS:
-                Slog.d(TAG, "PSDS: using the GrapheneOS server");
-                clearPsdsServerProps(props);
-
-                switch (psdsType) {
-                    case GnssConstants.PSDS_TYPE_BROADCOM:
-                        final String host = GnssConstants.PSDS_SERVER_GRAPHENEOS_BROADCOM;
-                        props.setProperty(CONFIG_LONGTERM_PSDS_SERVER_1, host + "/lto2.dat");
-                        props.setProperty(CONFIG_NORMAL_PSDS_SERVER, host + "/rto.dat");
-                        props.setProperty(CONFIG_REALTIME_PSDS_SERVER, host + "/rtistatus.dat");
-                        break;
-                }
-                break;
-            case GnssConstants.PSDS_SERVER_STANDARD:
-                Slog.d(TAG, "PSDS: using the standard servers");
-                break;
-            case GnssConstants.PSDS_DISABLED:
-                Slog.d(TAG, "PSDS is disabled");
-                // a precaution, GnssLocationProvider.mSupportsPsds is set to false when PSDS is
-                // disabled, which should disable PSDS entirely
-                clearPsdsServerProps(props);
-                props.setProperty(CONFIG_ENABLE_PSDS_PERIODIC_DOWNLOAD, "0");
-                break;
-        }
-    }
-
-    private static void clearPsdsServerProps(Properties props) {
-        props.remove(CONFIG_LONGTERM_PSDS_SERVER_1);
-        props.remove(CONFIG_LONGTERM_PSDS_SERVER_2);
-        props.remove(CONFIG_LONGTERM_PSDS_SERVER_3);
-        props.remove(CONFIG_NORMAL_PSDS_SERVER);
-        props.remove(CONFIG_REALTIME_PSDS_SERVER);
-    }
 }

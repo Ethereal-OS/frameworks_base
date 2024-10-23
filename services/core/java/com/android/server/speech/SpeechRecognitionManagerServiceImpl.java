@@ -23,22 +23,29 @@ import android.app.AppGlobals;
 import android.content.AttributionSource;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
 import android.os.Binder;
 import android.os.IBinder;
+import android.os.Process;
 import android.os.RemoteException;
 import android.permission.PermissionManager;
+import android.provider.Settings;
+import android.speech.IModelDownloadListener;
 import android.speech.IRecognitionListener;
 import android.speech.IRecognitionService;
 import android.speech.IRecognitionServiceManagerCallback;
 import android.speech.IRecognitionSupportCallback;
 import android.speech.RecognitionService;
 import android.speech.SpeechRecognizer;
+import android.util.Log;
 import android.util.Slog;
+import android.util.SparseIntArray;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.modules.expresslog.Counter;
 import com.android.server.infra.AbstractPerUserSystemService;
 
 import java.util.HashMap;
@@ -50,7 +57,7 @@ import java.util.Set;
 
 final class SpeechRecognitionManagerServiceImpl extends
         AbstractPerUserSystemService<SpeechRecognitionManagerServiceImpl,
-            SpeechRecognitionManagerService> {
+                SpeechRecognitionManagerService> {
     private static final String TAG = SpeechRecognitionManagerServiceImpl.class.getSimpleName();
 
     private static final int MAX_CONCURRENT_CONNECTIONS_BY_CLIENT = 10;
@@ -61,6 +68,9 @@ final class SpeechRecognitionManagerServiceImpl extends
     @GuardedBy("mLock")
     private final Map<Integer, Set<RemoteSpeechRecognitionService>> mRemoteServicesByUid =
             new HashMap<>();
+
+    @GuardedBy("mLock")
+    private final SparseIntArray mSessionCountByUid = new SparseIntArray();
 
     SpeechRecognitionManagerServiceImpl(
             @NonNull SpeechRecognitionManagerService master,
@@ -103,6 +113,12 @@ final class SpeechRecognitionManagerServiceImpl extends
             serviceComponent = getOnDeviceComponentNameLocked();
         }
 
+        if (!onDevice && Process.isIsolated(Binder.getCallingUid())) {
+            Slog.w(TAG, "Isolated process can only start on device speech recognizer.");
+            tryRespondWithError(callback, SpeechRecognizer.ERROR_CLIENT);
+            return;
+        }
+
         if (serviceComponent == null) {
             if (mMaster.debug) {
                 Slog.i(TAG, "Service component is undefined, responding with error.");
@@ -120,13 +136,14 @@ final class SpeechRecognitionManagerServiceImpl extends
         }
 
         IBinder.DeathRecipient deathRecipient =
-                () -> handleClientDeath(creatorCallingUid, service, true /* invoke #cancel */);
+                () -> handleClientDeath(
+                        clientToken, creatorCallingUid, service, true /* invoke #cancel */);
 
         try {
             clientToken.linkToDeath(deathRecipient, 0);
         } catch (RemoteException e) {
             // RemoteException == binder already died, schedule disconnect anyway.
-            handleClientDeath(creatorCallingUid, service, true /* invoke #cancel */);
+            handleClientDeath(clientToken, creatorCallingUid, service, true /* invoke #cancel */);
             return;
         }
 
@@ -139,7 +156,7 @@ final class SpeechRecognitionManagerServiceImpl extends
                                 Intent recognizerIntent,
                                 IRecognitionListener listener,
                                 @NonNull AttributionSource attributionSource)
-                                        throws RemoteException {
+                                throws RemoteException {
                             attributionSource.enforceCallingUid();
                             if (!attributionSource.isTrusted(mMaster.getContext())) {
                                 attributionSource = mMaster.getContext()
@@ -147,6 +164,7 @@ final class SpeechRecognitionManagerServiceImpl extends
                                         .registerAttributionSource(attributionSource);
                             }
                             service.startListening(recognizerIntent, listener, attributionSource);
+                            service.associateClientWithActiveListener(clientToken, listener);
                         }
 
                         @Override
@@ -159,11 +177,11 @@ final class SpeechRecognitionManagerServiceImpl extends
                         public void cancel(
                                 IRecognitionListener listener,
                                 boolean isShutdown) throws RemoteException {
-
                             service.cancel(listener, isShutdown);
 
                             if (isShutdown) {
                                 handleClientDeath(
+                                        clientToken,
                                         creatorCallingUid,
                                         service,
                                         false /* invoke #cancel */);
@@ -174,13 +192,19 @@ final class SpeechRecognitionManagerServiceImpl extends
                         @Override
                         public void checkRecognitionSupport(
                                 Intent recognizerIntent,
+                                AttributionSource attributionSource,
                                 IRecognitionSupportCallback callback) {
-                            service.checkRecognitionSupport(recognizerIntent, callback);
+                            service.checkRecognitionSupport(
+                                    recognizerIntent, attributionSource, callback);
                         }
 
                         @Override
-                        public void triggerModelDownload(Intent recognizerIntent) {
-                            service.triggerModelDownload(recognizerIntent);
+                        public void triggerModelDownload(
+                                Intent recognizerIntent,
+                                AttributionSource attributionSource,
+                                IModelDownloadListener listener) {
+                            service.triggerModelDownload(
+                                    recognizerIntent, attributionSource, listener);
                         }
                     });
                 } catch (RemoteException e) {
@@ -194,12 +218,17 @@ final class SpeechRecognitionManagerServiceImpl extends
     }
 
     private void handleClientDeath(
-            int callingUid,
+            IBinder clientToken, int callingUid,
             RemoteSpeechRecognitionService service, boolean invokeCancel) {
         if (invokeCancel) {
-            service.shutdown();
+            service.shutdown(clientToken);
         }
-        removeService(callingUid, service);
+        synchronized (mLock) {
+            decrementSessionCountForUidLocked(callingUid);
+            if (!service.hasActiveSessions()) {
+                removeService(callingUid, service);
+            }
+        }
     }
 
     @GuardedBy("mLock")
@@ -219,6 +248,27 @@ final class SpeechRecognitionManagerServiceImpl extends
         return ComponentName.unflattenFromString(serviceName);
     }
 
+    @GuardedBy("mLock")
+    private int getSessionCountByUidLocked(int uid) {
+        return mSessionCountByUid.get(uid, 0);
+    }
+
+    @GuardedBy("mLock")
+    private void incrementSessionCountForUidLocked(int uid) {
+        mSessionCountByUid.put(uid, mSessionCountByUid.get(uid, 0) + 1);
+        Log.i(TAG, "Client " + uid + " has opened " + mSessionCountByUid.get(uid, 0) + " sessions");
+    }
+
+    @GuardedBy("mLock")
+    private void decrementSessionCountForUidLocked(int uid) {
+        int newCount = mSessionCountByUid.get(uid, 1) - 1;
+        if (newCount > 0) {
+            mSessionCountByUid.put(uid, newCount);
+        } else {
+            mSessionCountByUid.delete(uid);
+        }
+    }
+
     private RemoteSpeechRecognitionService createService(
             int callingUid, ComponentName serviceComponent) {
         synchronized (mLock) {
@@ -227,7 +277,19 @@ final class SpeechRecognitionManagerServiceImpl extends
 
             if (servicesForClient != null
                     && servicesForClient.size() >= MAX_CONCURRENT_CONNECTIONS_BY_CLIENT) {
+                Slog.w(TAG, "Number of remote services exceeded for uid: " + callingUid);
+                Counter.logIncrementWithUid(
+                        "speech_recognition.value_exceed_service_connections_count",
+                        callingUid);
                 return null;
+            }
+
+            if (getSessionCountByUidLocked(callingUid) == MAX_CONCURRENT_CONNECTIONS_BY_CLIENT) {
+                Slog.w(TAG, "Number of sessions exceeded for uid: " + callingUid);
+                Counter.logIncrementWithUid(
+                        "speech_recognition.value_exceed_session_count",
+                        callingUid);
+                // TODO(b/297249772): return null early to refuse the new connection
             }
 
             if (servicesForClient != null) {
@@ -238,11 +300,11 @@ final class SpeechRecognitionManagerServiceImpl extends
                                         service.getServiceComponentName().equals(serviceComponent))
                                 .findFirst();
                 if (existingService.isPresent()) {
-
                     if (mMaster.debug) {
                         Slog.i(TAG, "Reused existing connection to " + serviceComponent);
                     }
 
+                    incrementSessionCountForUidLocked(callingUid);
                     return existingService.get();
                 }
             }
@@ -251,9 +313,22 @@ final class SpeechRecognitionManagerServiceImpl extends
                 return null;
             }
 
+            final boolean isPrivileged;
+            if (serviceComponent == null) {
+                isPrivileged = false;
+            } else {
+                // Only certain privileged recognition service can obtain process capabilities
+                // from persistent process to hold while-in-use permission in the background.
+                isPrivileged = checkPrivilege(serviceComponent);
+            }
+
             RemoteSpeechRecognitionService service =
                     new RemoteSpeechRecognitionService(
-                            getContext(), serviceComponent, getUserId(), callingUid);
+                            getContext(),
+                            serviceComponent,
+                            getUserId(),
+                            callingUid,
+                            isPrivileged);
 
             Set<RemoteSpeechRecognitionService> valuesByCaller =
                     mRemoteServicesByUid.computeIfAbsent(callingUid, key -> new HashSet<>());
@@ -263,8 +338,56 @@ final class SpeechRecognitionManagerServiceImpl extends
                 Slog.i(TAG, "Creating a new connection to " + serviceComponent);
             }
 
+            incrementSessionCountForUidLocked(callingUid);
             return service;
         }
+    }
+
+    /**
+     * Checks if the given service component should have privileged binding flags when created. Only
+     * a service component that matches with any of the following condition would be granted:
+     *
+     * <ul>
+     *     <li>A default recognition service component.</li>
+     *     <li>An on-device recognition service component.</li>
+     *     <li>A pre-installed recognition service component.</li>
+     * </ul>
+     */
+    @GuardedBy("mLock")
+    private boolean checkPrivilege(@NonNull ComponentName serviceComponent) {
+        final ComponentName defaultComponent = getDefaultRecognitionServiceComponent();
+        final ComponentName onDeviceComponent = getOnDeviceComponentNameLocked();
+        final boolean preinstalled = isPreinstalledApp(serviceComponent);
+        return serviceComponent.equals(defaultComponent)
+                || serviceComponent.equals(onDeviceComponent)
+                || preinstalled;
+    }
+
+    private boolean isPreinstalledApp(@NonNull ComponentName serviceComponent) {
+        PackageManager pm = getContext().getPackageManager();
+        if (pm == null) {
+            return false;
+        }
+
+        try {
+            ApplicationInfo info = pm.getApplicationInfoAsUser(serviceComponent.getPackageName(),
+                    PackageManager.MATCH_SYSTEM_ONLY, getUserId());
+            return (info.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    @Nullable
+    private ComponentName getDefaultRecognitionServiceComponent() {
+        String componentName = Settings.Secure.getStringForUser(
+                getContext().getContentResolver(),
+                Settings.Secure.VOICE_RECOGNITION_SERVICE,
+                getUserId());
+        if (componentName == null) {
+            return null;
+        }
+        return ComponentName.unflattenFromString(componentName);
     }
 
     private boolean componentMapsToRecognitionService(@NonNull ComponentName serviceComponent) {

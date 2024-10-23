@@ -25,6 +25,18 @@
     <!-- Maximum width of the sliding KeyguardSecurityContainer -->
     <dimen name="keyguard_security_width">420dp</dimen>
 
+    <!-- Width for the keyguard pin input field -->
+    <dimen name="keyguard_pin_field_width">292dp</dimen>
+
+    <!-- height for the keyguard pin input field -->
+    <dimen name="keyguard_pin_field_height">56dp</dimen>
+
+    <!-- height for the keyguard password input field -->
+    <dimen name="keyguard_password_field_height">56dp</dimen>
+
+    <!-- width for the keyguard password input field -->
+    <dimen name="keyguard_password_field_width">276dp</dimen>
+
     <!-- Height of the sliding KeyguardSecurityContainer
          (includes 2x keyguard_security_view_top_margin) -->
     <dimen name="keyguard_security_height">420dp</dimen>
@@ -45,11 +57,11 @@
     <dimen name="keyguard_eca_bottom_margin">12dp</dimen>
 
     <!-- Slice header -->
-    <dimen name="widget_title_font_size">20dp</dimen>
+    <dimen name="widget_title_font_size">20sp</dimen>
     <dimen name="widget_title_line_height">24dp</dimen>
-    <dimen name="header_icon_size">16dp</dimen>
+    <dimen name="header_icon_size">16sp</dimen>
     <!-- Slice subtitle -->
-    <dimen name="widget_label_font_size">16dp</dimen>
+    <dimen name="widget_label_font_size">16sp</dimen>
     <dimen name="widget_label_line_height">20dp</dimen>
     <!-- Clock without header -->
     <dimen name="widget_big_font_size">54dp</dimen>
@@ -61,7 +73,7 @@
     <dimen name="widget_vertical_padding_clock">12dp</dimen>
     <!-- Subtitle paddings -->
     <dimen name="widget_horizontal_padding">8dp</dimen>
-    <dimen name="widget_icon_size">18dp</dimen>
+    <dimen name="widget_icon_size">18sp</dimen>
     <dimen name="widget_icon_padding">8dp</dimen>
     <!-- Notification shelf padding when dark -->
 
@@ -69,6 +81,10 @@
 
     <!-- The size of the dots in the PIN unlock method. -->
     <dimen name="password_dot_size">9dp</dimen>
+
+    <!-- The size of the shape in the PIN unlock method. -->
+    <dimen name="password_shape_size">30dp</dimen>
+
     <!-- The size of PIN text in the PIN unlock method. -->
     <integer name="scaled_password_text_size">40</integer>
 
@@ -91,7 +107,6 @@
     <dimen name="num_pad_key_margin_end">12dp</dimen>
 
     <!-- additional offset for clock switch area items -->
-    <dimen name="clock_padding_start">28dp</dimen>
     <dimen name="below_clock_padding_start">32dp</dimen>
     <dimen name="below_clock_padding_end">16dp</dimen>
     <dimen name="below_clock_padding_start_icons">28dp</dimen>
@@ -101,6 +116,13 @@
          allow it to use the whole screen space, 0.6 will allow it to use just under half of the
          screen. -->
     <item name="half_opened_bouncer_height_ratio" type="dimen" format="float">0.0</item>
+
+    <!-- Proportion of the screen height to use to set the maximum height of the bouncer to when
+     the device is in the DEVICE_POSTURE_HALF_OPENED posture.
+
+     This value is only used when motion layout bouncer is used - when flag
+     landscape.enable_lockscreen (b/293252410) is on -->
+    <item name="motion_layout_half_fold_bouncer_height_ratio" type="dimen" format="float">0.55</item>
 
     <!-- The actual amount of translation that is applied to the security when it animates from one
          side of the screen to the other in one-handed or user switcher mode. Note that it will
@@ -137,4 +159,20 @@
 
     <!-- Translation y for appear animation -->
     <dimen name="keyguard_host_view_translation_y">80dp</dimen>
+
+    <!-- Attributes for placeholder dots in 6 digit PIN view -->
+    <dimen name="default_dot_diameter">34dp</dimen>
+    <dimen name="default_dot_spacing">0dp</dimen>
+
+    <!-- Weather clock smartspace scaling to apply for the weather clock -->
+    <item name="weather_clock_smartspace_scale" type="dimen" format="float">1.0</item>
+    <dimen name="weather_clock_smartspace_translateX">0dp</dimen>
+    <dimen name="weather_clock_smartspace_translateY">0dp</dimen>
+
+    <!-- Thickness of the progress bar we show for the SFPS based authentication. -->
+    <dimen name="sfps_progress_bar_thickness">6dp</dimen>
+    <!-- Padding from the edge of the screen for the progress bar -->
+    <dimen name="sfps_progress_bar_padding_from_edge">7dp</dimen>
+
+    <dimen name="keyguard_presentation_width">410dp</dimen>
 </resources>

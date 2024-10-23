@@ -27,12 +27,11 @@ import android.os.SystemClock;
 import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
-import android.os.UserHandle;
-import android.provider.Settings;
 import android.util.Slog;
 
 import com.android.server.biometrics.log.BiometricContext;
 import com.android.server.biometrics.log.BiometricLogger;
+import com.android.server.biometrics.sensors.fingerprint.aidl.AidlSession;
 
 import java.util.function.Supplier;
 
@@ -40,8 +39,7 @@ import java.util.function.Supplier;
  * Abstract {@link HalClientMonitor} subclass that operations eligible/interested in acquisition
  * messages should extend.
  */
-public abstract class AcquisitionClient<T> extends HalClientMonitor<T> implements Interruptable,
-        ErrorConsumer {
+public abstract class AcquisitionClient<T> extends HalClientMonitor<T> implements ErrorConsumer {
 
     private static final String TAG = "Biometrics/AcquisitionClient";
 
@@ -115,10 +113,8 @@ public abstract class AcquisitionClient<T> extends HalClientMonitor<T> implement
             getLogger().logOnError(getContext(), getOperationContext(),
                     errorCode, vendorCode, getTargetUserId());
             try {
-                if (getListener() != null) {
-                    mShouldSendErrorToClient = false;
-                    getListener().onError(getSensorId(), getCookie(), errorCode, vendorCode);
-                }
+                mShouldSendErrorToClient = false;
+                getListener().onError(getSensorId(), getCookie(), errorCode, vendorCode);
             } catch (RemoteException e) {
                 Slog.w(TAG, "Failed to invoke sendError", e);
             }
@@ -150,9 +146,7 @@ public abstract class AcquisitionClient<T> extends HalClientMonitor<T> implement
 
         final int errorCode = BiometricConstants.BIOMETRIC_ERROR_CANCELED;
         try {
-            if (getListener() != null) {
-                getListener().onError(getSensorId(), getCookie(), errorCode, 0 /* vendorCode */);
-            }
+            getListener().onError(getSensorId(), getCookie(), errorCode, 0 /* vendorCode */);
         } catch (RemoteException e) {
             Slog.w(TAG, "Failed to invoke sendError", e);
         }
@@ -184,7 +178,7 @@ public abstract class AcquisitionClient<T> extends HalClientMonitor<T> implement
         }
 
         try {
-            if (getListener() != null && shouldSend) {
+            if (shouldSend) {
                 getListener().onAcquired(getSensorId(), acquiredInfo, vendorCode);
             }
         } catch (RemoteException e) {
@@ -200,9 +194,7 @@ public abstract class AcquisitionClient<T> extends HalClientMonitor<T> implement
 
     protected final void vibrateSuccess() {
         Vibrator vibrator = getContext().getSystemService(Vibrator.class);
-        boolean shouldVib = Settings.System.getIntForUser(getContext().getContentResolver(),
-            Settings.System.FP_SUCCESS_VIBRATE, 1, UserHandle.USER_CURRENT) == 1;
-        if (vibrator != null && mShouldVibrate && shouldVib) {
+        if (vibrator != null && mShouldVibrate) {
             vibrator.vibrate(Process.myUid(),
                     getContext().getOpPackageName(),
                     SUCCESS_VIBRATION_EFFECT,
@@ -211,16 +203,22 @@ public abstract class AcquisitionClient<T> extends HalClientMonitor<T> implement
         }
     }
 
-    protected final void vibrateError() {
-        Vibrator vibrator = getContext().getSystemService(Vibrator.class);
-        boolean shouldVib = Settings.System.getIntForUser(getContext().getContentResolver(),
-            Settings.System.FP_ERROR_VIBRATE, 1, UserHandle.USER_CURRENT) == 1;
-        if (vibrator != null && mShouldVibrate && shouldVib) {
-            vibrator.vibrate(Process.myUid(),
-                    getContext().getOpPackageName(),
-                    ERROR_VIBRATION_EFFECT,
-                    getClass().getSimpleName() + "::error",
-                    HARDWARE_FEEDBACK_VIBRATION_ATTRIBUTES);
+    // TODO(b/317414324): Deprecate setIgnoreDisplayTouches
+    protected final void resetIgnoreDisplayTouches() {
+        final AidlSession session = (AidlSession) getFreshDaemon();
+        try {
+            session.getSession().setIgnoreDisplayTouches(false);
+        } catch (RemoteException e) {
+            Slog.e(TAG, "Remote exception when resetting setIgnoreDisplayTouches");
         }
+    }
+
+    @Override
+    public boolean isInterruptable() {
+        return true;
+    }
+
+    public boolean isAlreadyCancelled() {
+        return mAlreadyCancelled;
     }
 }

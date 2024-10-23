@@ -26,6 +26,7 @@ import android.app.ActivityThread;
 import android.app.Application;
 import android.content.Context;
 import android.graphics.Rect;
+import android.hardware.devicestate.DeviceStateManager;
 import android.os.Bundle;
 import android.os.IBinder;
 
@@ -50,10 +51,11 @@ class SampleSidecarImpl extends StubSidecar {
     SampleSidecarImpl(Context context) {
         ((Application) context.getApplicationContext())
                 .registerActivityLifecycleCallbacks(new NotifyOnConfigurationChanged());
-        BaseDataProducer<String> settingsFeatureProducer = new RawFoldingFeatureProducer(context);
+        RawFoldingFeatureProducer settingsFeatureProducer = new RawFoldingFeatureProducer(context);
         BaseDataProducer<List<CommonFoldingFeature>> foldingFeatureProducer =
                 new DeviceStateManagerFoldingFeatureProducer(context,
-                        settingsFeatureProducer);
+                        settingsFeatureProducer,
+                        context.getSystemService(DeviceStateManager.class));
 
         foldingFeatureProducer.addDataChangedCallback(this::onDisplayFeaturesChanged);
     }
@@ -120,10 +122,12 @@ class SampleSidecarImpl extends StubSidecar {
         }
 
         List<SidecarDisplayFeature> features = new ArrayList<>();
+        final int rotation = activity.getResources().getConfiguration().windowConfiguration
+                .getDisplayRotation();
         for (CommonFoldingFeature baseFeature : mStoredFeatures) {
             SidecarDisplayFeature feature = new SidecarDisplayFeature();
             Rect featureRect = baseFeature.getRect();
-            rotateRectToDisplayRotation(displayId, featureRect);
+            rotateRectToDisplayRotation(displayId, rotation, featureRect);
             transformToWindowSpaceRect(activity, featureRect);
             feature.setRect(featureRect);
             feature.setType(baseFeature.getType());

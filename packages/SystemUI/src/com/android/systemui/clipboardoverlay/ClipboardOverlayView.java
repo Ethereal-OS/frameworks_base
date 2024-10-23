@@ -54,7 +54,7 @@ import android.widget.TextView;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
 
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.screenshot.DraggableConstraintLayout;
 import com.android.systemui.screenshot.FloatingWindowUtil;
 import com.android.systemui.screenshot.OverlayActionChip;
@@ -143,7 +143,7 @@ public class ClipboardOverlayView extends DraggableConstraintLayout {
         mTextPreview.getViewTreeObserver().addOnPreDrawListener(() -> {
             int availableHeight = mTextPreview.getHeight()
                     - (mTextPreview.getPaddingTop() + mTextPreview.getPaddingBottom());
-            mTextPreview.setMaxLines(availableHeight / mTextPreview.getLineHeight());
+            mTextPreview.setMaxLines(Math.max(availableHeight / mTextPreview.getLineHeight(), 1));
             return true;
         });
         super.onFinishInflate();
@@ -252,6 +252,10 @@ public class ClipboardOverlayView extends DraggableConstraintLayout {
                         updateTextSize(text, textView);
                     }
                 });
+    }
+
+    View getPreview() {
+        return mClipboardPreview;
     }
 
     void showImagePreview(@Nullable Bitmap thumbnail) {
@@ -366,6 +370,19 @@ public class ClipboardOverlayView extends DraggableConstraintLayout {
             }
         });
         return enterAnim;
+    }
+
+    Animator getFadeOutAnimation() {
+        ValueAnimator alphaAnim = ValueAnimator.ofFloat(1, 0);
+        alphaAnim.addUpdateListener(animation -> {
+            float alpha = (float) animation.getAnimatedValue();
+            mActionContainer.setAlpha(alpha);
+            mActionContainerBackground.setAlpha(alpha);
+            mPreviewBorder.setAlpha(alpha);
+            mDismissButton.setAlpha(alpha);
+        });
+        alphaAnim.setDuration(300);
+        return alphaAnim;
     }
 
     Animator getExitAnimation() {

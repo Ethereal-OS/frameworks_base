@@ -41,7 +41,6 @@ import android.annotation.TestApi;
 import android.app.AppOpsManager;
 import android.app.PendingIntent;
 import android.app.PropertyInvalidatedCache;
-import android.app.compat.gms.GmsCompat;
 import android.compat.Compatibility;
 import android.compat.annotation.ChangeId;
 import android.compat.annotation.EnabledAfter;
@@ -65,8 +64,6 @@ import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.UserHandle;
-import android.provider.Settings;
-import android.util.Log;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.listeners.ListenerExecutor;
@@ -196,6 +193,21 @@ public class LocationManager {
      * </ul>
      */
     public static final String GPS_PROVIDER = "gps";
+
+    /**
+     * Standard name of the GNSS hardware location provider.
+     *
+     * <p>This provider is similar to {@link LocationManager#GPS_PROVIDER}, but it directly uses the
+     * HAL GNSS implementation and doesn't go through any provider overrides that may exist. This
+     * provider will only be available when the GPS_PROVIDER is overridden with a proxy using {@link
+     * android.location.provider.LocationProviderBase#ACTION_GNSS_PROVIDER}, and is intended only
+     * for use internally by the location provider system.
+     *
+     * @hide
+     */
+    @SystemApi
+    @RequiresPermission(Manifest.permission.LOCATION_HARDWARE)
+    public static final String GPS_HARDWARE_PROVIDER = "gps_hardware";
 
     /**
      * A special location provider for receiving locations without actively initiating a location
@@ -1549,28 +1561,6 @@ public class LocationManager {
             @NonNull LocationRequest locationRequest,
             @NonNull @CallbackExecutor Executor executor,
             @NonNull LocationListener listener) {
-        if (GmsCompat.isEnabled()) {
-            if (!GmsCompat.hasPermission(ACCESS_COARSE_LOCATION)) {
-                return;
-            }
-
-            // requires privileged UPDATE_APP_OPS_STATS permission
-            locationRequest.setHideFromAppOps(false);
-            // requires privileged WRITE_SECURE_SETTINGS permission
-            locationRequest.setLocationSettingsIgnored(false);
-            // requires privileged UPDATE_DEVICE_STATS permission
-            locationRequest.setWorkSource(null);
-
-            if (Build.IS_DEBUGGABLE) {
-                var cr = mContext.getContentResolver();
-                String key = "gmscompat_skip_gnss_location_updates";
-                if (Settings.Global.getInt(cr, key, 0) == 1) {
-                    Log.d("GmsCompat", "requestLocationUpdates is skipped because "
-                            + key + " global setting is enabled");
-                    return;
-                }
-            }
-        }
         Preconditions.checkArgument(provider != null, "invalid null provider");
         Preconditions.checkArgument(locationRequest != null, "invalid null location request");
 
@@ -1845,7 +1835,10 @@ public class LocationManager {
      * @return list of provider names
      *
      * @throws IllegalArgumentException if criteria is null
+     *
+     * @deprecated Criteria based APIs are deprecated, prefer to select a provider explicitly.
      */
+    @Deprecated
     public @NonNull List<String> getProviders(@NonNull Criteria criteria, boolean enabledOnly) {
         Preconditions.checkArgument(criteria != null, "invalid null criteria");
 
@@ -1877,7 +1870,10 @@ public class LocationManager {
      * @return name of the provider that best matches the criteria, or null if none match
      *
      * @throws IllegalArgumentException if criteria is null
+     *
+     * @deprecated Criteria based APIs are deprecated, prefer to select a provider explicitly.
      */
+    @Deprecated
     public @Nullable String getBestProvider(@NonNull Criteria criteria, boolean enabledOnly) {
         Preconditions.checkArgument(criteria != null, "invalid null criteria");
 
@@ -2122,7 +2118,7 @@ public class LocationManager {
 
         try {
             mService.addTestProvider(provider, properties, new ArrayList<>(extraAttributionTags),
-                    mContext.getOpPackageName(), mContext.getFeatureId());
+                    mContext.getOpPackageName(), mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2144,7 +2140,7 @@ public class LocationManager {
 
         try {
             mService.removeTestProvider(provider, mContext.getOpPackageName(),
-                    mContext.getFeatureId());
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2179,7 +2175,7 @@ public class LocationManager {
 
         try {
             mService.setTestProviderLocation(provider, location, mContext.getOpPackageName(),
-                    mContext.getFeatureId());
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2209,7 +2205,7 @@ public class LocationManager {
 
         try {
             mService.setTestProviderEnabled(provider, enabled, mContext.getOpPackageName(),
-                    mContext.getFeatureId());
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -2426,8 +2422,8 @@ public class LocationManager {
      * @return true if the listener was successfully added
      * @throws SecurityException if the ACCESS_FINE_LOCATION permission is not present
      *
-     * @deprecated use {@link #registerGnssStatusCallback(GnssStatus.Callback)} instead. No longer
-     * supported in apps targeting S and above.
+     * @deprecated Use {@link #registerGnssStatusCallback(GnssStatus.Callback, Handler)} or {@link
+     * #registerGnssStatusCallback(Executor, GnssStatus.Callback)} instead.
      */
     @Deprecated
     @RequiresPermission(ACCESS_FINE_LOCATION)
@@ -2537,7 +2533,8 @@ public class LocationManager {
     /**
      * No-op method to keep backward-compatibility.
      *
-     * @deprecated Use {@link #addNmeaListener} instead.
+     * @deprecated Use {@link #addNmeaListener(OnNmeaMessageListener, Handler)} or {@link
+     * #addNmeaListener(Executor, OnNmeaMessageListener)} instead.
      */
     @Deprecated
     @RequiresPermission(ACCESS_FINE_LOCATION)
@@ -2698,6 +2695,13 @@ public class LocationManager {
      * while the {@link #GPS_PROVIDER} is enabled, and while the client app is in the foreground.
      *
      * <p>Not all GNSS chipsets support measurements updates, see {@link #getGnssCapabilities()}.
+     *
+     * <p class="caution">On Android R devices that have not yet upgraded to Android R QPR1, using
+     * this API will cause unavoidable crashes in the client application when GNSS measurements
+     * are received. If a client needs to receive GNSS measurements on Android R devices that have
+     * not been upgraded to QPR1, clients are instead encouraged to use
+     * <a href="https://developer.android.com/reference/androidx/core/location/LocationManagerCompat#registerGnssMeasurementsCallback(android.location.LocationManager,java.util.concurrent.Executor,android.location.GnssMeasurementsEvent.Callback)">LocationManagerCompat.registerGnssMeasurementsCallback()</a>
+     * from the compat libraries instead to avoid this crash.
      *
      * @param executor the executor that the callback runs on
      * @param callback the callback to register
@@ -2942,7 +2946,8 @@ public class LocationManager {
      * @hide
      */
     @SystemApi
-    @RequiresPermission(Manifest.permission.LOCATION_HARDWARE)
+    @RequiresPermission(allOf = {Manifest.permission.LOCATION_HARDWARE,
+            Manifest.permission.INTERACT_ACROSS_USERS})
     public void addProviderRequestChangedListener(
             @NonNull @CallbackExecutor Executor executor,
             @NonNull ChangedListener listener) {

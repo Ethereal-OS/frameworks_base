@@ -18,18 +18,18 @@ package com.android.systemui.clipboardoverlay;
 
 import static android.content.ClipDescription.CLASSIFICATION_COMPLETE;
 
+import static com.android.systemui.Flags.clipboardNoninteractiveOnLockscreen;
 import static com.android.systemui.clipboardoverlay.ClipboardOverlayEvent.CLIPBOARD_OVERLAY_ENTERED;
 import static com.android.systemui.clipboardoverlay.ClipboardOverlayEvent.CLIPBOARD_OVERLAY_UPDATED;
 import static com.android.systemui.clipboardoverlay.ClipboardOverlayEvent.CLIPBOARD_TOAST_SHOWN;
-import static com.android.systemui.flags.Flags.CLIPBOARD_MINIMIZED_LAYOUT;
 
 import static com.google.android.setupcompat.util.WizardManagerHelper.SETTINGS_SECURE_USER_SETUP_COMPLETE;
 
+import android.app.KeyguardManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
-import android.os.SystemProperties;
-import android.os.UserHandle;
+import android.os.Build;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -37,7 +37,6 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.UiEventLogger;
 import com.android.systemui.CoreStartable;
 import com.android.systemui.dagger.SysUISingleton;
-import com.android.systemui.flags.FeatureFlags;
 
 import javax.inject.Inject;
 import javax.inject.Provider;
@@ -60,7 +59,7 @@ public class ClipboardListener implements
     private final Provider<ClipboardOverlayController> mOverlayProvider;
     private final ClipboardToast mClipboardToast;
     private final ClipboardManager mClipboardManager;
-    private final FeatureFlags mFeatureFlags;
+    private final KeyguardManager mKeyguardManager;
     private final UiEventLogger mUiEventLogger;
     private ClipboardOverlay mClipboardOverlay;
 
@@ -69,13 +68,13 @@ public class ClipboardListener implements
             Provider<ClipboardOverlayController> clipboardOverlayControllerProvider,
             ClipboardToast clipboardToast,
             ClipboardManager clipboardManager,
-            FeatureFlags featureFlags,
+            KeyguardManager keyguardManager,
             UiEventLogger uiEventLogger) {
         mContext = context;
         mOverlayProvider = clipboardOverlayControllerProvider;
         mClipboardToast = clipboardToast;
         mClipboardManager = clipboardManager;
-        mFeatureFlags = featureFlags;
+        mKeyguardManager = keyguardManager;
         mUiEventLogger = uiEventLogger;
     }
 
@@ -86,10 +85,6 @@ public class ClipboardListener implements
 
     @Override
     public void onPrimaryClipChanged() {
-        if (Settings.Secure.getIntForUser(mContext.getContentResolver(),
-                Settings.Secure.SHOW_CLIPBOARD_OVERLAY, 1, UserHandle.USER_CURRENT) == 0) {
-            return;
-        }
         if (!mClipboardManager.hasPrimaryClip()) {
             return;
         }
@@ -97,12 +92,14 @@ public class ClipboardListener implements
         String clipSource = mClipboardManager.getPrimaryClipSource();
         ClipData clipData = mClipboardManager.getPrimaryClip();
 
-        if (shouldSuppressOverlay(clipData, clipSource, isEmulator())) {
+        if (shouldSuppressOverlay(clipData, clipSource, Build.IS_EMULATOR)) {
             Log.i(TAG, "Clipboard overlay suppressed.");
             return;
         }
 
-        if (!isUserSetupComplete() // user should not access intents from this state
+        // user should not access intents before setup or while device is locked
+        if ((clipboardNoninteractiveOnLockscreen() && mKeyguardManager.isDeviceLocked())
+                || !isUserSetupComplete()
                 || clipData == null // shouldn't happen, but just in case
                 || clipData.getItemCount() == 0) {
             if (shouldShowToast(clipData)) {
@@ -118,11 +115,7 @@ public class ClipboardListener implements
         } else {
             mUiEventLogger.log(CLIPBOARD_OVERLAY_UPDATED, 0, clipSource);
         }
-        if (mFeatureFlags.isEnabled(CLIPBOARD_MINIMIZED_LAYOUT)) {
-            mClipboardOverlay.setClipData(clipData, clipSource);
-        } else {
-            mClipboardOverlay.setClipDataLegacy(clipData, clipSource);
-        }
+        mClipboardOverlay.setClipData(clipData, clipSource);
         mClipboardOverlay.setOnSessionCompleteListener(() -> {
             // Session is complete, free memory until it's needed again.
             mClipboardOverlay = null;
@@ -155,18 +148,12 @@ public class ClipboardListener implements
         return true;
     }
 
-    private static boolean isEmulator() {
-        return SystemProperties.getBoolean("ro.boot.qemu", false);
-    }
-
     private boolean isUserSetupComplete() {
         return Settings.Secure.getInt(mContext.getContentResolver(),
                 SETTINGS_SECURE_USER_SETUP_COMPLETE, 0) == 1;
     }
 
     interface ClipboardOverlay {
-        void setClipDataLegacy(ClipData clipData, String clipSource);
-
         void setClipData(ClipData clipData, String clipSource);
 
         void setOnSessionCompleteListener(Runnable runnable);

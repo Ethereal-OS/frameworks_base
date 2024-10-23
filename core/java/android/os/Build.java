@@ -17,6 +17,7 @@
 package android.os;
 
 import android.Manifest;
+import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
@@ -25,9 +26,9 @@ import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.app.ActivityThread;
 import android.app.Application;
-import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
+import android.ravenwood.annotation.RavenwoodKeepWholeClass;
 import android.sysprop.DeviceProperties;
 import android.sysprop.SocProperties;
 import android.sysprop.TelephonyProperties;
@@ -36,19 +37,22 @@ import android.util.ArraySet;
 import android.util.Slog;
 import android.view.View;
 
-import com.android.internal.gmscompat.GmsHooks;
-
 import dalvik.system.VMRuntime;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Information about the current build, extracted from system properties.
  */
+@RavenwoodKeepWholeClass
 public class Build {
     private static final String TAG = "Build";
 
@@ -64,8 +68,29 @@ public class Build {
     /** The name of the overall product. */
     public static final String PRODUCT = getString("ro.product.name");
 
+    /**
+     * The product name for attestation. In non-default builds (like the AOSP build) the value of
+     * the 'PRODUCT' system property may be different to the one provisioned to KeyMint,
+     * and Keymint attestation would still attest to the product name which was provisioned.
+     * @hide
+     */
+    @Nullable
+    @TestApi
+    public static final String PRODUCT_FOR_ATTESTATION = getVendorDeviceIdProperty("name");
+
     /** The name of the industrial design. */
     public static final String DEVICE = getString("ro.product.device");
+
+    /**
+     * The device name for attestation. In non-default builds (like the AOSP build) the value of
+     * the 'DEVICE' system property may be different to the one provisioned to KeyMint,
+     * and Keymint attestation would still attest to the device name which was provisioned.
+     * @hide
+     */
+    @Nullable
+    @TestApi
+    public static final String DEVICE_FOR_ATTESTATION =
+            getVendorDeviceIdProperty("device");
 
     /** The name of the underlying board, like "goldfish". */
     public static final String BOARD = getString("ro.product.board");
@@ -89,11 +114,42 @@ public class Build {
     /** The manufacturer of the product/hardware. */
     public static final String MANUFACTURER = getString("ro.product.manufacturer");
 
+    /**
+     * The manufacturer name for attestation. In non-default builds (like the AOSP build) the value
+     * of the 'MANUFACTURER' system property may be different to the one provisioned to KeyMint,
+     * and Keymint attestation would still attest to the manufacturer which was provisioned.
+     * @hide
+     */
+    @Nullable
+    @TestApi
+    public static final String MANUFACTURER_FOR_ATTESTATION =
+            getVendorDeviceIdProperty("manufacturer");
+
     /** The consumer-visible brand with which the product/hardware will be associated, if any. */
     public static final String BRAND = getString("ro.product.brand");
 
+    /**
+     * The product brand for attestation. In non-default builds (like the AOSP build) the value of
+     * the 'BRAND' system property may be different to the one provisioned to KeyMint,
+     * and Keymint attestation would still attest to the product brand which was provisioned.
+     * @hide
+     */
+    @Nullable
+    @TestApi
+    public static final String BRAND_FOR_ATTESTATION = getVendorDeviceIdProperty("brand");
+
     /** The end-user-visible name for the end product. */
     public static final String MODEL = getString("ro.product.model");
+
+    /**
+     * The product model for attestation. In non-default builds (like the AOSP build) the value of
+     * the 'MODEL' system property may be different to the one provisioned to KeyMint,
+     * and Keymint attestation would still attest to the product model which was provisioned.
+     * @hide
+     */
+    @Nullable
+    @TestApi
+    public static final String MODEL_FOR_ATTESTATION = getVendorDeviceIdProperty("model");
 
     /** The manufacturer of the device's primary system-on-chip. */
     @NonNull
@@ -168,9 +224,11 @@ public class Build {
      * Gets the hardware serial number, if available.
      *
      * <p class="note"><b>Note:</b> Root access may allow you to modify device identifiers, such as
-     * the hardware serial number. If you change these identifiers, you can use
+     * the hardware serial number. If you change these identifiers, you can not use
      * <a href="/training/articles/security-key-attestation.html">key attestation</a> to obtain
-     * proof of the device's original identifiers.
+     * proof of the device's original identifiers. KeyMint will reject an ID attestation request
+     * if the identifiers provided by the frameworks do not match the identifiers it was
+     * provisioned with.
      *
      * <p>Starting with API level 29, persistent device identifiers are guarded behind additional
      * restrictions, and apps are recommended to use resettable identifiers (see <a
@@ -204,10 +262,6 @@ public class Build {
     @SuppressAutoDoc // No support for device / profile owner.
     @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
     public static String getSerial() {
-        if (GmsCompat.isEnabled()) {
-            return GmsHooks.getSerial();
-        }
-
         IDeviceIdentifiersPolicyService service = IDeviceIdentifiersPolicyService.Stub
                 .asInterface(ServiceManager.getService(Context.DEVICE_IDENTIFIERS_SERVICE));
         try {
@@ -259,7 +313,7 @@ public class Build {
          * compatibility.
          */
         final String[] abiList;
-        if (VMRuntime.getRuntime().is64Bit()) {
+        if (android.os.Process.is64Bit()) {
             abiList = SUPPORTED_64_BIT_ABIS;
         } else {
             abiList = SUPPORTED_32_BIT_ABIS;
@@ -759,12 +813,9 @@ public class Build {
          * PackageManager.setComponentEnabledSetting} will now throw an
          * IllegalArgumentException if the given component class name does not
          * exist in the application's manifest.
-         * <li> {@link android.nfc.NfcAdapter#setNdefPushMessage
-         * NfcAdapter.setNdefPushMessage},
-         * {@link android.nfc.NfcAdapter#setNdefPushMessageCallback
-         * NfcAdapter.setNdefPushMessageCallback} and
-         * {@link android.nfc.NfcAdapter#setOnNdefPushCompleteCallback
-         * NfcAdapter.setOnNdefPushCompleteCallback} will throw
+         * <li> {@code NfcAdapter.setNdefPushMessage},
+         * {@code NfcAdapter.setNdefPushMessageCallback} and
+         * {@code NfcAdapter.setOnNdefPushCompleteCallback} will throw
          * IllegalStateException if called after the Activity has been destroyed.
          * <li> Accessibility services must require the new
          * {@link android.Manifest.permission#BIND_ACCESSIBILITY_SERVICE} permission or
@@ -1174,10 +1225,22 @@ public class Build {
          * Tiramisu.
          */
         public static final int TIRAMISU = 33;
+
+        /**
+         * Upside Down Cake.
+         */
+        public static final int UPSIDE_DOWN_CAKE = 34;
+
+        /**
+         * Vanilla Ice Cream.
+         */
+        @FlaggedApi(Flags.FLAG_ANDROID_OS_BUILD_VANILLA_ICE_CREAM)
+        public static final int VANILLA_ICE_CREAM = CUR_DEVELOPMENT;
     }
 
     /** The type of build, like "user" or "eng". */
     public static final String TYPE = getString("ro.build.type");
+    private static String TYPE_FOR_APPS = parseBuildTypeFromFingerprint();
 
     /** Comma-separated tags describing the build, like "unsigned,debug". */
     public static final String TAGS = getString("ro.build.tags");
@@ -1202,6 +1265,42 @@ public class Build {
                     getString("ro.build.tags");
         }
         return finger;
+    }
+
+    // Some apps like to compare the build type embedded in fingerprint
+    // to the actual build type. As the fingerprint in our case is almost
+    // always hardcoded to the stock ROM fingerprint, provide that instead
+    // of the actual one if possible.
+    private static String parseBuildTypeFromFingerprint() {
+        final String fingerprint = SystemProperties.get("ro.build.fingerprint");
+        if (TextUtils.isEmpty(fingerprint)) {
+            return null;
+        }
+        Pattern fingerprintPattern =
+                Pattern.compile("(.*)\\/(.*)\\/(.*):(.*)\\/(.*)\\/(.*):(.*)\\/(.*)");
+        Matcher matcher = fingerprintPattern.matcher(fingerprint);
+        return matcher.matches() ? matcher.group(7) : null;
+    }
+
+    /** @hide */
+    public static void adjustBuildTypeIfNeeded() {
+        if (Process.isApplicationUid(Process.myUid()) && !TextUtils.isEmpty(TYPE_FOR_APPS)) {
+            try {
+                // This is sick. TYPE is final (which can't be changed because it's an API
+                // guarantee), but we have to reassign it. Resort to reflection to unset the
+                // final modifier, change the value and restore the final modifier afterwards.
+                Field typeField = Build.class.getField("TYPE");
+                Field accessFlagsField = Field.class.getDeclaredField("accessFlags");
+                accessFlagsField.setAccessible(true);
+                int currentFlags = accessFlagsField.getInt(typeField);
+                accessFlagsField.setInt(typeField, currentFlags & ~Modifier.FINAL);
+                typeField.set(null, TYPE_FOR_APPS);
+                accessFlagsField.setInt(typeField, currentFlags);
+                accessFlagsField.setAccessible(false);
+            } catch (Exception e) {
+                // shouldn't happen, but we don't want to crash the app even if it does happen
+            }
+        }
     }
 
     /**
@@ -1259,9 +1358,7 @@ public class Build {
         /*if (IS_ENG) return true;
 
         if (IS_TREBLE_ENABLED) {
-            // If we can run this code, the device should already pass AVB.
-            // So, we don't need to check AVB here.
-            int result = VintfObject.verifyWithoutAvb();
+            int result = VintfObject.verifyBuildAtBoot();
 
             if (result != 0) {
                 Slog.e(TAG, "Vendor interface is incompatible, error="
@@ -1497,6 +1594,17 @@ public class Build {
     @UnsupportedAppUsage
     private static String getString(String property) {
         return SystemProperties.get(property, UNKNOWN);
+    }
+    /**
+     * Return attestation specific proerties.
+     * @param property model, name, brand, device or manufacturer.
+     * @return property value or UNKNOWN
+     */
+    private static String getVendorDeviceIdProperty(String property) {
+        String attestProp = getString(
+                TextUtils.formatSimple("ro.product.%s_for_attestation", property));
+        return attestProp.equals(UNKNOWN)
+                ? getString(TextUtils.formatSimple("ro.product.vendor.%s", property)) : attestProp;
     }
 
     private static String[] getStringList(String property, String separator) {

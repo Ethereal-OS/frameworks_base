@@ -33,6 +33,7 @@
 #include <errno.h>
 
 using android::InputEvent;
+using android::InputEventType;
 using android::InputQueue;
 using android::KeyEvent;
 using android::Looper;
@@ -41,7 +42,8 @@ using android::sp;
 using android::Vector;
 
 int32_t AInputEvent_getType(const AInputEvent* event) {
-    return static_cast<const InputEvent*>(event)->getType();
+    const InputEventType eventType = static_cast<const InputEvent*>(event)->getType();
+    return static_cast<int32_t>(eventType);
 }
 
 int32_t AInputEvent_getDeviceId(const AInputEvent* event) {
@@ -85,11 +87,8 @@ int64_t AKeyEvent_getDownTime(const AInputEvent* key_event) {
 
 const AInputEvent* AKeyEvent_fromJava(JNIEnv* env, jobject keyEvent) {
     std::unique_ptr<KeyEvent> event = std::make_unique<KeyEvent>();
-    android::status_t ret = android::android_view_KeyEvent_toNative(env, keyEvent, event.get());
-    if (ret == android::OK) {
-        return event.release();
-    }
-    return nullptr;
+    *event = android::android_view_KeyEvent_obtainAsCopy(env, keyEvent);
+    return event.release();
 }
 
 int64_t AKeyEvent_getEventTime(const AInputEvent* key_event) {
@@ -149,7 +148,8 @@ int32_t AMotionEvent_getPointerId(const AInputEvent* motion_event, size_t pointe
 }
 
 int32_t AMotionEvent_getToolType(const AInputEvent* motion_event, size_t pointer_index) {
-    return static_cast<const MotionEvent*>(motion_event)->getToolType(pointer_index);
+    const MotionEvent& motion = static_cast<const MotionEvent&>(*motion_event);
+    return static_cast<int32_t>(motion.getToolType(pointer_index));
 }
 
 float AMotionEvent_getRawX(const AInputEvent* motion_event, size_t pointer_index) {
@@ -295,6 +295,12 @@ int32_t AMotionEvent_getClassification(const AInputEvent* motion_event) {
             return AMOTION_EVENT_CLASSIFICATION_AMBIGUOUS_GESTURE;
         case android::MotionClassification::DEEP_PRESS:
             return AMOTION_EVENT_CLASSIFICATION_DEEP_PRESS;
+        case android::MotionClassification::TWO_FINGER_SWIPE:
+            return AMOTION_EVENT_CLASSIFICATION_TWO_FINGER_SWIPE;
+        case android::MotionClassification::MULTI_FINGER_SWIPE:
+            return AMOTION_EVENT_CLASSIFICATION_MULTI_FINGER_SWIPE;
+        case android::MotionClassification::PINCH:
+            return AMOTION_EVENT_CLASSIFICATION_PINCH;
     }
 }
 
@@ -306,6 +312,25 @@ const AInputEvent* AMotionEvent_fromJava(JNIEnv* env, jobject motionEvent) {
     MotionEvent* event = new MotionEvent();
     event->copyFrom(eventSrc, true);
     return event;
+}
+
+jobject AInputEvent_toJava(JNIEnv* env, const AInputEvent* aInputEvent) {
+    LOG_ALWAYS_FATAL_IF(aInputEvent == nullptr, "Expected aInputEvent to be non-null");
+    const int32_t eventType = AInputEvent_getType(aInputEvent);
+    switch (eventType) {
+        case AINPUT_EVENT_TYPE_MOTION:
+            return android::android_view_MotionEvent_obtainAsCopy(env,
+                                                                  static_cast<const MotionEvent&>(
+                                                                          *aInputEvent))
+                    .release();
+        case AINPUT_EVENT_TYPE_KEY:
+            return android::android_view_KeyEvent_obtainAsCopy(env,
+                                                               static_cast<const KeyEvent&>(
+                                                                       *aInputEvent))
+                    .release();
+        default:
+            LOG_ALWAYS_FATAL("Unexpected event type %d in AInputEvent_toJava.", eventType);
+    }
 }
 
 void AInputQueue_attachLooper(AInputQueue* queue, ALooper* looper,

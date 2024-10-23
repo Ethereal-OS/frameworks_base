@@ -17,89 +17,113 @@
 package com.android.systemui.keyguard.domain.interactor
 
 import android.animation.ValueAnimator
-import com.android.systemui.animation.Interpolators
+import com.android.app.animation.Interpolators
+import com.android.systemui.communal.domain.interactor.CommunalInteractor
 import com.android.systemui.dagger.SysUISingleton
-import com.android.systemui.dagger.qualifiers.Application
+import com.android.systemui.dagger.qualifiers.Background
+import com.android.systemui.dagger.qualifiers.Main
 import com.android.systemui.keyguard.data.repository.KeyguardTransitionRepository
 import com.android.systemui.keyguard.shared.model.BiometricUnlockModel.Companion.isWakeAndUnlock
 import com.android.systemui.keyguard.shared.model.KeyguardState
-import com.android.systemui.keyguard.shared.model.TransitionInfo
-import com.android.systemui.keyguard.shared.model.WakefulnessModel.Companion.isWakingOrStartingToWake
-import com.android.systemui.util.kotlin.sample
+import com.android.systemui.power.domain.interactor.PowerInteractor
+import com.android.systemui.util.kotlin.Utils.Companion.sample
 import javax.inject.Inject
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
 @SysUISingleton
 class FromDozingTransitionInteractor
 @Inject
 constructor(
-    @Application private val scope: CoroutineScope,
+    override val transitionRepository: KeyguardTransitionRepository,
+    transitionInteractor: KeyguardTransitionInteractor,
+    @Background private val scope: CoroutineScope,
+    @Background bgDispatcher: CoroutineDispatcher,
+    @Main mainDispatcher: CoroutineDispatcher,
     private val keyguardInteractor: KeyguardInteractor,
-    private val keyguardTransitionRepository: KeyguardTransitionRepository,
-    private val keyguardTransitionInteractor: KeyguardTransitionInteractor,
-) : TransitionInteractor(FromDozingTransitionInteractor::class.simpleName!!) {
+    private val powerInteractor: PowerInteractor,
+    private val communalInteractor: CommunalInteractor,
+) :
+    TransitionInteractor(
+        fromState = KeyguardState.DOZING,
+        transitionInteractor = transitionInteractor,
+        mainDispatcher = mainDispatcher,
+        bgDispatcher = bgDispatcher,
+    ) {
 
     override fun start() {
-        listenForDozingToLockscreen()
-        listenForDozingToGone()
+        listenForDozingToAny()
+        listenForTransitionToCamera(scope, keyguardInteractor)
     }
 
-    private fun listenForDozingToLockscreen() {
+    private val canDismissLockScreen: Flow<Boolean> =
+        combine(
+            keyguardInteractor.isKeyguardShowing,
+            keyguardInteractor.isKeyguardDismissible,
+        ) { isKeyguardShowing, isKeyguardDismissible ->
+            isKeyguardDismissible && !isKeyguardShowing
+        }
+
+    private fun listenForDozingToAny() {
         scope.launch {
-            keyguardInteractor.wakefulnessModel
-                .sample(keyguardTransitionInteractor.startedKeyguardTransitionStep, ::Pair)
-                .collect { (wakefulnessModel, lastStartedTransition) ->
-                    if (
-                        isWakingOrStartingToWake(wakefulnessModel) &&
-                            lastStartedTransition.to == KeyguardState.DOZING
-                    ) {
-                        keyguardTransitionRepository.startTransition(
-                            TransitionInfo(
-                                name,
-                                KeyguardState.DOZING,
-                                KeyguardState.LOCKSCREEN,
-                                getAnimator(),
-                            )
-                        )
+            powerInteractor.isAwake
+                .debounce(50L)
+                .sample(
+                    keyguardInteractor.biometricUnlockState,
+                    startedKeyguardTransitionStep,
+                    keyguardInteractor.isKeyguardOccluded,
+                    communalInteractor.isIdleOnCommunal,
+                    canDismissLockScreen,
+                    keyguardInteractor.primaryBouncerShowing,
+                )
+                .collect {
+                    (
+                        isAwake,
+                        biometricUnlockState,
+                        lastStartedTransition,
+                        occluded,
+                        isIdleOnCommunal,
+                        canDismissLockScreen,
+                        primaryBouncerShowing) ->
+                    if (!(isAwake && lastStartedTransition.to == KeyguardState.DOZING)) {
+                        return@collect
                     }
+                    startTransitionTo(
+                        if (isWakeAndUnlock(biometricUnlockState)) {
+                            KeyguardState.GONE
+                        } else if (canDismissLockScreen) {
+                            KeyguardState.GONE
+                        } else if (primaryBouncerShowing) {
+                            KeyguardState.PRIMARY_BOUNCER
+                        } else if (occluded) {
+                            KeyguardState.OCCLUDED
+                        } else if (isIdleOnCommunal) {
+                            KeyguardState.GLANCEABLE_HUB
+                        } else {
+                            KeyguardState.LOCKSCREEN
+                        }
+                    )
                 }
         }
     }
 
-    private fun listenForDozingToGone() {
-        scope.launch {
-            keyguardInteractor.biometricUnlockState
-                .sample(keyguardTransitionInteractor.startedKeyguardTransitionStep, ::Pair)
-                .collect { (biometricUnlockState, lastStartedTransition) ->
-                    if (
-                        lastStartedTransition.to == KeyguardState.DOZING &&
-                            isWakeAndUnlock(biometricUnlockState)
-                    ) {
-                        keyguardTransitionRepository.startTransition(
-                            TransitionInfo(
-                                name,
-                                KeyguardState.DOZING,
-                                KeyguardState.GONE,
-                                getAnimator(),
-                            )
-                        )
-                    }
-                }
-        }
-    }
-
-    private fun getAnimator(duration: Duration = DEFAULT_DURATION): ValueAnimator {
+    override fun getDefaultAnimatorForTransitionsToState(toState: KeyguardState): ValueAnimator {
         return ValueAnimator().apply {
-            setInterpolator(Interpolators.LINEAR)
-            setDuration(duration.inWholeMilliseconds)
+            interpolator = Interpolators.LINEAR
+            duration = DEFAULT_DURATION.inWholeMilliseconds
         }
     }
 
     companion object {
+        const val TAG = "FromDozingTransitionInteractor"
         private val DEFAULT_DURATION = 500.milliseconds
+        val TO_LOCKSCREEN_DURATION = DEFAULT_DURATION
+        val TO_GONE_DURATION = DEFAULT_DURATION
+        val TO_PRIMARY_BOUNCER_DURATION = DEFAULT_DURATION
     }
 }

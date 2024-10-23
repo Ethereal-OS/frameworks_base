@@ -49,8 +49,8 @@ import android.widget.TextView
 import androidx.annotation.ColorInt
 import androidx.annotation.VisibleForTesting
 import com.android.internal.graphics.ColorUtils
-import com.android.systemui.R
-import com.android.systemui.animation.Interpolators
+import com.android.systemui.res.R
+import com.android.app.animation.Interpolators
 import com.android.systemui.controls.ControlsMetricsLogger
 import com.android.systemui.controls.controller.ControlsController
 import com.android.systemui.util.concurrency.DelayableExecutor
@@ -86,9 +86,8 @@ class ControlViewHolder(
         private val ATTR_DISABLED = intArrayOf(-android.R.attr.state_enabled)
         const val MIN_LEVEL = 0
         const val MAX_LEVEL = 10000
-
     }
-    
+
     private val canUseIconPredicate = CanUseIconPredicate(currentUserId)
     private val toggleBackgroundIntensity: Float = layout.context.resources
             .getFraction(R.fraction.controls_toggle_bg_intensity, 1, 1)
@@ -128,7 +127,7 @@ class ControlViewHolder(
         // needed for marquee to start
         status.setSelected(true)
     }
-    
+
     fun findBehaviorClass(
             status: Int,
             template: ControlTemplate,
@@ -149,7 +148,6 @@ class ControlViewHolder(
             else -> Supplier { DefaultBehavior() }
         }
     }
-    
 
     fun bindData(cws: ControlWithState, isLocked: Boolean) {
         // If an interaction is in progress, the update may visually interfere with the action the
@@ -386,7 +384,7 @@ class ControlViewHolder(
                 )
             }
             addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator?) {
+                override fun onAnimationEnd(animation: Animator) {
                     stateAnimator = null
                 }
             })
@@ -440,7 +438,7 @@ class ControlViewHolder(
                 duration = 200L
                 interpolator = Interpolators.LINEAR
                 addListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: Animator?) {
+                    override fun onAnimationEnd(animation: Animator) {
                         statusRowUpdater.invoke()
                     }
                 })
@@ -452,7 +450,7 @@ class ControlViewHolder(
             statusAnimator = AnimatorSet().apply {
                 playSequentially(fadeOut, fadeIn)
                 addListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: Animator?) {
+                    override fun onAnimationEnd(animation: Animator) {
                         status.alpha = STATUS_ALPHA_ENABLED
                         statusAnimator = null
                     }

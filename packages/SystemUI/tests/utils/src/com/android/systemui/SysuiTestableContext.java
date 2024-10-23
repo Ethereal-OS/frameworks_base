@@ -14,10 +14,12 @@
 
 package com.android.systemui;
 
+import android.annotation.NonNull;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.hardware.display.DisplayManager;
 import android.os.Handler;
 import android.os.UserHandle;
 import android.testing.LeakCheck;
@@ -27,13 +29,17 @@ import android.util.Log;
 import android.view.Display;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.systemui.res.R;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 
 public class SysuiTestableContext extends TestableContext {
 
     @GuardedBy("mRegisteredReceivers")
     private final Set<BroadcastReceiver> mRegisteredReceivers = new ArraySet<>();
+    private final Map<UserHandle, Context> mContextForUser = new HashMap<>();
 
     public SysuiTestableContext(Context base) {
         super(base);
@@ -54,6 +60,11 @@ public class SysuiTestableContext extends TestableContext {
         SysuiTestableContext context =
                 new SysuiTestableContext(getBaseContext().createDisplayContext(display));
         return context;
+    }
+
+    public SysuiTestableContext createDefaultDisplayContext() {
+        Display display = getBaseContext().getSystemService(DisplayManager.class).getDisplays()[0];
+        return (SysuiTestableContext) createDisplayContext(display);
     }
 
     public void cleanUpReceivers(String testName) {
@@ -145,5 +156,23 @@ public class SysuiTestableContext extends TestableContext {
             }
         }
         super.unregisterReceiver(receiver);
+    }
+
+    /**
+     * Sets a Context object that will be returned as the result of {@link #createContextAsUser}
+     * for a specific {@code user}.
+     */
+    public void prepareCreateContextAsUser(UserHandle user, Context context) {
+        mContextForUser.put(user, context);
+    }
+
+    @Override
+    @NonNull
+    public Context createContextAsUser(UserHandle user, int flags) {
+        Context userContext = mContextForUser.get(user);
+        if (userContext != null) {
+            return userContext;
+        }
+        return super.createContextAsUser(user, flags);
     }
 }

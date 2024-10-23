@@ -27,19 +27,23 @@ import android.os.ResultReceiver;
 import android.util.Slog;
 import android.view.InputChannel;
 import android.view.MotionEvent;
+import android.view.inputmethod.CursorAnchorInfo;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.ImeTracker;
 import android.view.inputmethod.InputBinding;
+import android.view.inputmethod.InputMethod;
 import android.view.inputmethod.InputMethodSubtype;
 import android.window.ImeOnBackInvokedDispatcher;
 
+import com.android.internal.inputmethod.IConnectionlessHandwritingCallback;
+import com.android.internal.inputmethod.IInlineSuggestionsRequestCallback;
+import com.android.internal.inputmethod.IInputMethod;
 import com.android.internal.inputmethod.IInputMethodPrivilegedOperations;
+import com.android.internal.inputmethod.IInputMethodSession;
+import com.android.internal.inputmethod.IInputMethodSessionCallback;
+import com.android.internal.inputmethod.IRemoteInputConnection;
+import com.android.internal.inputmethod.InlineSuggestionsRequestInfo;
 import com.android.internal.inputmethod.InputMethodNavButtonFlags;
-import com.android.internal.view.IInlineSuggestionsRequestCallback;
-import com.android.internal.view.IInputContext;
-import com.android.internal.view.IInputMethod;
-import com.android.internal.view.IInputMethodSession;
-import com.android.internal.view.IInputSessionCallback;
-import com.android.internal.view.InlineSuggestionsRequestInfo;
 
 import java.util.List;
 
@@ -108,12 +112,14 @@ final class IInputMethodInvoker {
     }
 
     @AnyThread
-    void initializeInternal(IBinder token, IInputMethodPrivilegedOperations privOps,
-            int configChanges, boolean stylusHwSupported,
-            @InputMethodNavButtonFlags int navButtonFlags) {
+    void initializeInternal(IBinder token, IInputMethodPrivilegedOperations privilegedOperations,
+            @InputMethodNavButtonFlags int navigationBarFlags) {
+        final IInputMethod.InitParams params = new IInputMethod.InitParams();
+        params.token = token;
+        params.privilegedOperations = privilegedOperations;
+        params.navigationBarFlags = navigationBarFlags;
         try {
-            mTarget.initializeInternal(token, privOps, configChanges, stylusHwSupported,
-                    navButtonFlags);
+            mTarget.initializeInternal(params);
         } catch (RemoteException e) {
             logRemoteException(e);
         }
@@ -148,12 +154,19 @@ final class IInputMethodInvoker {
     }
 
     @AnyThread
-    void startInput(IBinder startInputToken, IInputContext inputContext, EditorInfo attribute,
-            boolean restarting, @InputMethodNavButtonFlags int navButtonFlags,
+    void startInput(IBinder startInputToken, IRemoteInputConnection remoteInputConnection,
+            EditorInfo editorInfo, boolean restarting,
+            @InputMethodNavButtonFlags int navButtonFlags,
             @NonNull ImeOnBackInvokedDispatcher imeDispatcher) {
+        final IInputMethod.StartInputParams params = new IInputMethod.StartInputParams();
+        params.startInputToken = startInputToken;
+        params.remoteInputConnection = remoteInputConnection;
+        params.editorInfo = editorInfo;
+        params.restarting = restarting;
+        params.navigationBarFlags = navButtonFlags;
+        params.imeDispatcher = imeDispatcher;
         try {
-            mTarget.startInput(startInputToken, inputContext, attribute, restarting,
-                    navButtonFlags, imeDispatcher);
+            mTarget.startInput(params);
         } catch (RemoteException e) {
             logRemoteException(e);
         }
@@ -169,7 +182,7 @@ final class IInputMethodInvoker {
     }
 
     @AnyThread
-    void createSession(InputChannel channel, IInputSessionCallback callback) {
+    void createSession(InputChannel channel, IInputMethodSessionCallback callback) {
         try {
             mTarget.createSession(channel, callback);
         } catch (RemoteException e) {
@@ -188,9 +201,10 @@ final class IInputMethodInvoker {
 
     // TODO(b/192412909): Convert this back to void method
     @AnyThread
-    boolean showSoftInput(IBinder showInputToken, int flags, ResultReceiver resultReceiver) {
+    boolean showSoftInput(IBinder showInputToken, @NonNull ImeTracker.Token statsToken,
+            @InputMethod.ShowFlags int flags, ResultReceiver resultReceiver) {
         try {
-            mTarget.showSoftInput(showInputToken, flags, resultReceiver);
+            mTarget.showSoftInput(showInputToken, statsToken, flags, resultReceiver);
         } catch (RemoteException e) {
             logRemoteException(e);
             return false;
@@ -200,14 +214,24 @@ final class IInputMethodInvoker {
 
     // TODO(b/192412909): Convert this back to void method
     @AnyThread
-    boolean hideSoftInput(IBinder hideInputToken, int flags, ResultReceiver resultReceiver) {
+    boolean hideSoftInput(IBinder hideInputToken, @NonNull ImeTracker.Token statsToken,
+            int flags, ResultReceiver resultReceiver) {
         try {
-            mTarget.hideSoftInput(hideInputToken, flags, resultReceiver);
+            mTarget.hideSoftInput(hideInputToken, statsToken, flags, resultReceiver);
         } catch (RemoteException e) {
             logRemoteException(e);
             return false;
         }
         return true;
+    }
+
+    @AnyThread
+    void updateEditorToolType(@MotionEvent.ToolType int toolType) {
+        try {
+            mTarget.updateEditorToolType(toolType);
+        } catch (RemoteException e) {
+            logRemoteException(e);
+        }
     }
 
     @AnyThread
@@ -220,9 +244,12 @@ final class IInputMethodInvoker {
     }
 
     @AnyThread
-    void canStartStylusHandwriting(int requestId) {
+    void canStartStylusHandwriting(int requestId,
+            IConnectionlessHandwritingCallback connectionlessCallback,
+            CursorAnchorInfo cursorAnchorInfo, boolean isConnectionlessForDelegation) {
         try {
-            mTarget.canStartStylusHandwriting(requestId);
+            mTarget.canStartStylusHandwriting(requestId, connectionlessCallback, cursorAnchorInfo,
+                    isConnectionlessForDelegation);
         } catch (RemoteException e) {
             logRemoteException(e);
         }
@@ -240,6 +267,24 @@ final class IInputMethodInvoker {
     }
 
     @AnyThread
+    void commitHandwritingDelegationTextIfAvailable() {
+        try {
+            mTarget.commitHandwritingDelegationTextIfAvailable();
+        } catch (RemoteException e) {
+            logRemoteException(e);
+        }
+    }
+
+    @AnyThread
+    void discardHandwritingDelegationText() {
+        try {
+            mTarget.discardHandwritingDelegationText();
+        } catch (RemoteException e) {
+            logRemoteException(e);
+        }
+    }
+
+    @AnyThread
     void initInkWindow() {
         try {
             mTarget.initInkWindow();
@@ -252,6 +297,24 @@ final class IInputMethodInvoker {
     void finishStylusHandwriting() {
         try {
             mTarget.finishStylusHandwriting();
+        } catch (RemoteException e) {
+            logRemoteException(e);
+        }
+    }
+
+    @AnyThread
+    void removeStylusHandwritingWindow() {
+        try {
+            mTarget.removeStylusHandwritingWindow();
+        } catch (RemoteException e) {
+            logRemoteException(e);
+        }
+    }
+
+    @AnyThread
+    void setStylusWindowIdleTimeoutForTest(long timeout) {
+        try {
+            mTarget.setStylusWindowIdleTimeoutForTest(timeout);
         } catch (RemoteException e) {
             logRemoteException(e);
         }

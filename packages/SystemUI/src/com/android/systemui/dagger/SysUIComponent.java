@@ -16,7 +16,6 @@
 
 package com.android.systemui.dagger;
 
-import com.android.keyguard.clock.ClockOptionsProvider;
 import com.android.systemui.BootCompleteCacheImpl;
 import com.android.systemui.CoreStartable;
 import com.android.systemui.Dependency;
@@ -25,43 +24,37 @@ import com.android.systemui.SystemUIAppComponentFactoryBase;
 import com.android.systemui.dagger.qualifiers.PerUser;
 import com.android.systemui.dump.DumpManager;
 import com.android.systemui.keyguard.KeyguardSliceProvider;
-import com.android.systemui.media.muteawait.MediaMuteAwaitConnectionCli;
-import com.android.systemui.media.nearby.NearbyMediaDevicesManager;
 import com.android.systemui.people.PeopleProvider;
 import com.android.systemui.statusbar.NotificationInsetsModule;
 import com.android.systemui.statusbar.QsFrameTranslateModule;
 import com.android.systemui.statusbar.policy.ConfigurationController;
-import com.android.systemui.unfold.FoldStateLogger;
-import com.android.systemui.unfold.FoldStateLoggingProvider;
-import com.android.systemui.unfold.SysUIUnfoldComponent;
-import com.android.systemui.unfold.UnfoldLatencyTracker;
-import com.android.systemui.unfold.UnfoldTransitionProgressProvider;
-import com.android.systemui.unfold.progress.UnfoldTransitionProgressForwarder;
-import com.android.systemui.unfold.util.NaturalRotationUnfoldProgressProvider;
-import com.android.wm.shell.TaskViewFactory;
 import com.android.wm.shell.back.BackAnimation;
 import com.android.wm.shell.bubbles.Bubbles;
 import com.android.wm.shell.desktopmode.DesktopMode;
 import com.android.wm.shell.displayareahelper.DisplayAreaHelper;
+import com.android.wm.shell.keyguard.KeyguardTransitions;
 import com.android.wm.shell.onehanded.OneHanded;
 import com.android.wm.shell.pip.Pip;
 import com.android.wm.shell.recents.RecentTasks;
 import com.android.wm.shell.splitscreen.SplitScreen;
 import com.android.wm.shell.startingsurface.StartingSurface;
 import com.android.wm.shell.sysui.ShellInterface;
+import com.android.wm.shell.taskview.TaskViewFactory;
 import com.android.wm.shell.transition.ShellTransitions;
+
+import com.google.android.systemui.smartspace.KeyguardSmartspaceController;
+
+import dagger.BindsInstance;
+import dagger.Subcomponent;
 
 import java.util.Map;
 import java.util.Optional;
 
 import javax.inject.Provider;
 
-import dagger.BindsInstance;
-import dagger.Subcomponent;
-
 /**
  * An example Dagger Subcomponent for Core SysUI.
- *
+ * <p>
  * See {@link ReferenceSysUIComponent} for the one actually used by AOSP.
  */
 @SysUISingleton
@@ -104,6 +97,9 @@ public interface SysUIComponent {
         Builder setTransitions(ShellTransitions t);
 
         @BindsInstance
+        Builder setKeyguardTransitions(KeyguardTransitions k);
+
+        @BindsInstance
         Builder setStartingSurface(Optional<StartingSurface> s);
 
         @BindsInstance
@@ -119,30 +115,6 @@ public interface SysUIComponent {
         Builder setDesktopMode(Optional<DesktopMode> d);
 
         SysUIComponent build();
-    }
-
-    /**
-     * Initializes all the SysUI components.
-     */
-    default void init() {
-        // Initialize components that have no direct tie to the dagger dependency graph,
-        // but are critical to this component's operation
-        getSysUIUnfoldComponent().ifPresent(c -> {
-            c.getUnfoldLightRevealOverlayAnimation().init();
-            c.getUnfoldTransitionWallpaperController().init();
-            c.getUnfoldHapticsPlayer();
-        });
-        getNaturalRotationUnfoldProgressProvider().ifPresent(o -> o.init());
-        // No init method needed, just needs to be gotten so that it's created.
-        getMediaMuteAwaitConnectionCli();
-        getNearbyMediaDevicesManager();
-        getUnfoldLatencyTracker().init();
-        getFoldStateLoggingProvider().ifPresent(FoldStateLoggingProvider::init);
-        getFoldStateLogger().ifPresent(FoldStateLogger::init);
-        getUnfoldTransitionProgressProvider().ifPresent((progressProvider) ->
-                getUnfoldTransitionProgressForwarder().ifPresent((forwarder) ->
-                        progressProvider.addCallback(forwarder)
-                ));
     }
 
     /**
@@ -164,36 +136,6 @@ public interface SysUIComponent {
     ContextComponentHelper getContextComponentHelper();
 
     /**
-     * Creates a UnfoldLatencyTracker.
-     */
-    @SysUISingleton
-    UnfoldLatencyTracker getUnfoldLatencyTracker();
-
-    /**
-     * Creates a UnfoldTransitionProgressProvider.
-     */
-    @SysUISingleton
-    Optional<UnfoldTransitionProgressProvider> getUnfoldTransitionProgressProvider();
-
-    /**
-     * Creates a UnfoldTransitionProgressForwarder.
-     */
-    @SysUISingleton
-    Optional<UnfoldTransitionProgressForwarder> getUnfoldTransitionProgressForwarder();
-
-    /**
-     * Creates a FoldStateLoggingProvider.
-     */
-    @SysUISingleton
-    Optional<FoldStateLoggingProvider> getFoldStateLoggingProvider();
-
-    /**
-     * Creates a FoldStateLogger.
-     */
-    @SysUISingleton
-    Optional<FoldStateLogger> getFoldStateLogger();
-
-    /**
      * Main dependency providing module.
      */
     @SysUISingleton
@@ -208,22 +150,6 @@ public interface SysUIComponent {
      */
     @SysUISingleton
     InitController getInitController();
-
-    /**
-     * For devices with a hinge: access objects within this component
-     */
-    Optional<SysUIUnfoldComponent> getSysUIUnfoldComponent();
-
-    /**
-     * For devices with a hinge: the rotation animation
-     */
-    Optional<NaturalRotationUnfoldProgressProvider> getNaturalRotationUnfoldProgressProvider();
-
-    /** */
-    Optional<MediaMuteAwaitConnectionCli> getMediaMuteAwaitConnectionCli();
-
-    /** */
-    Optional<NearbyMediaDevicesManager> getNearbyMediaDevicesManager();
 
     /**
      * Returns {@link CoreStartable}s that should be started with the application.
@@ -248,10 +174,11 @@ public interface SysUIComponent {
     /**
      * Member injection into the supplied argument.
      */
-    void inject(ClockOptionsProvider clockOptionsProvider);
+    void inject(PeopleProvider peopleProvider);
 
     /**
-     * Member injection into the supplied argument.
+     * Creates a KeyguardSmartspaceController.
      */
-    void inject(PeopleProvider peopleProvider);
+    @SysUISingleton
+    KeyguardSmartspaceController createKeyguardSmartspaceController();
 }

@@ -23,6 +23,7 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
 import android.os.Environment;
 import android.os.SystemClock;
@@ -66,6 +67,8 @@ import java.util.concurrent.TimeUnit;
  *
  * {@hide}
  */
+@android.ravenwood.annotation.RavenwoodKeepPartialClass
+@android.ravenwood.annotation.RavenwoodKeepStaticInitializer
 public final class SystemServiceManager implements Dumpable {
     private static final String TAG = SystemServiceManager.class.getSimpleName();
     private static final boolean DEBUG = false;
@@ -74,16 +77,14 @@ public final class SystemServiceManager implements Dumpable {
     // Constants used on onUser(...)
     // NOTE: do not change their values, as they're used on Trace calls and changes might break
     // performance tests that rely on them.
-    private static final String USER_STARTING = "Start"; // Logged as onStartUser
-    private static final String USER_UNLOCKING = "Unlocking"; // Logged as onUnlockingUser
-    private static final String USER_UNLOCKED = "Unlocked"; // Logged as onUnlockedUser
-    private static final String USER_SWITCHING = "Switch"; // Logged as onSwitchUser
-    private static final String USER_STOPPING = "Stop"; // Logged as onStopUser
-    private static final String USER_STOPPED = "Cleanup"; // Logged as onCleanupUser
-    private static final String USER_COMPLETED_EVENT = "CompletedEvent"; // onCompletedEventUser
+    private static final String USER_STARTING = "Start"; // Logged as onUserStarting()
+    private static final String USER_UNLOCKING = "Unlocking"; // Logged as onUserUnlocking()
+    private static final String USER_UNLOCKED = "Unlocked"; // Logged as onUserUnlocked()
+    private static final String USER_SWITCHING = "Switch"; // Logged as onUserSwitching()
+    private static final String USER_STOPPING = "Stop"; // Logged as onUserStopping()
+    private static final String USER_STOPPED = "Cleanup"; // Logged as onUserStopped()
+    private static final String USER_COMPLETED_EVENT = "CompletedEvent"; // onUserCompletedEvent()
 
-    // Whether to use multiple threads to run user lifecycle phases in parallel.
-    private static boolean sUseLifecycleThreadPool = true;
     // The default number of threads to use if lifecycle thread pool is enabled.
     private static final int DEFAULT_MAX_USER_POOL_THREADS = 3;
     // The number of threads to use if lifecycle thread pool is enabled, dependent on the number of
@@ -122,15 +123,13 @@ public final class SystemServiceManager implements Dumpable {
      * {@link #onUserSwitching(int, int)} as the previous user might have been removed already.
      */
     @GuardedBy("mTargetUsers")
-    private @Nullable TargetUser mCurrentUser;
+    @Nullable private TargetUser mCurrentUser;
 
-    SystemServiceManager(Context context) {
+    @android.ravenwood.annotation.RavenwoodKeep
+    public SystemServiceManager(Context context) {
         mContext = context;
         mServices = new ArrayList<>();
         mServiceClassnames = new ArraySet<>();
-        // Disable using the thread pool for low ram devices
-        sUseLifecycleThreadPool = sUseLifecycleThreadPool
-                && !ActivityManager.isLowRamDeviceStatic();
         mNumUserPoolThreads = Math.min(Runtime.getRuntime().availableProcessors(),
                 DEFAULT_MAX_USER_POOL_THREADS);
     }
@@ -140,6 +139,7 @@ public final class SystemServiceManager implements Dumpable {
      *
      * @return The service instance.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public SystemService startService(String className) {
         final Class<SystemService> serviceClass = loadClassFromLoader(className,
                 this.getClass().getClassLoader());
@@ -162,16 +162,17 @@ public final class SystemServiceManager implements Dumpable {
     /**
      * Returns true if the jar is in a test APEX.
      */
-    private static boolean isJarInTestApex(String pathStr) {
+    private boolean isJarInTestApex(String pathStr) {
         Path path = Paths.get(pathStr);
         if (path.getNameCount() >= 2 && path.getName(0).toString().equals("apex")) {
             String apexModuleName = path.getName(1).toString();
             ApexManager apexManager = ApexManager.getInstance();
             String packageName = apexManager.getActivePackageNameForApexModuleName(apexModuleName);
-            PackageInfo packageInfo = apexManager.getPackageInfo(
-                    packageName, ApexManager.MATCH_ACTIVE_PACKAGE);
-            if (packageInfo != null) {
+            try {
+                PackageInfo packageInfo =  mContext.getPackageManager().getPackageInfo(packageName,
+                        PackageManager.PackageInfoFlags.of(PackageManager.MATCH_APEX));
                 return (packageInfo.applicationInfo.flags & ApplicationInfo.FLAG_TEST_ONLY) != 0;
+            } catch (Exception ignore) {
             }
         }
         return false;
@@ -181,6 +182,7 @@ public final class SystemServiceManager implements Dumpable {
      * Loads and initializes a class from the given classLoader. Returns the class.
      */
     @SuppressWarnings("unchecked")
+    @android.ravenwood.annotation.RavenwoodKeep
     private static Class<SystemService> loadClassFromLoader(String className,
             ClassLoader classLoader) {
         try {
@@ -204,6 +206,7 @@ public final class SystemServiceManager implements Dumpable {
      * @return The service instance, never null.
      * @throws RuntimeException if the service fails to start.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public <T extends SystemService> T startService(Class<T> serviceClass) {
         try {
             final String name = serviceClass.getName();
@@ -240,6 +243,7 @@ public final class SystemServiceManager implements Dumpable {
         }
     }
 
+    @android.ravenwood.annotation.RavenwoodKeep
     public void startService(@NonNull final SystemService service) {
         // Check if already started
         String className = service.getClass().getName();
@@ -264,7 +268,8 @@ public final class SystemServiceManager implements Dumpable {
     }
 
     /** Disallow starting new services after this call. */
-    void sealStartedServices() {
+    @android.ravenwood.annotation.RavenwoodKeep
+    public void sealStartedServices() {
         mServiceClassnames = Collections.emptySet();
         mServices = Collections.unmodifiableList(mServices);
     }
@@ -276,6 +281,7 @@ public final class SystemServiceManager implements Dumpable {
      * @param t     trace logger
      * @param phase The boot phase to start.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public void startBootPhase(@NonNull TimingsTraceAndSlog t, int phase) {
         if (phase <= mCurrentPhase) {
             throw new IllegalArgumentException("Next phase must be larger than previous");
@@ -308,13 +314,23 @@ public final class SystemServiceManager implements Dumpable {
         if (phase == SystemService.PHASE_BOOT_COMPLETED) {
             final long totalBootTime = SystemClock.uptimeMillis() - mRuntimeStartUptime;
             t.logDuration("TotalBootTime", totalBootTime);
-            SystemServerInitThreadPool.shutdown();
+            shutdownInitThreadPool();
         }
+    }
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    private void shutdownInitThreadPool() {
+        SystemServerInitThreadPool.shutdown();
+    }
+
+    private void shutdownInitThreadPool$ravenwood() {
+        // Thread pool not configured yet on Ravenwood; ignored
     }
 
     /**
      * @return true if system has completed the boot; false otherwise.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public boolean isBootCompleted() {
         return mCurrentPhase >= SystemService.PHASE_BOOT_COMPLETED;
     }
@@ -338,13 +354,10 @@ public final class SystemServiceManager implements Dumpable {
         mUserManagerInternal = LocalServices.getService(UserManagerInternal.class);
     }
 
-    private @NonNull TargetUser getTargetUser(@UserIdInt int userId) {
-        final TargetUser targetUser;
+    @Nullable private TargetUser getTargetUser(@UserIdInt int userId) {
         synchronized (mTargetUsers) {
-            targetUser = mTargetUsers.get(userId);
+            return mTargetUsers.get(userId);
         }
-        Preconditions.checkState(targetUser != null, "No TargetUser for " + userId);
-        return targetUser;
     }
 
     private @NonNull TargetUser newTargetUser(@UserIdInt int userId) {
@@ -414,6 +427,7 @@ public final class SystemServiceManager implements Dumpable {
                 prevUser = mCurrentUser;
             }
             curUser = mCurrentUser = getTargetUser(to);
+            Preconditions.checkState(curUser != null, "No TargetUser for " + to);
             if (DEBUG) {
                 Slog.d(TAG, "Set mCurrentUser to " + mCurrentUser);
             }
@@ -455,21 +469,29 @@ public final class SystemServiceManager implements Dumpable {
         if (eventFlags == 0) {
             return;
         }
+
+        TargetUser targetUser = getTargetUser(userId);
+        if (targetUser == null) {
+            return;
+        }
+
         onUser(TimingsTraceAndSlog.newAsyncLog(),
                 USER_COMPLETED_EVENT,
                 /* prevUser= */ null,
-                getTargetUser(userId),
+                targetUser,
                 new UserCompletedEventType(eventFlags));
     }
 
     private void onUser(@NonNull String onWhat, @UserIdInt int userId) {
-        onUser(TimingsTraceAndSlog.newAsyncLog(), onWhat, /* prevUser= */ null,
-                getTargetUser(userId));
+        TargetUser targetUser = getTargetUser(userId);
+        Preconditions.checkState(targetUser != null, "No TargetUser for " + userId);
+
+        onUser(TimingsTraceAndSlog.newAsyncLog(), onWhat, /* prevUser= */ null, targetUser);
     }
 
     private void onUser(@NonNull TimingsTraceAndSlog t, @NonNull String onWhat,
             @Nullable TargetUser prevUser, @NonNull TargetUser curUser) {
-        onUser(t, onWhat, prevUser, curUser, /* completedEventType=*/ null);
+        onUser(t, onWhat, prevUser, curUser, /* completedEventType= */ null);
     }
 
     private void onUser(@NonNull TimingsTraceAndSlog t, @NonNull String onWhat,
@@ -560,16 +582,10 @@ public final class SystemServiceManager implements Dumpable {
                 terminated = threadPool.awaitTermination(
                         USER_POOL_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
-                Slog.wtf(TAG, "User lifecycle thread pool was interrupted while awaiting completion"
-                        + " of " + onWhat + " of user " + curUser, e);
-                if (!onWhat.equals(USER_COMPLETED_EVENT)) {
-                    Slog.e(TAG, "Couldn't terminate, disabling thread pool. "
-                            + "Please capture a bug report.");
-                    sUseLifecycleThreadPool = false;
-                }
+                logFailure(onWhat, curUser, "(user lifecycle threadpool was interrupted)", e);
             }
             if (!terminated) {
-                Slog.wtf(TAG, "User lifecycle thread pool was not terminated.");
+                logFailure(onWhat, curUser, "(user lifecycle threadpool was not terminated)", null);
             }
         }
         t.traceEnd(); // main entry
@@ -584,9 +600,9 @@ public final class SystemServiceManager implements Dumpable {
     private boolean useThreadPool(int userId, @NonNull String onWhat) {
         switch (onWhat) {
             case USER_STARTING:
-                // Limit the lifecycle parallelization to all users other than the system user
-                // and only for the user start lifecycle phase for now.
-                return sUseLifecycleThreadPool && userId != UserHandle.USER_SYSTEM;
+                // Don't allow lifecycle parallelization for user start on low ram devices and
+                // the system user.
+                return !ActivityManager.isLowRamDeviceStatic() && userId != UserHandle.USER_SYSTEM;
             case USER_COMPLETED_EVENT:
                 return true;
             default:
@@ -620,8 +636,6 @@ public final class SystemServiceManager implements Dumpable {
                         "on" + USER_STARTING + "User-" + curUserId);
             } catch (Exception e) {
                 logFailure(USER_STARTING, curUser, serviceName, e);
-                Slog.e(TAG, "Disabling thread pool - please capture a bug report.");
-                sUseLifecycleThreadPool = false;
             } finally {
                 t.traceEnd();
             }
@@ -651,12 +665,14 @@ public final class SystemServiceManager implements Dumpable {
     }
 
     /** Logs the failure. That's all. Tests may rely on parsing it, so only modify carefully. */
+    @android.ravenwood.annotation.RavenwoodKeep
     private void logFailure(String onWhat, TargetUser curUser, String serviceName, Exception ex) {
         Slog.wtf(TAG, "SystemService failure: Failure reporting " + onWhat + " of user "
                 + curUser + " to service " + serviceName, ex);
     }
 
     /** Sets the safe mode flag for services to query. */
+    @android.ravenwood.annotation.RavenwoodKeep
     void setSafeMode(boolean safeMode) {
         mSafeMode = safeMode;
     }
@@ -666,6 +682,7 @@ public final class SystemServiceManager implements Dumpable {
      *
      * @return safe mode flag
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public boolean isSafeMode() {
         return mSafeMode;
     }
@@ -673,6 +690,7 @@ public final class SystemServiceManager implements Dumpable {
     /**
      * @return true if runtime was restarted, false if it's normal boot
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public boolean isRuntimeRestarted() {
         return mRuntimeRestarted;
     }
@@ -680,6 +698,7 @@ public final class SystemServiceManager implements Dumpable {
     /**
      * @return Time when SystemServer was started, in elapsed realtime.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public long getRuntimeStartElapsedTime() {
         return mRuntimeStartElapsedTime;
     }
@@ -687,17 +706,20 @@ public final class SystemServiceManager implements Dumpable {
     /**
      * @return Time when SystemServer was started, in uptime.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public long getRuntimeStartUptime() {
         return mRuntimeStartUptime;
     }
 
-    void setStartInfo(boolean runtimeRestarted,
+    @android.ravenwood.annotation.RavenwoodKeep
+    public void setStartInfo(boolean runtimeRestarted,
             long runtimeStartElapsedTime, long runtimeStartUptime) {
         mRuntimeRestarted = runtimeRestarted;
         mRuntimeStartElapsedTime = runtimeStartElapsedTime;
         mRuntimeStartUptime = runtimeStartUptime;
     }
 
+    @android.ravenwood.annotation.RavenwoodKeep
     private void warnIfTooLong(long duration, SystemService service, String operation) {
         if (duration > SERVICE_CALL_WARN_TIME_MS) {
             Slog.w(TAG, "Service " + service.getClass().getName() + " took " + duration + " ms in "

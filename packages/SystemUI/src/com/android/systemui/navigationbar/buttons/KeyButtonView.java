@@ -30,6 +30,7 @@ import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.Icon;
 import android.hardware.input.InputManager;
+import android.hardware.input.InputManagerGlobal;
 import android.media.AudioManager;
 import android.metrics.LogMaker;
 import android.os.AsyncTask;
@@ -57,12 +58,17 @@ import com.android.internal.logging.UiEventLogger;
 import com.android.internal.logging.UiEventLoggerImpl;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.Dependency;
-import com.android.systemui.R;
+import com.android.systemui.assist.AssistManager;
+import com.android.systemui.navigationbar.NavBarButtonClickLogger;
 import com.android.systemui.recents.OverviewProxyService;
+import com.android.systemui.res.R;
+import com.android.systemui.shared.navigationbar.KeyButtonRipple;
 import com.android.systemui.shared.system.QuickStepContract;
 
 public class KeyButtonView extends ImageView implements ButtonInterface {
     private static final String TAG = KeyButtonView.class.getSimpleName();
+    private static final int CURSOR_REPEAT_FLAGS = KeyEvent.FLAG_SOFT_KEYBOARD
+            | KeyEvent.FLAG_KEEP_TOUCH_MODE;
 
     private final boolean mPlaySounds;
     private final UiEventLogger mUiEventLogger;
@@ -79,10 +85,11 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
     private final KeyButtonRipple mRipple;
     private final OverviewProxyService mOverviewProxyService;
     private final MetricsLogger mMetricsLogger = Dependency.get(MetricsLogger.class);
-    private final InputManager mInputManager;
+    private final InputManagerGlobal mInputManagerGlobal;
     private final Paint mOvalBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private float mDarkIntensity;
     private boolean mHasOvalBg = false;
+    private NavBarButtonClickLogger mNavBarButtonClickLogger;
 
     @VisibleForTesting
     public enum NavBarButtonEvent implements UiEventLogger.UiEventEnum {
@@ -125,7 +132,13 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
         public void run() {
             if (isPressed()) {
                 // Log.d("KeyButtonView", "longpressed: " + this);
-                if (isLongClickable()) {
+                if (mCode == KeyEvent.KEYCODE_DPAD_LEFT || mCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    sendEvent(KeyEvent.ACTION_UP, CURSOR_REPEAT_FLAGS,
+                            System.currentTimeMillis(), false);
+                    sendEvent(KeyEvent.ACTION_DOWN, CURSOR_REPEAT_FLAGS,
+                            System.currentTimeMillis(), false);
+                    postDelayed(mCheckLongPress, ViewConfiguration.getKeyRepeatDelay());
+                } else if (isLongClickable()) {
                     // Just an old-fashioned ImageView
                     performLongClick();
                     mLongClicked = true;
@@ -145,12 +158,12 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
     }
 
     public KeyButtonView(Context context, AttributeSet attrs, int defStyle) {
-        this(context, attrs, defStyle, InputManager.getInstance(), new UiEventLoggerImpl());
+        this(context, attrs, defStyle, InputManagerGlobal.getInstance(), new UiEventLoggerImpl());
     }
 
     @VisibleForTesting
-    public KeyButtonView(Context context, AttributeSet attrs, int defStyle, InputManager manager,
-            UiEventLogger uiEventLogger) {
+    public KeyButtonView(Context context, AttributeSet attrs, int defStyle,
+            InputManagerGlobal manager, UiEventLogger uiEventLogger) {
         super(context, attrs);
         mUiEventLogger = uiEventLogger;
 
@@ -173,7 +186,7 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
 
         mRipple = new KeyButtonRipple(context, this, R.dimen.key_button_ripple_max_width);
         mOverviewProxyService = Dependency.get(OverviewProxyService.class);
-        mInputManager = manager;
+        mInputManagerGlobal = manager;
         setBackground(mRipple);
         setWillNotDraw(false);
         forceHasOverlappingRendering(false);
@@ -192,6 +205,10 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
     public void setOnClickListener(OnClickListener onClickListener) {
         super.setOnClickListener(onClickListener);
         mOnClickListener = onClickListener;
+    }
+
+    public void setNavBarButtonClickLogger(NavBarButtonClickLogger navBarButtonClickLogger) {
+        mNavBarButtonClickLogger = navBarButtonClickLogger;
     }
 
     public void loadAsync(Icon icon) {
@@ -275,7 +292,10 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
 
                 mTouchDownX = (int) ev.getX();
                 mTouchDownY = (int) ev.getY();
-                if (mCode != KEYCODE_UNKNOWN) {
+                if (mCode == KeyEvent.KEYCODE_DPAD_LEFT || mCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.FLAG_VIRTUAL_HARD_KEY
+                            | KeyEvent.FLAG_KEEP_TOUCH_MODE, mDownTime, false);
+                } else if (mCode != KEYCODE_UNKNOWN) {
                     sendEvent(KeyEvent.ACTION_DOWN, 0, mDownTime);
                 } else {
                     // Provide the same haptic feedback that the system offers for virtual keys.
@@ -386,11 +406,19 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
                 uiEvent = longPressSet
                         ? NavBarButtonEvent.NAVBAR_BACK_BUTTON_LONGPRESS
                         : NavBarButtonEvent.NAVBAR_BACK_BUTTON_TAP;
+
+                if (mNavBarButtonClickLogger != null) {
+                    mNavBarButtonClickLogger.logBackButtonClick();
+                }
                 break;
             case KeyEvent.KEYCODE_HOME:
                 uiEvent = longPressSet
                         ? NavBarButtonEvent.NAVBAR_HOME_BUTTON_LONGPRESS
                         : NavBarButtonEvent.NAVBAR_HOME_BUTTON_TAP;
+
+                if (mNavBarButtonClickLogger != null) {
+                    mNavBarButtonClickLogger.logHomeButtonClick();
+                }
                 break;
             case KeyEvent.KEYCODE_APP_SWITCH:
                 uiEvent = longPressSet
@@ -404,6 +432,10 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
     }
 
     private void sendEvent(int action, int flags, long when) {
+        sendEvent(action, flags, when, true);
+    }
+
+    private void sendEvent(int action, int flags, long when, boolean applyDefaultFlags) {
         mMetricsLogger.write(new LogMaker(MetricsEvent.ACTION_NAV_BUTTON_EVENT)
                 .setType(MetricsEvent.TYPE_ACTION)
                 .setSubtype(mCode)
@@ -414,9 +446,12 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
             Log.i(TAG, "Back button event: " + KeyEvent.actionToString(action));
         }
         final int repeatCount = (flags & KeyEvent.FLAG_LONG_PRESS) != 0 ? 1 : 0;
+        if (applyDefaultFlags) {
+            flags |= KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY;
+        }
         final KeyEvent ev = new KeyEvent(mDownTime, when, action, mCode, repeatCount,
                 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
-                flags | KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY,
+                flags,
                 InputDevice.SOURCE_NAVIGATION_BAR);
 
         int displayId = INVALID_DISPLAY;
@@ -428,7 +463,8 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
         if (displayId != INVALID_DISPLAY) {
             ev.setDisplayId(displayId);
         }
-        mInputManager.injectInputEvent(ev, InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
+        mInputManagerGlobal.injectInputEvent(ev,
+                InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
     }
 
     @Override
@@ -437,9 +473,20 @@ public class KeyButtonView extends ImageView implements ButtonInterface {
         if (mCode != KeyEvent.KEYCODE_UNKNOWN) {
             sendEvent(KeyEvent.ACTION_UP, KeyEvent.FLAG_CANCELED);
         }
+        // When aborting long-press home and Launcher has requested to override it, fade out the
+        // ripple more quickly.
+        if (mCode == KeyEvent.KEYCODE_HOME && Dependency.get(AssistManager.class)
+                .shouldOverrideAssist(AssistManager.INVOCATION_TYPE_HOME_BUTTON_LONG_PRESS)) {
+            mRipple.speedUpNextFade();
+        }
         setPressed(false);
         mRipple.abortDelayedRipple();
         mGestureAborted = true;
+    }
+
+    /** Run when the ripple for this button is next invisible. Only used once. */
+    public void setOnRippleInvisibleRunnable(Runnable onRippleInvisibleRunnable) {
+        mRipple.setOnInvisibleRunnable(onRippleInvisibleRunnable);
     }
 
     @Override

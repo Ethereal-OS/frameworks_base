@@ -27,6 +27,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.Flags;
 import android.content.pm.IPackageManager;
 import android.content.pm.IPackageStatsObserver;
 import android.content.pm.ModuleInfo;
@@ -36,8 +37,10 @@ import android.content.pm.PackageStats;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ResolveInfo;
 import android.content.pm.UserInfo;
+import android.content.pm.UserProperties;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -48,7 +51,6 @@ import android.os.SystemClock;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.text.format.Formatter;
-import android.util.IconDrawableFactory;
 import android.util.Log;
 import android.util.SparseArray;
 
@@ -80,6 +82,8 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+import javax.annotation.Nullable;
+
 /**
  * Keeps track of information about all installed applications, lazy-loading
  * as needed.
@@ -100,6 +104,9 @@ public class ApplicationsState {
     @VisibleForTesting
     static ApplicationsState sInstance;
 
+    // Whether the app icon cache mechanism is enabled or not.
+    private static boolean sAppIconCacheEnabled = false;
+
     public static ApplicationsState getInstance(Application app) {
         return getInstance(app, AppGlobals.getPackageManager());
     }
@@ -114,20 +121,24 @@ public class ApplicationsState {
         }
     }
 
+    /** Set whether the app icon cache mechanism is enabled or not. */
+    public static void setAppIconCacheEnabled(boolean enabled) {
+        sAppIconCacheEnabled = enabled;
+    }
+
     final Context mContext;
     final PackageManager mPm;
-    final IconDrawableFactory mDrawableFactory;
     final IPackageManager mIpm;
     final UserManager mUm;
     final StorageStatsManager mStats;
     final int mAdminRetrieveFlags;
     final int mRetrieveFlags;
     PackageIntentReceiver mPackageIntentReceiver;
+    PackageIntentReceiver mClonePackageIntentReceiver;
 
     boolean mResumed;
     boolean mHaveDisabledApps;
     boolean mHaveInstantApps;
-    boolean mHaveHiddenApps;
 
     // Information about all applications.  Synchronize on mEntriesMap
     // to protect access to these.
@@ -195,7 +206,6 @@ public class ApplicationsState {
     private ApplicationsState(Application app, IPackageManager iPackageManager) {
         mContext = app;
         mPm = mContext.getPackageManager();
-        mDrawableFactory = IconDrawableFactory.newInstance(mContext);
         mIpm = iPackageManager;
         mUm = mContext.getSystemService(UserManager.class);
         mStats = mContext.getSystemService(StorageStatsManager.class);
@@ -211,13 +221,17 @@ public class ApplicationsState {
         mAdminRetrieveFlags = PackageManager.MATCH_ANY_USER |
                 PackageManager.MATCH_DISABLED_COMPONENTS |
                 PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS;
-        mRetrieveFlags = PackageManager.MATCH_UNINSTALLED_PACKAGES |
-                PackageManager.MATCH_DISABLED_COMPONENTS |
+        mRetrieveFlags = PackageManager.MATCH_DISABLED_COMPONENTS |
                 PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS;
 
         final List<ModuleInfo> moduleInfos = mPm.getInstalledModules(0 /* flags */);
         for (ModuleInfo info : moduleInfos) {
             mSystemModules.put(info.getPackageName(), info.isHidden());
+            if (Flags.provideInfoOfApkInApex()) {
+                for (String apkInApexPackageName : info.getApkInApexPackageNames()) {
+                    mSystemModules.put(apkInApexPackageName, info.isHidden());
+                }
+            }
         }
 
         /**
@@ -268,6 +282,15 @@ public class ApplicationsState {
             mPackageIntentReceiver.registerReceiver();
         }
 
+        // Listen to any package additions in clone user to refresh the app list.
+        if (mClonePackageIntentReceiver == null) {
+            int cloneUserId = AppUtils.getCloneUserId(mContext);
+            if (cloneUserId != -1) {
+                mClonePackageIntentReceiver = new PackageIntentReceiver();
+                mClonePackageIntentReceiver.registerReceiverForClone(cloneUserId);
+            }
+        }
+
         final List<ApplicationInfo> prevApplications = mApplications;
         mApplications = new ArrayList<>();
         for (UserInfo user : mUm.getProfiles(UserHandle.myUserId())) {
@@ -299,7 +322,6 @@ public class ApplicationsState {
 
         mHaveDisabledApps = false;
         mHaveInstantApps = false;
-        mHaveHiddenApps = false;
         for (int i = 0; i < mApplications.size(); i++) {
             final ApplicationInfo info = mApplications.get(i);
             // Need to trim out any applications that are disabled by
@@ -318,10 +340,6 @@ public class ApplicationsState {
             }
             if (!mHaveInstantApps && AppUtils.isInstant(info)) {
                 mHaveInstantApps = true;
-            }
-            if (!mHaveHiddenApps && hasFlag(info.privateFlags,
-                    ApplicationInfo.PRIVATE_FLAG_HIDDEN)) {
-                mHaveHiddenApps = true;
             }
 
             int userId = UserHandle.getUserId(info.uid);
@@ -396,14 +414,14 @@ public class ApplicationsState {
                 appPackages = new HashSet<>();
                 packageMap.put(userId, appPackages);
             }
-            if (isInstalledOrHidden(application)) {
+            if (hasFlag(application.flags, ApplicationInfo.FLAG_INSTALLED)) {
                 appPackages.add(application.packageName);
             }
         }
 
         // detect any previous app is removed
         for (ApplicationInfo prevApplication : prevApplications) {
-            if (!isInstalledOrHidden(prevApplication)) {
+            if (!hasFlag(prevApplication.flags, ApplicationInfo.FLAG_INSTALLED)) {
                 continue;
             }
             final String userId = String.valueOf(UserHandle.getUserId(prevApplication.uid));
@@ -431,10 +449,6 @@ public class ApplicationsState {
 
     public boolean haveInstantApps() {
         return mHaveInstantApps;
-    }
-
-    public boolean haveHiddenApps() {
-        return mHaveHiddenApps;
     }
 
     boolean isHiddenModule(String packageName) {
@@ -468,19 +482,26 @@ public class ApplicationsState {
             mPackageIntentReceiver.unregisterReceiver();
             mPackageIntentReceiver = null;
         }
+        if (mClonePackageIntentReceiver != null) {
+            mClonePackageIntentReceiver.unregisterReceiver();
+            mClonePackageIntentReceiver = null;
+        }
     }
 
     public AppEntry getEntry(String packageName, int userId) {
         if (DEBUG_LOCKING) Log.v(TAG, "getEntry about to acquire lock...");
         synchronized (mEntriesMap) {
-            AppEntry entry = mEntriesMap.get(userId).get(packageName);
+            AppEntry entry = null;
+            HashMap<String, AppEntry> userEntriesMap = mEntriesMap.get(userId);
+            if (userEntriesMap != null) {
+                entry = userEntriesMap.get(packageName);
+            }
             if (entry == null) {
                 ApplicationInfo info = getAppInfoLocked(packageName, userId);
                 if (info == null) {
                     try {
                         info = mIpm.getApplicationInfo(packageName,
-                                mUm.isUserAdmin(userId) ? mAdminRetrieveFlags : mRetrieveFlags,
-                                userId);
+                                PackageManager.MATCH_ARCHIVED_PACKAGES, userId);
                     } catch (RemoteException e) {
                         Log.w(TAG, "getEntry couldn't reach PackageManager", e);
                         return null;
@@ -536,7 +557,7 @@ public class ApplicationsState {
         if (DEBUG_LOCKING) Log.v(TAG, "requestSize about to acquire lock...");
         synchronized (mEntriesMap) {
             AppEntry entry = mEntriesMap.get(userId).get(packageName);
-            if (entry != null && isInstalledOrHidden(entry.info)) {
+            if (entry != null && hasFlag(entry.info.flags, ApplicationInfo.FLAG_INSTALLED)) {
                 mBackgroundHandler.post(
                         () -> {
                             try {
@@ -628,10 +649,6 @@ public class ApplicationsState {
                 if (AppUtils.isInstant(info)) {
                     mHaveInstantApps = true;
                 }
-                if (!mHaveHiddenApps && hasFlag(info.privateFlags,
-                        ApplicationInfo.PRIVATE_FLAG_HIDDEN)) {
-                    mHaveHiddenApps = true;
-                }
                 mApplications.add(info);
                 if (!mBackgroundHandler.hasMessages(BackgroundHandler.MSG_LOAD_ENTRIES)) {
                     mBackgroundHandler.sendEmptyMessage(BackgroundHandler.MSG_LOAD_ENTRIES);
@@ -673,16 +690,6 @@ public class ApplicationsState {
                     for (ApplicationInfo otherInfo : mApplications) {
                         if (AppUtils.isInstant(otherInfo)) {
                             mHaveInstantApps = true;
-                            break;
-                        }
-                    }
-                }
-                if (hasFlag(info.privateFlags, ApplicationInfo.PRIVATE_FLAG_HIDDEN)) {
-                    mHaveHiddenApps = false;
-                    for (ApplicationInfo otherInfo : mApplications) {
-                        if (hasFlag(info.privateFlags,
-                                ApplicationInfo.PRIVATE_FLAG_HIDDEN)) {
-                            mHaveHiddenApps = true;
                             break;
                         }
                     }
@@ -737,7 +744,11 @@ public class ApplicationsState {
 
     private AppEntry getEntryLocked(ApplicationInfo info) {
         int userId = UserHandle.getUserId(info.uid);
-        AppEntry entry = mEntriesMap.get(userId).get(info.packageName);
+        AppEntry entry = null;
+        HashMap<String, AppEntry> userEntriesMap = mEntriesMap.get(userId);
+        if (userEntriesMap != null) {
+            entry = userEntriesMap.get(info.packageName);
+        }
         if (DEBUG) {
             Log.i(TAG, "Looking up entry of pkg " + info.packageName + ": " + entry);
         }
@@ -756,8 +767,11 @@ public class ApplicationsState {
                 Log.i(TAG, "Creating AppEntry for " + info.packageName);
             }
             entry = new AppEntry(mContext, info, mCurId++);
-            mEntriesMap.get(userId).put(info.packageName, entry);
-            mAppEntries.add(entry);
+            userEntriesMap = mEntriesMap.get(userId);
+            if (userEntriesMap != null) {
+                userEntriesMap.put(info.packageName, entry);
+                mAppEntries.add(entry);
+            }
         } else if (entry.info != info) {
             entry.info = info;
         }
@@ -794,7 +808,8 @@ public class ApplicationsState {
     }
 
     private static boolean isAppIconCacheEnabled(Context context) {
-        return SETTING_PKG.equals(context.getPackageName());
+        return SETTING_PKG.equals(context.getPackageName())
+                || sAppIconCacheEnabled;
     }
 
     void rebuildActiveSessions() {
@@ -826,10 +841,8 @@ public class ApplicationsState {
         // Rebuilding of app list.  Synchronized on mRebuildSync.
         final Object mRebuildSync = new Object();
         boolean mRebuildRequested;
-        boolean mRebuildAsync;
         AppFilter mRebuildFilter;
         Comparator<AppEntry> mRebuildComparator;
-        ArrayList<AppEntry> mRebuildResult;
         ArrayList<AppEntry> mLastAppList;
         boolean mRebuildForeground;
 
@@ -935,11 +948,9 @@ public class ApplicationsState {
                 synchronized (mRebuildingSessions) {
                     mRebuildingSessions.add(this);
                     mRebuildRequested = true;
-                    mRebuildAsync = true;
                     mRebuildFilter = filter;
                     mRebuildComparator = comparator;
                     mRebuildForeground = foreground;
-                    mRebuildResult = null;
                     if (!mBackgroundHandler.hasMessages(BackgroundHandler.MSG_REBUILD_LIST)) {
                         Message msg = mBackgroundHandler.obtainMessage(
                                 BackgroundHandler.MSG_REBUILD_LIST);
@@ -1019,15 +1030,10 @@ public class ApplicationsState {
             synchronized (mRebuildSync) {
                 if (!mRebuildRequested) {
                     mLastAppList = filteredApps;
-                    if (!mRebuildAsync) {
-                        mRebuildResult = filteredApps;
-                        mRebuildSync.notifyAll();
-                    } else {
-                        if (!mMainHandler.hasMessages(MainHandler.MSG_REBUILD_COMPLETE, this)) {
-                            Message msg = mMainHandler.obtainMessage(
-                                    MainHandler.MSG_REBUILD_COMPLETE, this);
-                            mMainHandler.sendMessage(msg);
-                        }
+                    if (!mMainHandler.hasMessages(MainHandler.MSG_REBUILD_COMPLETE, this)) {
+                        Message msg = mMainHandler.obtainMessage(
+                                MainHandler.MSG_REBUILD_COMPLETE, this);
+                        mMainHandler.sendMessage(msg);
                     }
                 }
             }
@@ -1184,25 +1190,24 @@ public class ApplicationsState {
                                 mMainHandler.sendMessage(m);
                             }
                             ApplicationInfo info = mApplications.get(i);
-                            if (isInstalledOrHidden(info)) {
-                                int userId = UserHandle.getUserId(info.uid);
-                                if (mEntriesMap.get(userId).get(info.packageName) == null) {
-                                    numDone++;
-                                    getEntryLocked(info);
-                                }
-                                if (userId != 0 && mEntriesMap.indexOfKey(0) >= 0) {
-                                    // If this app is for a profile and we are on the owner, remove
-                                    // the owner entry if it isn't installed.  This will prevent
-                                    // duplicates of work only apps showing up as 'not installed
-                                    // for this user'.
-                                    // Note: This depends on us traversing the users in order, which
-                                    // happens because of the way we generate the list in
-                                    // doResumeIfNeededLocked.
-                                    AppEntry entry = mEntriesMap.get(0).get(info.packageName);
-                                    if (entry != null && !isInstalledOrHidden(entry.info)) {
-                                        mEntriesMap.get(0).remove(info.packageName);
-                                        mAppEntries.remove(entry);
-                                    }
+                            int userId = UserHandle.getUserId(info.uid);
+                            if (mEntriesMap.get(userId).get(info.packageName) == null) {
+                                numDone++;
+                                getEntryLocked(info);
+                            }
+                            if (userId != 0 && mEntriesMap.indexOfKey(0) >= 0) {
+                                // If this app is for a profile and we are on the owner, remove
+                                // the owner entry if it isn't installed.  This will prevent
+                                // duplicates of work only apps showing up as 'not installed
+                                // for this user'.
+                                // Note: This depends on us traversing the users in order, which
+                                // happens because of the way we generate the list in
+                                // doResumeIfNeededLocked.
+                                AppEntry entry = mEntriesMap.get(0).get(info.packageName);
+                                if (entry != null && !hasFlag(entry.info.flags,
+                                        ApplicationInfo.FLAG_INSTALLED)) {
+                                    mEntriesMap.get(0).remove(info.packageName);
+                                    mAppEntries.remove(entry);
                                 }
                             }
                         }
@@ -1262,7 +1267,6 @@ public class ApplicationsState {
                             List<ResolveInfo> intents = mPm.queryIntentActivitiesAsUser(
                                     launchIntent,
                                     PackageManager.MATCH_DISABLED_COMPONENTS
-                                            | PackageManager.MATCH_UNINSTALLED_PACKAGES
                                             | PackageManager.MATCH_DIRECT_BOOT_AWARE
                                             | PackageManager.MATCH_DIRECT_BOOT_UNAWARE,
                                     userId
@@ -1348,7 +1352,7 @@ public class ApplicationsState {
                             long now = SystemClock.uptimeMillis();
                             for (int i = 0; i < mAppEntries.size(); i++) {
                                 AppEntry entry = mAppEntries.get(i);
-                                if (isInstalledOrHidden(entry.info)
+                                if (hasFlag(entry.info.flags, ApplicationInfo.FLAG_INSTALLED)
                                         && (entry.size == SIZE_UNKNOWN || entry.sizeStale)) {
                                     if (entry.sizeLoadStart == 0 ||
                                             (entry.sizeLoadStart < (now - 20 * 1000))) {
@@ -1535,10 +1539,6 @@ public class ApplicationsState {
                 String pkgName = data.getEncodedSchemeSpecificPart();
                 for (int i = 0; i < mEntriesMap.size(); i++) {
                     removePackage(pkgName, mEntriesMap.keyAt(i));
-                    if (!intent.getBooleanExtra(Intent.EXTRA_DATA_REMOVED, true)
-                            && !intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) {
-                        addPackage(pkgName, mEntriesMap.keyAt(i));
-                    }
                 }
             } else if (Intent.ACTION_PACKAGE_CHANGED.equals(actionStr)) {
                 Uri data = intent.getData();
@@ -1572,6 +1572,12 @@ public class ApplicationsState {
             } else if (Intent.ACTION_USER_REMOVED.equals(actionStr)) {
                 removeUser(intent.getIntExtra(Intent.EXTRA_USER_HANDLE, UserHandle.USER_NULL));
             }
+        }
+
+        public void registerReceiverForClone(int cloneId) {
+            IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
+            filter.addDataScheme("package");
+            mContext.registerReceiverAsUser(this, UserHandle.of(cloneId), filter, null, null);
         }
     }
 
@@ -1619,15 +1625,16 @@ public class ApplicationsState {
     }
 
     public static class AppEntry extends SizeInfo {
-        public final File apkFile;
+        @VisibleForTesting String mProfileType;
+        @Nullable public final File apkFile;
         public final long id;
         public String label;
         public long size;
         public long internalSize;
         public long externalSize;
         public String labelDescription;
-
         public boolean mounted;
+        public boolean showInPersonalTab;
 
         /**
          * Setting this to {@code true} prevents the entry to be filtered by
@@ -1673,7 +1680,7 @@ public class ApplicationsState {
 
         @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
         public AppEntry(Context context, ApplicationInfo info, long id) {
-            apkFile = new File(info.sourceDir);
+            this.apkFile = info.sourceDir != null ? new File(info.sourceDir) : null;
             this.id = id;
             this.info = info;
             this.size = SIZE_UNKNOWN;
@@ -1681,20 +1688,62 @@ public class ApplicationsState {
             ensureLabel(context);
             // Speed up the cache of the label description if they haven't been created.
             if (this.labelDescription == null) {
-                ThreadUtils.postOnBackgroundThread(
+                var unused = ThreadUtils.getBackgroundExecutor().submit(
                         () -> this.ensureLabelDescriptionLocked(context));
             }
+            UserManager um = UserManager.get(context);
+            UserInfo userInfo = um.getUserInfo(UserHandle.getUserId(info.uid));
+            mProfileType = userInfo.userType;
+            this.showInPersonalTab = shouldShowInPersonalTab(um, info.uid);
+        }
+
+        public boolean isClonedProfile() {
+            return UserManager.USER_TYPE_PROFILE_CLONE.equals(mProfileType);
+        }
+
+        public boolean isManagedProfile() {
+            return UserManager.USER_TYPE_PROFILE_MANAGED.equals(mProfileType);
+        }
+
+        public boolean isPrivateProfile() {
+            return android.os.Flags.allowPrivateProfile()
+                    && UserManager.USER_TYPE_PROFILE_PRIVATE.equals(mProfileType);
+        }
+
+        /**
+         * Checks if the user that the app belongs to have the property
+         * {@link UserProperties#SHOW_IN_SETTINGS_WITH_PARENT} set.
+         */
+        @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+        boolean shouldShowInPersonalTab(UserManager userManager, int uid) {
+            int userId = UserHandle.getUserId(uid);
+
+            // Regardless of apk version, if the app belongs to the current user then return true.
+            if (userId == ActivityManager.getCurrentUser()) {
+                return true;
+            }
+
+            // For sdk version < 34, if the app doesn't belong to the current user,
+            // then as per earlier behaviour the app shouldn't be displayed in personal tab.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                return false;
+            }
+
+            UserProperties userProperties = userManager.getUserProperties(
+                        UserHandle.of(userId));
+            return userProperties.getShowInSettings()
+                        == UserProperties.SHOW_IN_SETTINGS_WITH_PARENT;
         }
 
         public void ensureLabel(Context context) {
             if (this.label == null || !this.mounted) {
-                if (!this.apkFile.exists()) {
-                    this.mounted = false;
-                    this.label = info.packageName;
-                } else {
+                if (this.apkFile != null  && this.apkFile.exists()) {
                     this.mounted = true;
                     CharSequence label = info.loadLabel(context.getPackageManager());
                     this.label = label != null ? label.toString() : info.packageName;
+                } else {
+                    this.mounted = false;
+                    this.label = info.packageName;
                 }
             }
         }
@@ -1709,7 +1758,7 @@ public class ApplicationsState {
             }
 
             if (this.icon == null) {
-                if (this.apkFile.exists()) {
+                if (this.apkFile != null && this.apkFile.exists()) {
                     this.icon = Utils.getBadgedIcon(context, info);
                     return true;
                 } else {
@@ -1719,7 +1768,7 @@ public class ApplicationsState {
             } else if (!this.mounted) {
                 // If the app wasn't mounted but is now mounted, reload
                 // its icon.
-                if (this.apkFile.exists()) {
+                if (this.apkFile != null && this.apkFile.exists()) {
                     this.mounted = true;
                     this.icon = Utils.getBadgedIcon(context, info);
                     return true;
@@ -1747,7 +1796,8 @@ public class ApplicationsState {
             final int userId = UserHandle.getUserId(this.info.uid);
             if (UserManager.get(context).isManagedProfile(userId)) {
                 this.labelDescription = context.getString(
-                        com.android.settingslib.R.string.accessibility_work_profile_app_description,
+                        com.android.settingslib.utils.R
+                                .string.accessibility_work_profile_app_description,
                         this.label);
             } else {
                 this.labelDescription = this.label;
@@ -1757,12 +1807,6 @@ public class ApplicationsState {
 
     private static boolean hasFlag(int flags, int flag) {
         return (flags & flag) != 0;
-    }
-
-    private static boolean isInstalledOrHidden(ApplicationInfo info) {
-        return hasFlag(info.flags, ApplicationInfo.FLAG_INSTALLED) ||
-                hasFlag(info.privateFlags, ApplicationInfo.PRIVATE_FLAG_HIDDEN);
-
     }
 
     /**
@@ -1839,7 +1883,7 @@ public class ApplicationsState {
 
         @Override
         public boolean filterApp(AppEntry entry) {
-            return UserHandle.getUserId(entry.info.uid) == mCurrentUser;
+            return entry.showInPersonalTab;
         }
     };
 
@@ -1857,16 +1901,24 @@ public class ApplicationsState {
     };
 
     public static final AppFilter FILTER_WORK = new AppFilter() {
-        private int mCurrentUser;
 
         @Override
-        public void init() {
-            mCurrentUser = ActivityManager.getCurrentUser();
-        }
+        public void init() {}
 
         @Override
         public boolean filterApp(AppEntry entry) {
-            return UserHandle.getUserId(entry.info.uid) != mCurrentUser;
+            return !entry.showInPersonalTab && entry.isManagedProfile();
+        }
+    };
+
+    public static final AppFilter FILTER_PRIVATE_PROFILE = new AppFilter() {
+
+        @Override
+        public void init() {}
+
+        @Override
+        public boolean filterApp(AppEntry entry) {
+            return !entry.showInPersonalTab && entry.isPrivateProfile();
         }
     };
 
@@ -1936,19 +1988,6 @@ public class ApplicationsState {
         @Override
         public boolean filterApp(AppEntry entry) {
             return !entry.info.enabled && !AppUtils.isInstant(entry.info);
-        }
-    };
-
-    public static final AppFilter FILTER_HIDDEN = new AppFilter() {
-        @Override
-        public void init() {
-        }
-
-        @Override
-        public boolean filterApp(AppEntry entry) {
-            return !AppUtils.isInstant(entry.info)
-                    && hasFlag(entry.info.privateFlags,
-                    ApplicationInfo.PRIVATE_FLAG_HIDDEN);
         }
     };
 

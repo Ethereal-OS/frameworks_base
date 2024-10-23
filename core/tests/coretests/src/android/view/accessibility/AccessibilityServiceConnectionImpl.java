@@ -19,13 +19,18 @@ package android.view.accessibility;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accessibilityservice.IAccessibilityServiceConnection;
+import android.accessibilityservice.IBrailleDisplayController;
 import android.accessibilityservice.MagnificationConfig;
 import android.annotation.NonNull;
 import android.content.pm.ParceledListSlice;
 import android.graphics.Region;
+import android.hardware.usb.UsbDevice;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteCallback;
+import android.os.RemoteException;
+import android.view.SurfaceControl;
+import android.window.ScreenCapture;
 
 import java.util.Collections;
 import java.util.List;
@@ -179,6 +184,10 @@ public class AccessibilityServiceConnectionImpl extends IAccessibilityServiceCon
 
     public void takeScreenshot(int displayId, RemoteCallback callback) {}
 
+    public void takeScreenshotOfWindow(int accessibilityWindowId, int interactionId,
+            ScreenCapture.ScreenCaptureListener listener,
+            IAccessibilityInteractionConnectionCallback callback) {}
+
     public void setFocusAppearance(int strokeWidth, int color) {}
 
     public void setCacheEnabled(boolean enabled) {}
@@ -206,4 +215,39 @@ public class AccessibilityServiceConnectionImpl extends IAccessibilityServiceCon
             int processId, long threadId, int callingUid, Bundle serializedCallingStackInBundle) {}
 
     public void setAnimationScale(float scale) {}
+
+    @Override
+    public void setInstalledAndEnabledServices(List<AccessibilityServiceInfo> infos)
+            throws RemoteException {
+    }
+
+    @Override
+    public List<AccessibilityServiceInfo> getInstalledAndEnabledServices() throws RemoteException {
+        return null;
+    }
+
+    @Override
+    public void attachAccessibilityOverlayToDisplay(
+            int interactionId,
+            int displayId,
+            SurfaceControl sc,
+            IAccessibilityInteractionConnectionCallback callback) {}
+
+    @Override
+    public void attachAccessibilityOverlayToWindow(
+            int interactionId,
+            int accessibilityWindowId,
+            SurfaceControl sc,
+            IAccessibilityInteractionConnectionCallback callback) {}
+
+    @Override
+    public void connectBluetoothBrailleDisplay(String bluetoothAddress,
+            IBrailleDisplayController controller) {}
+
+    @Override
+    public void connectUsbBrailleDisplay(UsbDevice usbDevice,
+            IBrailleDisplayController controller) {}
+
+    @Override
+    public void setTestBrailleDisplayData(List<Bundle> brailleDisplays) {}
 }

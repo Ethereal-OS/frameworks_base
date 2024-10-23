@@ -21,7 +21,10 @@ import static android.view.MotionEvent.ACTION_MOVE;
 import static android.view.MotionEvent.ACTION_UP;
 import static android.view.MotionEvent.TOOL_TYPE_FINGER;
 import static android.view.MotionEvent.TOOL_TYPE_STYLUS;
+import static android.view.inputmethod.Flags.initiationWithoutInputConnection;
 
+
+import static org.junit.Assume.assumeFalse;
 
 import android.app.Instrumentation;
 import android.content.Context;
@@ -59,9 +62,10 @@ public class HandwritingInitiatorPerfTest {
     public void setup() {
         final Instrumentation mInstrumentation = InstrumentationRegistry.getInstrumentation();
         mContext = mInstrumentation.getTargetContext();
-        ViewConfiguration viewConfiguration = ViewConfiguration.get(mContext);
+        final ViewConfiguration viewConfiguration = ViewConfiguration.get(mContext);
         mTouchSlop = viewConfiguration.getScaledTouchSlop();
-        InputMethodManager inputMethodManager = mContext.getSystemService(InputMethodManager.class);
+        final InputMethodManager inputMethodManager =
+                mContext.getSystemService(InputMethodManager.class);
         mHandwritingInitiator = new HandwritingInitiator(viewConfiguration, inputMethodManager);
     }
 
@@ -185,6 +189,7 @@ public class HandwritingInitiatorPerfTest {
 
     @Test
     public void onInputConnectionCreated() {
+        assumeFalse(initiationWithoutInputConnection());
         final BenchmarkState state = mPerfStatusReporter.getBenchmarkState();
         final View view = new View(mContext);
         final EditorInfo editorInfo = new EditorInfo();
@@ -198,6 +203,7 @@ public class HandwritingInitiatorPerfTest {
 
     @Test
     public void onInputConnectionClosed() {
+        assumeFalse(initiationWithoutInputConnection());
         final BenchmarkState state = mPerfStatusReporter.getBenchmarkState();
         final View view = new View(mContext);
         while (state.keepRunning()) {

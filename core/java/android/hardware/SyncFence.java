@@ -16,6 +16,7 @@
 
 package android.hardware;
 
+import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
 import android.media.Image;
 import android.media.ImageWriter;
@@ -25,6 +26,8 @@ import android.os.Parcel;
 import android.os.ParcelFileDescriptor;
 import android.os.Parcelable;
 import android.os.SystemClock;
+
+import com.android.window.flags.Flags;
 
 import libcore.util.NativeAllocationRegistry;
 
@@ -87,8 +90,8 @@ public final class SyncFence implements AutoCloseable, Parcelable {
     // is well worth making.
     private final Runnable mCloser;
 
-    private SyncFence(@NonNull ParcelFileDescriptor wrapped) {
-        mNativePtr = nCreate(wrapped.detachFd());
+    private SyncFence(int fileDescriptor) {
+        mNativePtr = nCreate(fileDescriptor);
         mCloser = sRegistry.registerNativeAllocation(this, mNativePtr);
     }
 
@@ -121,6 +124,19 @@ public final class SyncFence implements AutoCloseable, Parcelable {
         }
     }
 
+    /**
+     * Creates a copy of the SyncFence from an existing one.
+     * Both fences must be closed() independently.
+     */
+    @FlaggedApi(Flags.FLAG_SDK_DESIRED_PRESENT_TIME)
+    public SyncFence(@NonNull SyncFence other) {
+        this(other.mNativePtr);
+
+        if (mNativePtr != 0) {
+            nIncRef(mNativePtr);
+        }
+    }
+
     private SyncFence() {
         mCloser = () -> {};
     }
@@ -136,14 +152,26 @@ public final class SyncFence implements AutoCloseable, Parcelable {
     }
 
     /**
-     * Create a new SyncFence wrapped around another descriptor. By default, all method calls are
-     * delegated to the wrapped descriptor.
+     * Create a new SyncFence wrapped around another {@link ParcelFileDescriptor}. By default, all
+     * method calls are delegated to the wrapped descriptor. This takes ownership of the
+     * {@link ParcelFileDescriptor}.
      *
      * @param wrapped The descriptor to be wrapped.
      * @hide
      */
     public static @NonNull SyncFence create(@NonNull ParcelFileDescriptor wrapped) {
-        return new SyncFence(wrapped);
+        return new SyncFence(wrapped.detachFd());
+    }
+
+    /**
+     * Create a new SyncFence wrapped around another descriptor. The returned {@link SyncFence}
+     * instance takes ownership of the file descriptor.
+     *
+     * @param fileDescriptor The descriptor to be wrapped.
+     * @hide
+     */
+    public static @NonNull SyncFence adopt(int fileDescriptor) {
+        return new SyncFence(fileDescriptor);
     }
 
     /**
@@ -300,4 +328,5 @@ public final class SyncFence implements AutoCloseable, Parcelable {
     private static native int nGetFd(long nPtr);
     private static native boolean nWait(long nPtr, long timeout);
     private static native long nGetSignalTime(long nPtr);
+    private static native void nIncRef(long nPtr);
 }

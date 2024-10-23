@@ -16,10 +16,10 @@
 
 package android.app;
 
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
@@ -27,8 +27,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.hardware.input.InputManager;
+import android.hardware.input.InputManagerGlobal;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -42,10 +44,13 @@ import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.TestLooperManager;
 import android.os.UserHandle;
+import android.os.UserManager;
 import android.util.AndroidRuntimeException;
 import android.util.Log;
+import android.view.Display;
 import android.view.IWindowManager;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
@@ -56,18 +61,18 @@ import android.view.ViewConfiguration;
 import android.view.Window;
 import android.view.WindowManagerGlobal;
 
-import com.android.internal.app.StorageScopesAppHooks;
 import com.android.internal.content.ReferrerIntent;
-import com.android.internal.gmscompat.GmsHooks;
 
 import java.io.File;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.concurrent.TimeoutException;
 
-import com.android.internal.util.ethereal.PixelPropsUtils;
+import com.android.internal.util.euclid.PixelPropsUtils;
 
 /**
  * Base class for implementing application instrumentation code.  When running
@@ -77,6 +82,7 @@ import com.android.internal.util.ethereal.PixelPropsUtils;
  * implementation is described to the system through an AndroidManifest.xml's
  * &lt;instrumentation&gt; tag.
  */
+@android.ravenwood.annotation.RavenwoodKeepPartialClass
 public class Instrumentation {
 
     /**
@@ -97,6 +103,12 @@ public class Instrumentation {
     private static final String TAG = "Instrumentation";
 
     private static final long CONNECT_TIMEOUT_MILLIS = 60_000;
+
+    private static final boolean VERBOSE = Log.isLoggable(TAG, Log.VERBOSE);
+
+    // If set, will print the stack trace for activity starts within the process
+    static final boolean DEBUG_START_ACTIVITY = Build.IS_DEBUGGABLE &&
+            SystemProperties.getBoolean("persist.wm.debug.start_activity", false);
 
     /**
      * @hide
@@ -124,6 +136,7 @@ public class Instrumentation {
     private UiAutomation mUiAutomation;
     private final Object mAnimationCompleteLock = new Object();
 
+    @android.ravenwood.annotation.RavenwoodKeep
     public Instrumentation() {
     }
 
@@ -134,6 +147,7 @@ public class Instrumentation {
      * reflection, but it will serve as noticeable discouragement from
      * doing such a thing.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     private void checkInstrumenting(String method) {
         // Check if we have an instrumentation context, as init should only get called by
         // the system in startup processes that are being instrumented.
@@ -148,6 +162,7 @@ public class Instrumentation {
      *
      * @hide
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public boolean isInstrumenting() {
         // Check if we have an instrumentation context, as init should only get called by
         // the system in startup processes that are being instrumented.
@@ -311,6 +326,7 @@ public class Instrumentation {
      * 
      * @see #getTargetContext
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public Context getContext() {
         return mInstrContext;
     }
@@ -335,6 +351,7 @@ public class Instrumentation {
      * 
      * @see #getContext
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public Context getTargetContext() {
         return mAppContext;
     }
@@ -395,7 +412,7 @@ public class Instrumentation {
     public void setInTouchMode(boolean inTouch) {
         try {
             IWindowManager.Stub.asInterface(
-                    ServiceManager.getService("window")).setInTouchMode(inTouch);
+                    ServiceManager.getService("window")).setInTouchModeOnAllDisplays(inTouch);
         } catch (RemoteException e) {
             // Shouldn't happen!
         }
@@ -474,6 +491,56 @@ public class Instrumentation {
         sr.waitForComplete();
     }
 
+    boolean isSdkSandboxAllowedToStartActivities() {
+        return Process.isSdkSandbox()
+                && mThread != null
+                && mThread.mBoundApplication != null
+                && mThread.mBoundApplication.isSdkInSandbox
+                && getContext() != null
+                && (getContext()
+                                .checkSelfPermission(
+                                        android.Manifest.permission
+                                                .START_ACTIVITIES_FROM_SDK_SANDBOX)
+                        == PackageManager.PERMISSION_GRANTED);
+    }
+
+    /**
+     * Activity name resolution for CTS-in-SdkSandbox tests requires some adjustments. Intents
+     * generated using {@link Context#getPackageName()} use the SDK sandbox package name in the
+     * component field instead of the test package name. An SDK-in-sandbox test attempting to launch
+     * an activity in the test package will encounter name resolution errors when resolving the
+     * activity name in the SDK sandbox package.
+     *
+     * <p>This function replaces the package name of the input intent component to allow activities
+     * belonging to a CTS-in-sandbox test to resolve correctly.
+     *
+     * @param intent the intent to modify to allow CTS-in-sandbox activity resolution.
+     */
+    private void adjustIntentForCtsInSdkSandboxInstrumentation(@NonNull Intent intent) {
+        if (mComponent != null
+                && intent.getComponent() != null
+                && getContext()
+                        .getPackageManager()
+                        .getSdkSandboxPackageName()
+                        .equals(intent.getComponent().getPackageName())) {
+            // Resolve the intent target for the test package, not for the sandbox package.
+            intent.setComponent(
+                    new ComponentName(
+                            mComponent.getPackageName(), intent.getComponent().getClassName()));
+        }
+        // We match the intent identifier against the running instrumentations for the sandbox.
+        intent.setIdentifier(mComponent.getPackageName());
+    }
+
+    private ActivityInfo resolveActivityInfoForCtsInSandbox(@NonNull Intent intent) {
+        adjustIntentForCtsInSdkSandboxInstrumentation(intent);
+        ActivityInfo ai = intent.resolveActivityInfo(getTargetContext().getPackageManager(), 0);
+        if (ai != null) {
+            ai.processName = mThread.getProcessName();
+        }
+        return ai;
+    }
+
     /**
      * Start a new activity and wait for it to begin running before returning.
      * In addition to being synchronous, this method as some semantic
@@ -525,14 +592,19 @@ public class Instrumentation {
      */
     @NonNull
     public Activity startActivitySync(@NonNull Intent intent, @Nullable Bundle options) {
+        if (DEBUG_START_ACTIVITY) {
+            Log.d(TAG, "startActivity: intent=" + intent + " options=" + options, new Throwable());
+        }
         validateNotAppThread();
 
         final Activity activity;
         synchronized (mSync) {
             intent = new Intent(intent);
 
-            ActivityInfo ai = intent.resolveActivityInfo(
-                getTargetContext().getPackageManager(), 0);
+            ActivityInfo ai =
+                    isSdkSandboxAllowedToStartActivities()
+                            ? resolveActivityInfoForCtsInSandbox(intent)
+                            : intent.resolveActivityInfo(getTargetContext().getPackageManager(), 0);
             if (ai == null) {
                 throw new RuntimeException("Unable to resolve activity for: " + intent);
             }
@@ -1129,8 +1201,42 @@ public class Instrumentation {
         newEvent.setTime(downTime, eventTime);
         newEvent.setSource(source);
         newEvent.setFlags(event.getFlags() | KeyEvent.FLAG_FROM_SYSTEM);
-        InputManager.getInstance().injectInputEvent(newEvent,
+        setDisplayIfNeeded(newEvent);
+
+        InputManagerGlobal.getInstance().injectInputEvent(newEvent,
                 InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH);
+    }
+
+    private void setDisplayIfNeeded(KeyEvent event) {
+        if (!UserManager.isVisibleBackgroundUsersEnabled()) {
+            return;
+        }
+        // In devices that support visible background users visible, the display id must be set to
+        // reflect the display the user was started visible on, otherwise the event would be sent to
+        // the main display (which would most likely fail the test).
+        int eventDisplayId = event.getDisplayId();
+        if (eventDisplayId != Display.INVALID_DISPLAY) {
+            if (VERBOSE) {
+                Log.v(TAG, "setDisplayIfNeeded(" + event + "): not changing display id as it's "
+                        + "explicitly set to " + eventDisplayId);
+            }
+            return;
+        }
+
+        UserManager userManager = mInstrContext.getSystemService(UserManager.class);
+        int userDisplayId = userManager.getMainDisplayIdAssignedToUser();
+        if (VERBOSE) {
+            Log.v(TAG, "setDisplayIfNeeded(" + event + "): eventDisplayId=" + eventDisplayId
+                    + ", user=" + mInstrContext.getUser() + ", userDisplayId=" + userDisplayId);
+        }
+        if (userDisplayId == Display.INVALID_DISPLAY) {
+            Log.e(TAG, "setDisplayIfNeeded(" + event + "): UserManager returned INVALID_DISPLAY as "
+                    + "display assigned to user " + mInstrContext.getUser());
+            return;
+
+        }
+
+        event.setDisplayId(userDisplayId);
     }
 
     /**
@@ -1196,7 +1302,7 @@ public class Instrumentation {
             }
 
             // Direct the injected event into windows owned by the instrumentation target.
-            InputManager.getInstance().injectInputEvent(
+            InputManagerGlobal.getInstance().injectInputEvent(
                     event, InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH, Process.myUid());
 
             if (syncAfter) {
@@ -1226,7 +1332,7 @@ public class Instrumentation {
         if (!event.isFromSource(InputDevice.SOURCE_CLASS_TRACKBALL)) {
             event.setSource(InputDevice.SOURCE_TRACKBALL);
         }
-        InputManager.getInstance().injectInputEvent(event,
+        InputManagerGlobal.getInstance().injectInputEvent(event,
                 InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH);
     }
 
@@ -1244,7 +1350,6 @@ public class Instrumentation {
     public Application newApplication(ClassLoader cl, String className, Context context)
             throws InstantiationException, IllegalAccessException, 
             ClassNotFoundException {
-        GmsCompat.maybeEnable(context);
         Application app = getFactory(context.getPackageName())
                 .instantiateApplication(cl, className);
         app.attach(context);
@@ -1265,7 +1370,6 @@ public class Instrumentation {
     static public Application newApplication(Class<?> clazz, Context context)
             throws InstantiationException, IllegalAccessException, 
             ClassNotFoundException {
-        GmsCompat.maybeEnable(context);
         Application app = (Application)clazz.newInstance();
         app.attach(context);
         String packageName = context.getPackageName();
@@ -1324,8 +1428,8 @@ public class Instrumentation {
                 info, title, parent, id,
                 (Activity.NonConfigurationInstances)lastNonConfigurationInstance,
                 new Configuration(), null /* referrer */, null /* voiceInteractor */,
-                null /* window */, null /* activityCallback */, null /*assistToken*/,
-                null /*shareableActivityToken*/);
+                null /* window */, null /* activityCallback */, null /* assistToken */,
+                null /* shareableActivityToken */, null /* initialCallerInfoAccessToken */);
         return activity;
     }
 
@@ -1525,7 +1629,51 @@ public class Instrumentation {
      * @param intent The new intent being received.
      */
     public void callActivityOnNewIntent(Activity activity, Intent intent) {
-        activity.performNewIntent(intent);
+        if (android.security.Flags.contentUriPermissionApis()) {
+            activity.performNewIntent(intent, new ComponentCaller(activity.getActivityToken(),
+                    /* callerToken */ null));
+        } else {
+            activity.performNewIntent(intent);
+        }
+    }
+
+    /**
+     * Same as {@link #callActivityOnNewIntent(Activity, Intent)}, but with an extra parameter for
+     * the {@link ComponentCaller} instance associated with the app that sent the intent.
+     *
+     * @param activity The activity receiving a new Intent.
+     * @param intent The new intent being received.
+     * @param caller The {@link ComponentCaller} instance that launched the activity with the new
+     *               intent.
+     */
+    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+    public void callActivityOnNewIntent(@NonNull Activity activity, @NonNull Intent intent,
+            @NonNull ComponentCaller caller) {
+        activity.performNewIntent(intent, caller);
+    }
+
+    /**
+     * @hide
+     */
+    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+    public void callActivityOnNewIntent(Activity activity, ReferrerIntent intent,
+            @NonNull ComponentCaller caller) {
+        internalCallActivityOnNewIntent(activity, intent, caller);
+    }
+
+    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+    private void internalCallActivityOnNewIntent(Activity activity, ReferrerIntent intent,
+            @NonNull ComponentCaller caller) {
+        final String oldReferrer = activity.mReferrer;
+        try {
+            if (intent != null) {
+                activity.mReferrer = intent.mReferrer;
+            }
+            Intent newIntent = intent != null ? new Intent(intent) : null;
+            callActivityOnNewIntent(activity, newIntent, caller);
+        } finally {
+            activity.mReferrer = oldReferrer;
+        }
     }
 
     /**
@@ -1533,14 +1681,19 @@ public class Instrumentation {
      */
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void callActivityOnNewIntent(Activity activity, ReferrerIntent intent) {
-        final String oldReferrer = activity.mReferrer;
-        try {
-            if (intent != null) {
-                activity.mReferrer = intent.mReferrer;
+        if (android.security.Flags.contentUriPermissionApis()) {
+            internalCallActivityOnNewIntent(activity, intent, new ComponentCaller(
+                    activity.getActivityToken(), /* callerToken */ null));
+        } else {
+            final String oldReferrer = activity.mReferrer;
+            try {
+                if (intent != null) {
+                    activity.mReferrer = intent.mReferrer;
+                }
+                callActivityOnNewIntent(activity, intent != null ? new Intent(intent) : null);
+            } finally {
+                activity.mReferrer = oldReferrer;
             }
-            callActivityOnNewIntent(activity, intent != null ? new Intent(intent) : null);
-        } finally {
-            activity.mReferrer = oldReferrer;
         }
     }
 
@@ -1809,10 +1962,18 @@ public class Instrumentation {
     public ActivityResult execStartActivity(
             Context who, IBinder contextThread, IBinder token, Activity target,
             Intent intent, int requestCode, Bundle options) {
+        if (DEBUG_START_ACTIVITY) {
+            Log.d(TAG, "startActivity: who=" + who + " source=" + target + " intent=" + intent
+                    + " requestCode=" + requestCode + " options=" + options, new Throwable());
+        }
+        Objects.requireNonNull(intent);
         IApplicationThread whoThread = (IApplicationThread) contextThread;
         Uri referrer = target != null ? target.onProvideReferrer() : null;
         if (referrer != null) {
             intent.putExtra(Intent.EXTRA_REFERRER, referrer);
+        }
+        if (isSdkSandboxAllowedToStartActivities()) {
+            adjustIntentForCtsInSdkSandboxInstrumentation(intent);
         }
         if (mActivityMonitors != null) {
             synchronized (mSync) {
@@ -1842,18 +2003,12 @@ public class Instrumentation {
         try {
             intent.migrateExtraStreamToClipData(who);
             intent.prepareToLeaveProcess(who);
-            StorageScopesAppHooks.maybeModifyActivityIntent(who, intent);
             int result = ActivityTaskManager.getService().startActivity(whoThread,
                     who.getOpPackageName(), who.getAttributionTag(), intent,
                     intent.resolveTypeIfNeeded(who.getContentResolver()), token,
                     target != null ? target.mEmbeddedID : null, requestCode, 0, null, options);
             notifyStartActivityResult(result, options);
             checkStartActivityResult(result, intent);
-
-            if (GmsCompat.isEnabled()) {
-                GmsHooks.onActivityStart(result, intent, requestCode, options);
-            }
-
         } catch (RemoteException e) {
             throw new RuntimeException("Failure from system", e);
         }
@@ -1891,7 +2046,24 @@ public class Instrumentation {
     public int execStartActivitiesAsUser(Context who, IBinder contextThread,
             IBinder token, Activity target, Intent[] intents, Bundle options,
             int userId) {
+        if (DEBUG_START_ACTIVITY) {
+            StringJoiner joiner = new StringJoiner(", ");
+            for (Intent i : intents) {
+                joiner.add(i.toString());
+            }
+            Log.d(TAG, "startActivities: who=" + who + " source=" + target + " userId=" + userId
+                    + " intents=[" + joiner + "] options=" + options, new Throwable());
+        }
+        Objects.requireNonNull(intents);
+        for (int i = intents.length - 1; i >= 0; i--) {
+            Objects.requireNonNull(intents[i]);
+        }
         IApplicationThread whoThread = (IApplicationThread) contextThread;
+        if (isSdkSandboxAllowedToStartActivities()) {
+            for (Intent intent : intents) {
+                adjustIntentForCtsInSdkSandboxInstrumentation(intent);
+            }
+        }
         if (mActivityMonitors != null) {
             synchronized (mSync) {
                 final int N = mActivityMonitors.size();
@@ -1939,34 +2111,43 @@ public class Instrumentation {
      * Like {@link #execStartActivity(android.content.Context, android.os.IBinder,
      * android.os.IBinder, String, android.content.Intent, int, android.os.Bundle)},
      * but for calls from a {@link Fragment}.
-     * 
+     *
      * @param who The Context from which the activity is being started.
      * @param contextThread The main thread of the Context from which the activity
      *                      is being started.
-     * @param token Internal token identifying to the system who is starting 
+     * @param token Internal token identifying to the system who is starting
      *              the activity; may be null.
-     * @param target Which element is performing the start (and thus receiving 
+     * @param target Which element is performing the start (and thus receiving
      *               any result).
      * @param intent The actual Intent to start.
-     * @param requestCode Identifier for this request's result; less than zero 
+     * @param requestCode Identifier for this request's result; less than zero
      *                    if the caller is not expecting a result.
-     * 
-     * @return To force the return of a particular result, return an 
+     *
+     * @return To force the return of a particular result, return an
      *         ActivityResult object containing the desired data; otherwise
      *         return null.  The default implementation always returns null.
-     *  
+     *
      * @throws android.content.ActivityNotFoundException
-     * 
+     *
      * @see Activity#startActivity(Intent)
      * @see Activity#startActivityForResult(Intent, int)
-     * 
+     *
      * {@hide}
      */
     @UnsupportedAppUsage
     public ActivityResult execStartActivity(
         Context who, IBinder contextThread, IBinder token, String target,
         Intent intent, int requestCode, Bundle options) {
+        if (DEBUG_START_ACTIVITY) {
+            Log.d(TAG, "startActivity: who=" + who + " target=" + target
+                    + " intent=" + intent + " requestCode=" + requestCode
+                    + " options=" + options, new Throwable());
+        }
+        Objects.requireNonNull(intent);
         IApplicationThread whoThread = (IApplicationThread) contextThread;
+        if (isSdkSandboxAllowedToStartActivities()) {
+            adjustIntentForCtsInSdkSandboxInstrumentation(intent);
+        }
         if (mActivityMonitors != null) {
             synchronized (mSync) {
                 final int N = mActivityMonitors.size();
@@ -2037,7 +2218,16 @@ public class Instrumentation {
     public ActivityResult execStartActivity(
             Context who, IBinder contextThread, IBinder token, String resultWho,
             Intent intent, int requestCode, Bundle options, UserHandle user) {
+        if (DEBUG_START_ACTIVITY) {
+            Log.d(TAG, "startActivity: who=" + who + " user=" + user + " intent=" + intent
+                    + " requestCode=" + requestCode + " resultWho=" + resultWho
+                    + " options=" + options, new Throwable());
+        }
+        Objects.requireNonNull(intent);
         IApplicationThread whoThread = (IApplicationThread) contextThread;
+        if (isSdkSandboxAllowedToStartActivities()) {
+            adjustIntentForCtsInSdkSandboxInstrumentation(intent);
+        }
         if (mActivityMonitors != null) {
             synchronized (mSync) {
                 final int N = mActivityMonitors.size();
@@ -2087,7 +2277,17 @@ public class Instrumentation {
             Context who, IBinder contextThread, IBinder token, Activity target,
             Intent intent, int requestCode, Bundle options,
             boolean ignoreTargetSecurity, int userId) {
+        if (DEBUG_START_ACTIVITY) {
+            Log.d(TAG, "startActivity: who=" + who + " source=" + target + " userId=" + userId
+                    + " intent=" + intent + " requestCode=" + requestCode
+                    + " ignoreTargetSecurity=" + ignoreTargetSecurity + " options=" + options,
+                    new Throwable());
+        }
+        Objects.requireNonNull(intent);
         IApplicationThread whoThread = (IApplicationThread) contextThread;
+        if (isSdkSandboxAllowedToStartActivities()) {
+            adjustIntentForCtsInSdkSandboxInstrumentation(intent);
+        }
         if (mActivityMonitors != null) {
             synchronized (mSync) {
                 final int N = mActivityMonitors.size();
@@ -2138,7 +2338,15 @@ public class Instrumentation {
     public void execStartActivityFromAppTask(
             Context who, IBinder contextThread, IAppTask appTask,
             Intent intent, Bundle options) {
+        if (DEBUG_START_ACTIVITY) {
+            Log.d(TAG, "startActivity: who=" + who + " intent=" + intent
+                    + " options=" + options, new Throwable());
+        }
+        Objects.requireNonNull(intent);
         IApplicationThread whoThread = (IApplicationThread) contextThread;
+        if (isSdkSandboxAllowedToStartActivities()) {
+            adjustIntentForCtsInSdkSandboxInstrumentation(intent);
+        }
         if (mActivityMonitors != null) {
             synchronized (mSync) {
                 final int N = mActivityMonitors.size();
@@ -2196,6 +2404,17 @@ public class Instrumentation {
      */
     final void basicInit(ActivityThread thread) {
         mThread = thread;
+    }
+
+    /**
+     * Only sets the Context up, keeps everything else null.
+     *
+     * @hide
+     */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public final void basicInit(Context context) {
+        mInstrContext = context;
+        mAppContext = context;
     }
 
     /** @hide */
@@ -2332,8 +2551,7 @@ public class Instrumentation {
                 return mUiAutomation;
             }
             if (mustCreateNewAutomation) {
-                mUiAutomation = new UiAutomation(getTargetContext().getMainLooper(),
-                        mUiAutomationConnection);
+                mUiAutomation = new UiAutomation(getTargetContext(), mUiAutomationConnection);
             } else {
                 mUiAutomation.disconnect();
             }
@@ -2341,10 +2559,13 @@ public class Instrumentation {
                 mUiAutomation.connect(flags);
                 return mUiAutomation;
             }
+            final long startUptime = SystemClock.uptimeMillis();
             try {
                 mUiAutomation.connectWithTimeout(flags, CONNECT_TIMEOUT_MILLIS);
                 return mUiAutomation;
             } catch (TimeoutException e) {
+                final long waited = SystemClock.uptimeMillis() - startUptime;
+                Log.e(TAG, "Unable to connect to UiAutomation. Waited for " + waited + " ms", e);
                 mUiAutomation.destroy();
                 mUiAutomation = null;
             }
@@ -2356,6 +2577,7 @@ public class Instrumentation {
      * Takes control of the execution of messages on the specified looper until
      * {@link TestLooperManager#release} is called.
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public TestLooperManager acquireLooperManager(Looper looper) {
         checkInstrumenting("acquireLooperManager");
         return new TestLooperManager(looper);

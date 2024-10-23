@@ -27,7 +27,6 @@ import android.os.Parcelable;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -58,6 +57,9 @@ public final class CallAudioState implements Parcelable {
     /** Direct the audio stream through the device's speakerphone. */
     public static final int ROUTE_SPEAKER       = 0x00000008;
 
+    /** Direct the audio stream through another device. */
+    public static final int ROUTE_STREAMING     = 0x00000010;
+
     /**
      * Direct the audio stream through the device's earpiece or wired headset if one is
      * connected.
@@ -70,7 +72,7 @@ public final class CallAudioState implements Parcelable {
      * @hide
      **/
     public static final int ROUTE_ALL = ROUTE_EARPIECE | ROUTE_BLUETOOTH | ROUTE_WIRED_HEADSET |
-            ROUTE_SPEAKER;
+            ROUTE_SPEAKER | ROUTE_STREAMING;
 
     private final boolean isMuted;
     private final int route;
@@ -189,6 +191,20 @@ public final class CallAudioState implements Parcelable {
      */
     @CallAudioRoute
     public int getSupportedRouteMask() {
+        if (route == ROUTE_STREAMING) {
+            return ROUTE_STREAMING;
+        } else {
+            return supportedRouteMask;
+        }
+    }
+
+    /**
+     * @return Bit mask of all routes supported by this call, won't be changed by streaming state.
+     *
+     * @hide
+     */
+    @CallAudioRoute
+    public int getRawSupportedRouteMask() {
         return supportedRouteMask;
     }
 
@@ -231,6 +247,9 @@ public final class CallAudioState implements Parcelable {
         }
         if ((route & ROUTE_SPEAKER) == ROUTE_SPEAKER) {
             listAppend(buffer, "SPEAKER");
+        }
+        if ((route & ROUTE_STREAMING) == ROUTE_STREAMING) {
+            listAppend(buffer, "STREAMING");
         }
 
         return buffer.toString();

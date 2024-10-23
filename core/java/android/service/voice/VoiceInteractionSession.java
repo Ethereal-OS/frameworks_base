@@ -16,14 +16,18 @@
 
 package android.service.voice;
 
+import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 
 import android.annotation.CallbackExecutor;
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.TestApi;
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.app.Dialog;
 import android.app.DirectAction;
 import android.app.Instrumentation;
@@ -39,6 +43,7 @@ import android.content.res.TypedArray;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.graphics.Region;
+import android.hardware.display.DisplayManager;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.CancellationSignal;
@@ -49,6 +54,7 @@ import android.os.Message;
 import android.os.RemoteCallback;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.service.voice.flags.Flags;
 import android.util.ArrayMap;
 import android.util.DebugUtils;
 import android.util.Log;
@@ -86,12 +92,12 @@ import java.util.function.Consumer;
 
 /**
  * An active voice interaction session, providing a facility for the implementation
- * to interact with the user in the voice interaction layer.  The user interface is
- * initially shown by default, and can be created be overriding {@link #onCreateContentView()}
+ * to interact with the user in the voice interaction layer. The user interface is
+ * initially shown by default, and can be created by overriding {@link #onCreateContentView()}
  * in which the UI can be built.
  *
  * <p>A voice interaction session can be self-contained, ultimately calling {@link #finish}
- * when done.  It can also initiate voice interactions with applications by calling
+ * when done. It can also initiate voice interactions with applications by calling
  * {@link #startVoiceActivity}</p>.
  */
 public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCallbacks2 {
@@ -165,6 +171,31 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface VoiceInteractionActivityEventType{}
+
+    /**
+     * Bundle key used to specify the id when the system prepares to show session. It increases for
+     * each request.
+     * <p>
+     * Type: int
+     * </p>
+     * @see VoiceInteractionService#showSession(Bundle, int)
+     * @see VoiceInteractionService#onPrepareToShowSession(Bundle, int)
+     * @see VoiceInteractionService#onShowSessionFailed(Bundle)
+     * @see #onShow(Bundle, int)
+     * @see #show(Bundle, int)
+     */
+    public static final String KEY_SHOW_SESSION_ID = "android.service.voice.SHOW_SESSION_ID";
+
+    /**
+     * Bundle key used to specify foreground activity app components.
+     * <p>
+     * Type: ArrayList&ltComponentName&gt
+     * </p>
+     * @see #onShow(Bundle, int)
+     */
+    @FlaggedApi(Flags.FLAG_ALLOW_FOREGROUND_ACTIVITIES_IN_ON_SHOW)
+    public static final String KEY_FOREGROUND_ACTIVITIES =
+            "android.service.voice.FOREGROUND_ACTIVITIES";
 
     final Context mContext;
     final HandlerCaller mHandlerCaller;
@@ -1068,13 +1099,31 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
     }
 
     public VoiceInteractionSession(Context context, Handler handler) {
-        mContext = context;
         mHandlerCaller = new HandlerCaller(context, handler.getLooper(),
                 mCallbacks, true);
+        mContext = createWindowContextIfNeeded(context);
     }
 
     public Context getContext() {
         return mContext;
+    }
+
+    private Context createWindowContextIfNeeded(Context context) {
+        try {
+            if (!context.isUiContext()) {
+                DisplayManager displayManager = context.getSystemService(DisplayManager.class);
+                if (displayManager != null) {
+                    return context.createWindowContext(
+                            displayManager.getDisplay(DEFAULT_DISPLAY),
+                            WindowManager.LayoutParams.TYPE_VOICE_INTERACTION,
+                            /* options= */ null);
+                }
+            }
+            return context;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Fail to createWindowContext, Exception = " + e);
+            return context;
+        }
     }
 
     void addRequest(Request req) {
@@ -1390,7 +1439,8 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
             throw new IllegalStateException("Can't call before onCreate()");
         }
         try {
-            mSystemService.showSessionFromSession(mToken, args, flags);
+            mSystemService.showSessionFromSession(mToken, args, flags,
+                    mContext.getAttributionTag());
         } catch (RemoteException e) {
         }
     }
@@ -1491,8 +1541,34 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
      * <p>By default, the system will create a window for the UI for this session.  If you are using
      * an assistant activity instead, then you can disable the window creation by calling
      * {@link #setUiEnabled} in {@link #onPrepareShow(Bundle, int)}.</p>
+     *
+     * NOTE: if the app would like to override some options to start the Activity,
+     * use {@link #startAssistantActivity(Intent, Bundle)} instead.
      */
     public void startAssistantActivity(Intent intent) {
+        startAssistantActivity(intent, ActivityOptions.makeBasic().toBundle());
+    }
+
+    /**
+     * <p>Ask that a new assistant activity be started.  This will create a new task in the
+     * in activity manager: this means that
+     * {@link Intent#FLAG_ACTIVITY_NEW_TASK Intent.FLAG_ACTIVITY_NEW_TASK}
+     * will be set for you to make it a new task.</p>
+     *
+     * <p>The newly started activity will be displayed on top of other activities in the system
+     * in a new layer that is not affected by multi-window mode.  Tasks started from this activity
+     * will go into the normal activity layer and not this new layer.</p>
+     *
+     * <p>By default, the system will create a window for the UI for this session.  If you are using
+     * an assistant activity instead, then you can disable the window creation by calling
+     * {@link #setUiEnabled} in {@link #onPrepareShow(Bundle, int)}.</p>
+     *
+     * @param intent the intent used to start an assistant activity
+     * @param bundle Additional options for how the Activity should be started. See
+     * {@link ActivityOptions} for how to build the Bundle supplied here.
+     */
+    public void startAssistantActivity(@NonNull Intent intent, @NonNull Bundle bundle) {
+        Objects.requireNonNull(bundle);
         if (mToken == null) {
             throw new IllegalStateException("Can't call before onCreate()");
         }
@@ -1501,7 +1577,7 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
             intent.prepareToLeaveProcess(mContext);
             int res = mSystemService.startAssistantActivity(mToken, intent,
                     intent.resolveType(mContext.getContentResolver()),
-                    mContext.getAttributionTag());
+                    mContext.getAttributionTag(), bundle);
             Instrumentation.checkStartActivityResult(res, intent);
         } catch (RemoteException e) {
         }
@@ -1553,7 +1629,7 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
                     list = Collections.emptyList();
                 } else {
                     final ParceledListSlice<DirectAction> pls = result.getParcelable(
-                            DirectAction.KEY_ACTIONS_LIST);
+                            DirectAction.KEY_ACTIONS_LIST, android.content.pm.ParceledListSlice.class);
                     if (pls != null) {
                         final List<DirectAction> receivedList = pls.getList();
                         list = (receivedList != null) ? receivedList : Collections.emptyList();
@@ -1740,15 +1816,43 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
      *
      * @param args The arguments that were supplied to
      * {@link VoiceInteractionService#showSession VoiceInteractionService.showSession}.
-     * Some example keys include : "invocation_type", "invocation_phone_state",
-     * "invocation_time_ms", Intent.EXTRA_TIME ("android.intent.extra.TIME") indicating timing
-     * in milliseconds of the KeyEvent that triggered Assistant and
-     * Intent.EXTRA_ASSIST_INPUT_DEVICE_ID (android.intent.extra.ASSIST_INPUT_DEVICE_ID)
-     *  referring to the device that sent the request.
+     * Some example keys include :
+     * <ul>
+     *     <li>
+     *         invocation_type
+     *     </li>
+     *     <li>
+     *         invocation_phone_state
+     *     </li>
+     *     <li>
+     *         {@link #KEY_SHOW_SESSION_ID}
+     *     </li>
+     *     <li>
+     *         invocation_time_ms
+     *     </li>
+     *     <li>
+     *         Intent.EXTRA_TIME ("android.intent.extra.TIME") indicating timing in milliseconds of
+     *         the KeyEvent that triggered Assistant
+     *     </li>
+     *     <li>
+     *         Intent.EXTRA_ASSIST_INPUT_DEVICE_ID (android.intent.extra.ASSIST_INPUT_DEVICE_ID)
+     *         referring to the device that sent the request
+     *     </li>
+     *     <li>
+     *         {@link #KEY_FOREGROUND_ACTIVITIES} provides foreground activities of up coming
+     *         onHandleAssist/onHandleScreenshot calls earlier. This is only populated if session
+     *         was requested with {@link VoiceInteractionSession.SHOW_WITH_ASSIST} show flag.
+     *     </li>
+     *     <li>
+     *         Starting from Android 14, the system will add {@link #KEY_SHOW_SESSION_ID}, the
+     *         Bundle is not null. But the application should handle null case before Android 14.
+     *     </li>
+     * </ul>
+     *
      * @param showFlags The show flags originally provided to
      * {@link VoiceInteractionService#showSession VoiceInteractionService.showSession}.
      */
-    public void onShow(Bundle args, int showFlags) {
+    public void onShow(@Nullable Bundle args, int showFlags) {
     }
 
     /**
@@ -2290,11 +2394,15 @@ public class VoiceInteractionSession implements KeyEvent.Callback, ComponentCall
             mAssistToken = assistToken;
         }
 
-        int getTaskId() {
+        /** @hide */
+        @TestApi
+        public int getTaskId() {
             return mTaskId;
         }
 
-        IBinder getAssistToken() {
+        /** @hide */
+        @TestApi
+        @NonNull public IBinder getAssistToken() {
             return mAssistToken;
         }
 

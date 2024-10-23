@@ -46,9 +46,10 @@ import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
-import com.android.systemui.plugins.qs.QSTile.LiveDisplayState;
+import com.android.systemui.plugins.qs.QSTile;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 
@@ -59,7 +60,7 @@ import com.android.internal.R;
 /**
  * Quick settings tile: LiveDisplay mode switcher
  **/
-public class LiveDisplayTile extends QSTileImpl<LiveDisplayState> {
+public class LiveDisplayTile extends QSTileImpl<QSTile.LiveDisplayState> {
 
     public static final String TILE_SPEC = "livedisplay";
 
@@ -87,6 +88,7 @@ public class LiveDisplayTile extends QSTileImpl<LiveDisplayState> {
     @Inject
     public LiveDisplayTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -94,7 +96,7 @@ public class LiveDisplayTile extends QSTileImpl<LiveDisplayState> {
             StatusBarStateController statusBarStateController,
             ActivityStarter activityStarter,
             QSLogger qsLogger) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
         mNightDisplayAvailable = ColorDisplayManager.isNightDisplayAvailable(mContext);
 
@@ -171,7 +173,7 @@ public class LiveDisplayTile extends QSTileImpl<LiveDisplayState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.ETHEREAL;
+        return MetricsEvent.GEOMETRICS;
     }
 
     @Override

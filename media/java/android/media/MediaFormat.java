@@ -16,6 +16,12 @@
 
 package android.media;
 
+import static android.media.codec.Flags.FLAG_IN_PROCESS_SW_AUDIO_CODEC;
+
+import static com.android.media.codec.flags.Flags.FLAG_CODEC_IMPORTANCE;
+import static com.android.media.codec.flags.Flags.FLAG_LARGE_AUDIO_FRAME;
+
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -118,6 +124,10 @@ import java.util.stream.Collectors;
  * <tr><td>{@link #KEY_MPEGH_REFERENCE_CHANNEL_LAYOUT}</td>
  *     <td>Integer</td><td><b>decoder-only</b>, optional, if content is MPEG-H audio,
  *         specifies the preferred reference channel layout of the stream.</td></tr>
+ * <tr><td>{@link #KEY_MAX_BUFFER_BATCH_OUTPUT_SIZE}</td><td>Integer</td><td>optional, used with
+ *         large audio frame support, specifies max size of output buffer in bytes.</td></tr>
+ * <tr><td>{@link #KEY_BUFFER_BATCH_THRESHOLD_OUTPUT_SIZE}</td><td>Integer</td><td>optional,
+ *         used with large audio frame support, specifies threshold output size in bytes.</td></tr>
  * </table>
  *
  * Subtitle formats have the following keys:
@@ -174,11 +184,20 @@ public final class MediaFormat {
     public static final String MIMETYPE_AUDIO_MPEGH_MHA1 = "audio/mha1";
     /** MIME type for MPEG-H Audio single stream, encapsulated in MHAS */
     public static final String MIMETYPE_AUDIO_MPEGH_MHM1 = "audio/mhm1";
-    /** MIME type for DTS (up to 5.1 channels) audio stream. */
+    /** MIME type for DTS Digital Surround (up to 5.1 channels) audio stream, aka DTS-CA. */
     public static final String MIMETYPE_AUDIO_DTS = "audio/vnd.dts";
-    /** MIME type for DTS HD (up to 7.1 channels) audio stream. */
+    /**
+     * MIME type for DTS HD (up to 7.1 channels) audio stream.
+     * With codec profile DTS_HDProfileHRA represents DTS HD High Resolution Audio.
+     * With codec profile DTS_HDProfileMA represents DTS HD Master Audio.
+     * With codec profile DTS_HDProfileLBR represents DTS Express.
+     */
     public static final String MIMETYPE_AUDIO_DTS_HD = "audio/vnd.dts.hd";
-    /** MIME type for DTS UHD (object-based) audio stream. */
+    /**
+     * MIME type for DTS UHD (object-based) audio stream, aka DTS:X.
+     * With codec profile DTS_UHDProfileP1 represents DTS-UHD P1.
+     * With codec profile DTS_UHDProfileP2 represents DTS-UHD P2.
+     */
     public static final String MIMETYPE_AUDIO_DTS_UHD = "audio/vnd.dts.uhd";
     /** MIME type for Dynamic Resolution Adaptation (DRA) audio stream. */
     public static final String MIMETYPE_AUDIO_DRA = "audio/vnd.dra";
@@ -242,13 +261,14 @@ public final class MediaFormat {
      * To decode such an image, {@link MediaCodec} decoder for
      * {@link #MIMETYPE_VIDEO_HEVC} shall be used. The client needs to form
      * the correct {@link #MediaFormat} based on additional information in
-     * the track format, and send it to {@link MediaCodec#configure}.
+     * the track format (shown in the next paragraph), and send it to
+     * {@link MediaCodec#configure}.
      *
      * The track's MediaFormat will come with {@link #KEY_WIDTH} and
      * {@link #KEY_HEIGHT} keys, which describes the width and height
      * of the image. If the image doesn't contain grid (i.e. none of
      * {@link #KEY_TILE_WIDTH}, {@link #KEY_TILE_HEIGHT},
-     * {@link #KEY_GRID_ROWS}, {@link #KEY_GRID_COLUMNS} are present}), the
+     * {@link #KEY_GRID_ROWS}, {@link #KEY_GRID_COLUMNS} are present), the
      * track will contain a single sample of coded data for the entire image,
      * and the image width and height should be used to set up the decoder.
      *
@@ -264,6 +284,36 @@ public final class MediaFormat {
      * side, if the tiled area is larger than the image width and height.
      */
     public static final String MIMETYPE_IMAGE_ANDROID_HEIC = "image/vnd.android.heic";
+
+    /**
+     * MIME type for AVIF still image data encoded in AV1.
+     *
+     * To decode such an image, {@link MediaCodec} decoder for
+     * {@link #MIMETYPE_VIDEO_AV1} shall be used. The client needs to form
+     * the correct {@link #MediaFormat} based on additional information in
+     * the track format (shown in the next paragraph), and send it to
+     * {@link MediaCodec#configure}.
+     *
+     * The track's MediaFormat will come with {@link #KEY_WIDTH} and
+     * {@link #KEY_HEIGHT} keys, which describes the width and height
+     * of the image. If the image doesn't contain grid (i.e. none of
+     * {@link #KEY_TILE_WIDTH}, {@link #KEY_TILE_HEIGHT},
+     * {@link #KEY_GRID_ROWS}, {@link #KEY_GRID_COLUMNS} are present), the
+     * track will contain a single sample of coded data for the entire image,
+     * and the image width and height should be used to set up the decoder.
+     *
+     * If the image does come with grid, each sample from the track will
+     * contain one tile in the grid, of which the size is described by
+     * {@link #KEY_TILE_WIDTH} and {@link #KEY_TILE_HEIGHT}. This size
+     * (instead of {@link #KEY_WIDTH} and {@link #KEY_HEIGHT}) should be
+     * used to set up the decoder. The track contains {@link #KEY_GRID_ROWS}
+     * by {@link #KEY_GRID_COLUMNS} samples in row-major, top-row first,
+     * left-to-right order. The output image should be reconstructed by
+     * first tiling the decoding results of the tiles in the correct order,
+     * then trimming (before rotation is applied) on the bottom and right
+     * side, if the tiled area is larger than the image width and height.
+     */
+    public static final String MIMETYPE_IMAGE_AVIF = "image/avif";
 
     /**
      * MIME type for WebVTT subtitle data.
@@ -291,9 +341,10 @@ public final class MediaFormat {
     /**
      * A key describing the log session ID for MediaCodec. The log session ID is a random 32-byte
      * hexadecimal string that is used to associate metrics from multiple media codec instances
-     * to the same playback or recording session.
+     * to the same playback or recording session. The value is created as
+     * {@link android.media.metrics.LogSessionId LogSessionId}. Sessions are created in
+     * {@link android.media.metrics.MediaMetricsManager MediaMetricsManager}.
      * The associated value is a string.
-     * @hide
      */
     public static final String LOG_SESSION_ID = "log-session-id";
 
@@ -415,6 +466,50 @@ public final class MediaFormat {
     public static final String KEY_MAX_INPUT_SIZE = "max-input-size";
 
     /**
+     * A key describing the maximum output buffer size in bytes when using
+     * large buffer mode containing multiple access units.
+     *
+     * When not-set - codec functions with one access-unit per frame.
+     * When set less than the size of two access-units - will make codec
+     * operate in single access-unit per output frame.
+     * When set to a value too big - The component or the framework will
+     * override this value to a reasonable max size not exceeding typical
+     * 10 seconds of data (device dependent) when set to a value larger than
+     * that. The value final value used will be returned in the output format.
+     *
+     * The associated value is an integer
+     *
+     * @see FEATURE_MultipleFrames
+     */
+    @FlaggedApi(FLAG_LARGE_AUDIO_FRAME)
+    public static final String KEY_BUFFER_BATCH_MAX_OUTPUT_SIZE = "buffer-batch-max-output-size";
+
+    /**
+     * A key describing the threshold output size in bytes when using large buffer
+     * mode containing multiple access units.
+     *
+     * This is an optional parameter.
+     *
+     * If not set - the component can set this to a reasonable value.
+     * If set larger than max size, the components will
+     * clip this setting to maximum buffer batching output size.
+     *
+     * The component will return a partial output buffer if the output buffer reaches or
+     * surpass this limit.
+     *
+     * Threshold size should be always less or equal to KEY_MAX_BUFFER_BATCH_OUTPUT_SIZE.
+     * The final setting of this value as determined by the component will be returned
+     * in the output format
+     *
+     * The associated value is an integer
+     *
+     * @see FEATURE_MultipleFrames
+     */
+    @FlaggedApi(FLAG_LARGE_AUDIO_FRAME)
+    public static final String KEY_BUFFER_BATCH_THRESHOLD_OUTPUT_SIZE =
+            "buffer-batch-threshold-output-size";
+
+    /**
      * A key describing the pixel aspect ratio width.
      * The associated value is an integer
      */
@@ -484,9 +579,11 @@ public final class MediaFormat {
 
     /**
      * A key describing the width (in pixels) of each tile of the content in a
-     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} track. The associated value is an integer.
+     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} track.
+     * The associated value is an integer.
      *
-     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} on decoding instructions of such tracks.
+     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} on decoding
+     * instructions of such tracks.
      *
      * @see #KEY_TILE_HEIGHT
      * @see #KEY_GRID_ROWS
@@ -496,9 +593,11 @@ public final class MediaFormat {
 
     /**
      * A key describing the height (in pixels) of each tile of the content in a
-     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} track. The associated value is an integer.
+     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} track.
+     * The associated value is an integer.
      *
-     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} on decoding instructions of such tracks.
+     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} on decoding
+     * instructions of such tracks.
      *
      * @see #KEY_TILE_WIDTH
      * @see #KEY_GRID_ROWS
@@ -508,9 +607,11 @@ public final class MediaFormat {
 
     /**
      * A key describing the number of grid rows in the content in a
-     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} track. The associated value is an integer.
+     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} track.
+     * The associated value is an integer.
      *
-     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} on decoding instructions of such tracks.
+     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} on decoding
+     * instructions of such tracks.
      *
      * @see #KEY_TILE_WIDTH
      * @see #KEY_TILE_HEIGHT
@@ -520,9 +621,11 @@ public final class MediaFormat {
 
     /**
      * A key describing the number of grid columns in the content in a
-     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} track. The associated value is an integer.
+     * {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} track.
+     * The associated value is an integer.
      *
-     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} on decoding instructions of such tracks.
+     * Refer to {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} on decoding
+     * instructions of such tracks.
      *
      * @see #KEY_TILE_WIDTH
      * @see #KEY_TILE_HEIGHT
@@ -1087,11 +1190,14 @@ public final class MediaFormat {
      * may fail if other parameters are not compatible with the desired
      * profile or if the desired profile is not supported, but it may also
      * fail silently (where the encoder ends up using a different, compatible profile.)
+     * <p>
+     * It is recommended that the profile is set for all encoders. For more information, see
+     * the <i>Encoder Profiles</i> section of the {@link MediaCodec} API reference.
      * <p class="note">
      * <strong>Note:</strong> Codecs are free to use all the available
      * coding tools at the specified profile, but may ultimately choose to not do so.
      * <p class="note">
-     * <strong>Note:</strong> When configuring video encoders, profile must be
+     * <strong>Note:</strong> When configuring video encoders, profile (if set) must be
      * set together with {@link #KEY_LEVEL level}.
      *
      * @see MediaCodecInfo.CodecCapabilities#profileLevels
@@ -1161,7 +1267,7 @@ public final class MediaFormat {
 
     /**
      * A key describing the desired bitrate mode to be used by an encoder.
-     * Constants are declared in {@link MediaCodecInfo.CodecCapabilities}.
+     * Constants are declared in {@link MediaCodecInfo.EncoderCapabilities}.
      *
      * @see MediaCodecInfo.EncoderCapabilities#isBitrateModeSupported(int)
      */
@@ -1349,9 +1455,9 @@ public final class MediaFormat {
      * selected in the absence of a specific user choice.
      * This is currently used in two scenarios:
      * 1) for subtitle tracks, when the user selected 'Default' for the captioning locale.
-     * 2) for a {@link #MIMETYPE_IMAGE_ANDROID_HEIC} track, indicating the image is the
-     * primary item in the file.
-
+     * 2) for a {@link #MIMETYPE_IMAGE_ANDROID_HEIC} / {@link #MIMETYPE_IMAGE_AVIF} track,
+     * indicating the image is the primary item in the file.
+     *
      * The associated value is an integer, where non-0 means TRUE.  This is an optional
      * field; if not specified, DEFAULT is considered to be FALSE.
      */
@@ -1582,6 +1688,86 @@ public final class MediaFormat {
      * {@link MediaCodec} describes the semantics.
      */
     public static final String KEY_ALLOW_FRAME_DROP = "allow-frame-drop";
+
+    /**
+     * A key describing the desired codec importance for the application.
+     * <p>
+     * The associated value is a positive integer including zero.
+     * Higher value means lesser importance.
+     * <p>
+     * The resource manager may use the codec importance, along with other factors
+     * when reclaiming codecs from an application.
+     * The specifics of reclaim policy is device dependent, but specifying the codec importance,
+     * will allow the resource manager to prioritize reclaiming less important codecs
+     * (assigned higher values) from the (reclaim) requesting application first.
+     * So, the codec importance is only relevant within the context of that application.
+     * <p>
+     * The codec importance can be set:
+     * <ul>
+     * <li>through {@link MediaCodec#configure}. </li>
+     * <li>through {@link MediaCodec#setParameters} if the codec has been configured already,
+     * which allows the users to change the codec importance multiple times.
+     * </ul>
+     * Any change/update in codec importance is guaranteed upon the completion of the function call
+     * that sets the codec importance. So, in case of concurrent codec operations,
+     * make sure to wait for the change in codec importance, before using another codec.
+     * Note that unless specified, by default the codecs will have highest importance (of value 0).
+     *
+     */
+    @FlaggedApi(FLAG_CODEC_IMPORTANCE)
+    public static final String KEY_IMPORTANCE = "importance";
+
+    /** @hide */
+    @IntDef(flag = true, prefix = {"FLAG_SECURITY_MODEL_"}, value = {
+        FLAG_SECURITY_MODEL_SANDBOXED,
+        FLAG_SECURITY_MODEL_MEMORY_SAFE,
+        FLAG_SECURITY_MODEL_TRUSTED_CONTENT_ONLY,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface SecurityModelFlag {}
+
+    /**
+     * Flag for {@link MediaCodecInfo#SECURITY_MODEL_SANDBOXED}.
+     */
+    @FlaggedApi(FLAG_IN_PROCESS_SW_AUDIO_CODEC)
+    public static final int FLAG_SECURITY_MODEL_SANDBOXED =
+            (1 << MediaCodecInfo.SECURITY_MODEL_SANDBOXED);
+    /**
+     * Flag for {@link MediaCodecInfo#SECURITY_MODEL_MEMORY_SAFE}.
+     */
+    @FlaggedApi(FLAG_IN_PROCESS_SW_AUDIO_CODEC)
+    public static final int FLAG_SECURITY_MODEL_MEMORY_SAFE =
+            (1 << MediaCodecInfo.SECURITY_MODEL_MEMORY_SAFE);
+    /**
+     * Flag for {@link MediaCodecInfo#SECURITY_MODEL_TRUSTED_CONTENT_ONLY}.
+     */
+    @FlaggedApi(FLAG_IN_PROCESS_SW_AUDIO_CODEC)
+    public static final int FLAG_SECURITY_MODEL_TRUSTED_CONTENT_ONLY =
+            (1 << MediaCodecInfo.SECURITY_MODEL_TRUSTED_CONTENT_ONLY);
+
+    /**
+     * A key describing the requested security model as flags.
+     * <p>
+     * The associated value is a flag of the following values:
+     * {@link FLAG_SECURITY_MODEL_SANDBOXED},
+     * {@link FLAG_SECURITY_MODEL_MEMORY_SAFE},
+     * {@link FLAG_SECURITY_MODEL_TRUSTED_CONTENT_ONLY}. The default value is
+     * {@link FLAG_SECURITY_MODEL_SANDBOXED}.
+     * <p>
+     * When passed to {@link MediaCodecList#findDecoderForFormat} or
+     * {@link MediaCodecList#findEncoderForFormat}, MediaCodecList filters
+     * the security model of the codecs according to this flag value.
+     * <p>
+     * When passed to {@link MediaCodec#configure}, MediaCodec verifies
+     * the security model matches the flag value passed, and throws
+     * {@link java.lang.IllegalArgumentException} if the model does not match.
+     * <p>
+     * @see MediaCodecInfo#getSecurityModel
+     * @see MediaCodecList#findDecoderForFormat
+     * @see MediaCodecList#findEncoderForFormat
+     */
+    @FlaggedApi(FLAG_IN_PROCESS_SW_AUDIO_CODEC)
+    public static final String KEY_SECURITY_MODEL = "security-model";
 
     /* package private */ MediaFormat(@NonNull Map<String, Object> map) {
         mMap = map;

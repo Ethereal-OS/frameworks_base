@@ -26,7 +26,6 @@ import android.app.ActivityManager;
 import android.app.DownloadManager;
 import android.app.SearchManager;
 import android.app.admin.DevicePolicyManager;
-import android.companion.CompanionDeviceManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
@@ -34,7 +33,6 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.PackageManagerInternal;
-import android.content.pm.PackageParser;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
@@ -63,19 +61,19 @@ import android.util.ArraySet;
 import android.util.Log;
 import android.util.Slog;
 import android.util.SparseArray;
-import android.util.TypedXmlPullParser;
 import android.util.Xml;
 
 import com.android.internal.R;
-import com.android.internal.gmscompat.GmsCompatApp;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.XmlUtils;
-import com.android.internal.util.aicp.OmniJawsClient;
+import com.android.modules.utils.TypedXmlPullParser;
 import com.android.server.LocalServices;
 import com.android.server.ServiceThread;
 import com.android.server.pm.KnownPackages;
 import com.android.server.pm.permission.LegacyPermissionManagerInternal.PackagesProvider;
 import com.android.server.pm.permission.LegacyPermissionManagerInternal.SyncAdapterPackagesProvider;
+
+import libcore.util.HexEncoding;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -89,6 +87,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -128,6 +127,7 @@ final class DefaultPermissionGrantPolicy {
     private static final String ATTR_NAME = "name";
     private static final String ATTR_FIXED = "fixed";
     private static final String ATTR_WHITELISTED = "whitelisted";
+    private static final String ATTR_CERT = "cert";
 
     private static final Set<String> PHONE_PERMISSIONS = new ArraySet<>();
 
@@ -166,6 +166,11 @@ final class DefaultPermissionGrantPolicy {
     static {
         COARSE_BACKGROUND_LOCATION_PERMISSIONS.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         COARSE_BACKGROUND_LOCATION_PERMISSIONS.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION);
+    }
+
+    private static final Set<String> FINE_LOCATION_PERMISSIONS = new ArraySet<>();
+    static {
+        FINE_LOCATION_PERMISSIONS.add(Manifest.permission.ACCESS_FINE_LOCATION);
     }
 
     private static final Set<String> ACTIVITY_RECOGNITION_PERMISSIONS = new ArraySet<>();
@@ -213,6 +218,7 @@ final class DefaultPermissionGrantPolicy {
         STORAGE_PERMISSIONS.add(Manifest.permission.READ_MEDIA_AUDIO);
         STORAGE_PERMISSIONS.add(Manifest.permission.READ_MEDIA_VIDEO);
         STORAGE_PERMISSIONS.add(Manifest.permission.READ_MEDIA_IMAGES);
+        STORAGE_PERMISSIONS.add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED);
     }
 
     private static final Set<String> NEARBY_DEVICES_PERMISSIONS = new ArraySet<>();
@@ -227,6 +233,11 @@ final class DefaultPermissionGrantPolicy {
     private static final Set<String> NOTIFICATION_PERMISSIONS = new ArraySet<>();
     static {
         NOTIFICATION_PERMISSIONS.add(Manifest.permission.POST_NOTIFICATIONS);
+    }
+
+    private static final Set<String> SUSPEND_APP_PERMISSIONS = new ArraySet<>();
+    static {
+        SUSPEND_APP_PERMISSIONS.add(Manifest.permission.SUSPEND_APPS);
     }
 
     private static final int MSG_READ_DEFAULT_PERMISSION_EXCEPTIONS = 1;
@@ -462,21 +473,25 @@ final class DefaultPermissionGrantPolicy {
             grantRuntimePermissionsForSystemPackage(pm, userId, pkg);
         }
 
-        // Grant READ_PHONE_STATE to all system apps that have READ_PRIVILEGED_PHONE_STATE
+        // Re-grant READ_PHONE_STATE as non-fixed to all system apps that have
+        // READ_PRIVILEGED_PHONE_STATE and READ_PHONE_STATE granted -- this is to undo the fixed
+        // grant from R.
         for (PackageInfo pkg : packages) {
             if (pkg == null
                     || !doesPackageSupportRuntimePermissions(pkg)
                     || ArrayUtils.isEmpty(pkg.requestedPermissions)
                     || !pm.isGranted(Manifest.permission.READ_PRIVILEGED_PHONE_STATE,
                             pkg, UserHandle.of(userId))
+                    || !pm.isGranted(Manifest.permission.READ_PHONE_STATE, pkg,
+                            UserHandle.of(userId))
                     || pm.isSysComponentOrPersistentPlatformSignedPrivApp(pkg)) {
                 continue;
             }
 
-            grantRuntimePermissions(pm, pkg,
-                    Collections.singleton(Manifest.permission.READ_PHONE_STATE),
-                    true, // systemFixed
-                    userId);
+            pm.updatePermissionFlags(Manifest.permission.READ_PHONE_STATE, pkg,
+                    PackageManager.FLAG_PERMISSION_SYSTEM_FIXED,
+                    0,
+                    UserHandle.of(userId));
         }
 
     }
@@ -765,13 +780,28 @@ final class DefaultPermissionGrantPolicy {
                         Intent.CATEGORY_APP_EMAIL, userId),
                 userId, CONTACTS_PERMISSIONS, CALENDAR_PERMISSIONS);
 
+        // Browser
+        String browserPackage = ArrayUtils.firstOrNull(getKnownPackages(
+                KnownPackages.PACKAGE_BROWSER, userId));
+        if (browserPackage == null) {
+            browserPackage = getDefaultSystemHandlerActivityPackageForCategory(pm,
+                    Intent.CATEGORY_APP_BROWSER, userId);
+            if (!pm.isSystemPackage(browserPackage)) {
+                browserPackage = null;
+            }
+        }
+        grantPermissionsToPackage(pm, browserPackage, userId, false /* ignoreSystemPackage */,
+                true /*whitelistRestrictedPermissions*/, FOREGROUND_LOCATION_PERMISSIONS);
+
         // Voice interaction
         if (voiceInteractPackageNames != null) {
             for (String voiceInteractPackageName : voiceInteractPackageNames) {
                 grantPermissionsToSystemPackage(pm, voiceInteractPackageName, userId,
                         CONTACTS_PERMISSIONS, CALENDAR_PERMISSIONS, MICROPHONE_PERMISSIONS,
-                        PHONE_PERMISSIONS, SMS_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS,
+                        PHONE_PERMISSIONS, SMS_PERMISSIONS, COARSE_BACKGROUND_LOCATION_PERMISSIONS,
                         NEARBY_DEVICES_PERMISSIONS, NOTIFICATION_PERMISSIONS);
+                revokeRuntimePermissions(pm, voiceInteractPackageName, FINE_LOCATION_PERMISSIONS,
+                        false, userId);
             }
         }
 
@@ -781,7 +811,7 @@ final class DefaultPermissionGrantPolicy {
                     getDefaultSystemHandlerActivityPackage(pm,
                             SearchManager.INTENT_ACTION_GLOBAL_SEARCH, userId),
                     userId, MICROPHONE_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS,
-                    NOTIFICATION_PERMISSIONS);
+                    NOTIFICATION_PERMISSIONS, PHONE_PERMISSIONS);
         }
 
         // Voice recognition
@@ -812,7 +842,6 @@ final class DefaultPermissionGrantPolicy {
                         ACTIVITY_RECOGNITION_PERMISSIONS);
             }
         }
-        grantPermissionsToSystemPackage(pm, GmsCompatApp.PKG_NAME, userId, NOTIFICATION_PERMISSIONS);
 
         // Music
         Intent musicIntent = new Intent(Intent.ACTION_VIEW)
@@ -838,7 +867,8 @@ final class DefaultPermissionGrantPolicy {
                     Intent.CATEGORY_HOME_MAIN, userId);
             grantPermissionsToSystemPackage(pm, wearPackage, userId,
                     CONTACTS_PERMISSIONS, MICROPHONE_PERMISSIONS, ALWAYS_LOCATION_PERMISSIONS);
-            grantSystemFixedPermissionsToSystemPackage(pm, wearPackage, userId, PHONE_PERMISSIONS);
+            grantSystemFixedPermissionsToSystemPackage(pm, wearPackage, userId, PHONE_PERMISSIONS,
+                                                       ACTIVITY_RECOGNITION_PERMISSIONS);
 
             // Fitness tracking on watches
             if (mContext.getResources().getBoolean(R.bool.config_trackerAppNeedsPermissions)) {
@@ -876,7 +906,7 @@ final class DefaultPermissionGrantPolicy {
 
         // Companion devices
         grantSystemFixedPermissionsToSystemPackage(pm,
-                CompanionDeviceManager.COMPANION_DEVICE_DISCOVERY_PACKAGE_NAME, userId,
+                getDefaultCompanionDeviceManagerPackage(), userId,
                 ALWAYS_LOCATION_PERMISSIONS, NEARBY_DEVICES_PERMISSIONS);
 
         // Ringtone Picker
@@ -891,6 +921,9 @@ final class DefaultPermissionGrantPolicy {
             grantPermissionsToSystemPackage(pm, textClassifierPackage, userId,
                     COARSE_BACKGROUND_LOCATION_PERMISSIONS, CONTACTS_PERMISSIONS);
         }
+
+        // Updater app
+        grantPermissionsToSystemPackage(pm, "com.droidx.updater", userId, NOTIFICATION_PERMISSIONS);
 
         // There is no real "marker" interface to identify the shared storage backup, it is
         // hardcoded in BackupManagerService.SHARED_BACKUP_AGENT_PACKAGE.
@@ -1009,9 +1042,10 @@ final class DefaultPermissionGrantPolicy {
         grantSystemFixedPermissionsToSystemPackage(pm, "org.chromium.chrome", userId, CONTACTS_PERMISSIONS,
                 STORAGE_PERMISSIONS);
 
-        // OmniJaws
-        String omnijawsServicePackageName = "org.omnirom.omnijaws";
-        grantSystemFixedPermissionsToSystemPackage(pm, omnijawsServicePackageName, userId, ALWAYS_LOCATION_PERMISSIONS);
+        // Flipendo
+        grantSystemFixedPermissionsToSystemPackage(pm,
+                getDefaultProviderAuthorityPackage("com.google.android.flipendo", userId),
+                userId, SUSPEND_APP_PERMISSIONS);
     }
 
     private String getDefaultSystemHandlerActivityPackageForCategory(PackageManagerWrapper pm,
@@ -1030,6 +1064,10 @@ final class DefaultPermissionGrantPolicy {
 
     private String getDefaultDockManagerPackage() {
         return mContext.getString(R.string.config_defaultDockManagerPackageName);
+    }
+
+    private String getDefaultCompanionDeviceManagerPackage() {
+        return mContext.getString(R.string.config_companionDeviceManagerPackage);
     }
 
     @SafeVarargs
@@ -1165,6 +1203,8 @@ final class DefaultPermissionGrantPolicy {
 
     public void grantDefaultPermissionsToActiveLuiApp(String packageName, int userId) {
         Log.i(TAG, "Granting permissions to active LUI app for user:" + userId);
+        grantSystemFixedPermissionsToSystemPackage(NO_PM_CACHE, packageName, userId,
+                CAMERA_PERMISSIONS, NOTIFICATION_PERMISSIONS);
     }
 
     public void revokeDefaultPermissionsFromLuiApps(String[] packageNames, int userId) {
@@ -1518,7 +1558,7 @@ final class DefaultPermissionGrantPolicy {
         final int exceptionCount = mGrantExceptions.size();
         for (int i = 0; i < exceptionCount; i++) {
             String packageName = mGrantExceptions.keyAt(i);
-            PackageInfo pkg = pm.getSystemPackageInfo(packageName);
+            PackageInfo pkg = pm.getPackageInfo(packageName);
             List<DefaultPermissionGrant> permissionGrants = mGrantExceptions.valueAt(i);
             final int permissionGrantCount = permissionGrants.size();
             for (int j = 0; j < permissionGrantCount; j++) {
@@ -1565,12 +1605,9 @@ final class DefaultPermissionGrantPolicy {
         if (dir.isDirectory() && dir.canRead()) {
             Collections.addAll(ret, dir.listFiles());
         }
-        // For IoT devices, we check the oem partition for default permissions for each app.
-        if (mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_EMBEDDED, 0)) {
-            dir = new File(Environment.getOemDirectory(), "etc/default-permissions");
-            if (dir.isDirectory() && dir.canRead()) {
-                Collections.addAll(ret, dir.listFiles());
-            }
+        dir = new File(Environment.getOemDirectory(), "etc/default-permissions");
+        if (dir.isDirectory() && dir.canRead()) {
+            Collections.addAll(ret, dir.listFiles());
         }
         return ret.isEmpty() ? null : ret.toArray(new File[0]);
     }
@@ -1636,12 +1673,12 @@ final class DefaultPermissionGrantPolicy {
             }
             if (TAG_EXCEPTION.equals(parser.getName())) {
                 String packageName = parser.getAttributeValue(null, ATTR_PACKAGE);
+                String cert = parser.getAttributeValue(null, ATTR_CERT);
 
                 List<DefaultPermissionGrant> packageExceptions =
                         outGrantExceptions.get(packageName);
                 if (packageExceptions == null) {
-                    // The package must be on the system image
-                    PackageInfo packageInfo = pm.getSystemPackageInfo(packageName);
+                    PackageInfo packageInfo = pm.getPackageInfo(packageName);
 
                     if (packageInfo == null) {
                         Log.w(TAG, "No such package:" + packageName);
@@ -1649,8 +1686,8 @@ final class DefaultPermissionGrantPolicy {
                         continue;
                     }
 
-                    if (!pm.isSystemPackage(packageInfo)) {
-                        Log.w(TAG, "Unknown system package:" + packageName);
+                    if (!isSystemOrCertificateMatchingPackage(packageInfo, cert)) {
+                        Log.w(TAG, "Not system or certificate-matching package: " + packageName);
                         XmlUtils.skipCurrentTag(parser);
                         continue;
                     }
@@ -1703,6 +1740,15 @@ final class DefaultPermissionGrantPolicy {
                 Log.e(TAG, "Unknown tag " + parser.getName() + "under <exception>");
             }
         }
+    }
+
+    private boolean isSystemOrCertificateMatchingPackage(PackageInfo pi, String cert) {
+        if (cert == null) {
+            return pi.applicationInfo.isSystemApp();
+        }
+
+        return mContext.getPackageManager().hasSigningCertificate(pi.packageName, HexEncoding.
+                decode(cert.replace(":", "")), PackageManager.CERT_INPUT_SHA256);
     }
 
     private static boolean doesPackageSupportRuntimePermissions(PackageInfo pkg) {
@@ -1816,14 +1862,14 @@ final class DefaultPermissionGrantPolicy {
      */
     private class DelayingPackageManagerCache extends PackageManagerWrapper {
         /** uid -> permission -> isGranted, flags */
-        private SparseArray<ArrayMap<String, PermissionState>> mDelayedPermissionState =
+        private final SparseArray<ArrayMap<String, PermissionState>> mDelayedPermissionState =
                 new SparseArray<>();
         /** userId -> context */
-        private SparseArray<Context> mUserContexts = new SparseArray<>();
+        private final SparseArray<Context> mUserContexts = new SparseArray<>();
         /** Permission name -> info */
-        private ArrayMap<String, PermissionInfo> mPermissionInfos = new ArrayMap<>();
+        private final ArrayMap<String, PermissionInfo> mPermissionInfos = new ArrayMap<>();
         /** Package name -> info */
-        private ArrayMap<String, PackageInfo> mPackageInfos = new ArrayMap<>();
+        private final ArrayMap<String, PackageInfo> mPackageInfos = new ArrayMap<>();
 
         /**
          * Apply the cached state
@@ -1881,6 +1927,15 @@ final class DefaultPermissionGrantPolicy {
             PermissionState permState;
             if (permIdx >= 0) {
                 permState = uidState.valueAt(permIdx);
+                // Quick and dirty fix for shared UID packages - we should grant permission with the
+                // correct package even if a previous checkPermission() used a package that isn't
+                // requesting the permission. Ideally we should use package manager snapshot and get
+                // rid of this entire inner class.
+                if (!ArrayUtils.contains(permState.mPkgRequestingPerm.requestedPermissions,
+                        permission) && ArrayUtils.contains(pkg.requestedPermissions,
+                        permission)) {
+                    permState.mPkgRequestingPerm = pkg;
+                }
             } else {
                 permState = new PermissionState(permission, pkg, user);
                 uidState.put(permission, permState);
@@ -1902,7 +1957,7 @@ final class DefaultPermissionGrantPolicy {
                 int flagMask, int flagValues, @NonNull UserHandle user) {
             PermissionState state = getPermissionState(permission, pkg, user);
             state.initFlags();
-            state.newFlags |= flagValues & flagMask;
+            state.newFlags = (state.newFlags & ~flagMask) | (flagValues & flagMask);
         }
 
         @Override
@@ -1968,7 +2023,7 @@ final class DefaultPermissionGrantPolicy {
          */
         private class PermissionState {
             private final @NonNull String mPermission;
-            private final @NonNull PackageInfo mPkgRequestingPerm;
+            private @NonNull PackageInfo mPkgRequestingPerm;
             private final @NonNull UserHandle mUser;
 
             /** Permission flags when the state was created */
@@ -2021,7 +2076,7 @@ final class DefaultPermissionGrantPolicy {
                             mPkgRequestingPerm, newRestrictionExcemptFlags, -1, mUser);
                 }
 
-                if (newGranted != null && newGranted != mOriginalGranted) {
+                if (newGranted != null && !Objects.equals(newGranted, mOriginalGranted)) {
                     if (newGranted) {
                         NO_PM_CACHE.grantPermission(mPermission, mPkgRequestingPerm, mUser);
                     } else {

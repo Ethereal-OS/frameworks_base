@@ -28,9 +28,8 @@ import com.android.internal.jank.InteractionJankMonitor;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.Prefs;
-import com.android.systemui.R;
 import com.android.systemui.animation.DialogCuj;
-import com.android.systemui.animation.DialogLaunchAnimator;
+import com.android.systemui.animation.DialogTransitionAnimator;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
@@ -38,8 +37,10 @@ import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
+import com.android.systemui.res.R;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
 import com.android.systemui.statusbar.policy.DataSaverController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
@@ -54,11 +55,13 @@ public class DataSaverTile extends SecureQSTile<BooleanState> implements
     private static final String INTERACTION_JANK_TAG = "start_data_saver";
 
     private final DataSaverController mDataSaverController;
-    private final DialogLaunchAnimator mDialogLaunchAnimator;
+    private final DialogTransitionAnimator mDialogTransitionAnimator;
+    private final SystemUIDialog.Factory mSystemUIDialogFactory;
 
     @Inject
     public DataSaverTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -67,13 +70,15 @@ public class DataSaverTile extends SecureQSTile<BooleanState> implements
             ActivityStarter activityStarter,
             QSLogger qsLogger,
             DataSaverController dataSaverController,
-            DialogLaunchAnimator dialogLaunchAnimator,
+            DialogTransitionAnimator dialogTransitionAnimator,
+            SystemUIDialog.Factory systemUIDialogFactory,
             KeyguardStateController keyguardStateController
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger, keyguardStateController);
         mDataSaverController = dataSaverController;
-        mDialogLaunchAnimator = dialogLaunchAnimator;
+        mDialogTransitionAnimator = dialogTransitionAnimator;
+        mSystemUIDialogFactory = systemUIDialogFactory;
         mDataSaverController.observe(getLifecycle(), this);
     }
 
@@ -99,10 +104,10 @@ public class DataSaverTile extends SecureQSTile<BooleanState> implements
             return;
         }
 
-        // Show a dialog to confirm first. Dialogs shown by the DialogLaunchAnimator must be created
-        // and shown on the main thread, so we post it to the UI handler.
+        // Show a dialog to confirm first. Dialogs shown by the DialogTransitionAnimator must be
+        // created and shown on the main thread, so we post it to the UI handler.
         mUiHandler.post(() -> {
-            SystemUIDialog dialog = new SystemUIDialog(mContext);
+            SystemUIDialog dialog = mSystemUIDialogFactory.create();
             dialog.setTitle(com.android.internal.R.string.data_saver_enable_title);
             dialog.setMessage(com.android.internal.R.string.data_saver_description);
             dialog.setPositiveButton(com.android.internal.R.string.data_saver_enable_button,
@@ -114,7 +119,7 @@ public class DataSaverTile extends SecureQSTile<BooleanState> implements
             dialog.setShowForAllUsers(true);
 
             if (view != null) {
-                mDialogLaunchAnimator.showFromView(dialog, view, new DialogCuj(
+                mDialogTransitionAnimator.showFromView(dialog, view, new DialogCuj(
                         InteractionJankMonitor.CUJ_SHADE_DIALOG_OPEN,
                         INTERACTION_JANK_TAG));
             } else {

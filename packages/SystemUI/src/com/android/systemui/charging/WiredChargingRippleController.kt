@@ -27,7 +27,7 @@ import com.android.internal.annotations.VisibleForTesting
 import com.android.internal.logging.UiEvent
 import com.android.internal.logging.UiEventLogger
 import com.android.settingslib.Utils
-import com.android.systemui.R
+import com.android.systemui.res.R
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.flags.FeatureFlags
 import com.android.systemui.flags.Flags
@@ -98,9 +98,10 @@ class WiredChargingRippleController @Inject constructor(
                 nowPluggedIn: Boolean,
                 charging: Boolean
             ) {
-                // Suppresses the ripple when the state change comes from wireless charging or
-                // its dock.
-                if (batteryController.isPluggedInWireless ||
+                // Suppresses the ripple when it's disabled, or when the state change comes
+                // from wireless charging.
+                if (!rippleEnabled ||
+                        batteryController.isPluggedInWireless ||
                         batteryController.isChargingSourceDock) {
                     return
                 }
@@ -148,7 +149,7 @@ class WiredChargingRippleController @Inject constructor(
     }
 
     fun startRipple() {
-        if (rippleView.rippleInProgress() || rippleView.parent != null) {
+        if (!rippleEnabled || rippleView.rippleInProgress() || rippleView.parent != null) {
             // Skip if ripple is still playing, or not playing but already added the parent
             // (which might happen just before the animation starts or right after
             // the animation ends.)
@@ -156,9 +157,9 @@ class WiredChargingRippleController @Inject constructor(
         }
         windowLayoutParams.packageName = context.opPackageName
         rippleView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-            override fun onViewDetachedFromWindow(view: View?) {}
+            override fun onViewDetachedFromWindow(view: View) {}
 
-            override fun onViewAttachedToWindow(view: View?) {
+            override fun onViewAttachedToWindow(view: View) {
                 layoutRipple()
                 rippleView.startRipple(Runnable {
                     windowManager.removeView(rippleView)
@@ -176,7 +177,7 @@ class WiredChargingRippleController @Inject constructor(
         val height = bounds.height()
         val maxDiameter = Integer.max(width, height) * 2f
         rippleView.setMaxSize(maxDiameter, maxDiameter)
-        when (context.display.rotation) {
+        when (context.display?.rotation) {
             Surface.ROTATION_0 -> {
                 rippleView.setCenter(
                         width * normalizedPortPosX, height * normalizedPortPosY)

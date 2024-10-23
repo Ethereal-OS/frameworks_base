@@ -31,7 +31,6 @@ import android.app.ActivityManager;
 import android.app.ActivityThread;
 import android.app.AppGlobals;
 import android.app.UriGrantsManager;
-import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
@@ -72,11 +71,6 @@ import android.util.Size;
 import android.util.SparseArray;
 
 import com.android.internal.annotations.GuardedBy;
-import com.android.internal.app.ContentProviderRedirector;
-import com.android.internal.gmscompat.GmsCompatApp;
-import com.android.internal.gmscompat.GmsHooks;
-import com.android.internal.gmscompat.PlayStoreHooks;
-import com.android.internal.gmscompat.dynamite.GmsDynamiteClientHooks;
 import com.android.internal.util.MimeIconUtils;
 
 import dalvik.system.CloseGuard;
@@ -393,7 +387,7 @@ public abstract class ContentResolver implements ContentInterface {
      * {@link Bundle} under {@link #EXTRA_HONORED_ARGS}.
      * <li>When querying a provider, where no QUERY_ARG_SQL* otherwise exists in
      * the arguments {@link Bundle}, the Content framework will attempt to
-     * synthesize an QUERY_ARG_SQL* argument using the corresponding
+     * synthesize a QUERY_ARG_SQL* argument using the corresponding
      * QUERY_ARG_SORT* values.
      */
     public static final String QUERY_ARG_SORT_COLUMNS = "android:query-arg-sort-columns";
@@ -926,12 +920,18 @@ public abstract class ContentResolver implements ContentInterface {
             return null;
         }
 
-        // XXX would like to have an acquireExistingUnstableProvider for this.
-        IContentProvider provider = acquireExistingProvider(url);
+        IContentProvider provider = null;
+        try {
+            provider = acquireProvider(url);
+        } catch (Exception e) {
+            // if unable to acquire the provider, then it should try to get the type
+            // using getTypeAnonymous via ActivityManagerService
+        }
         if (provider != null) {
             try {
                 final StringResultListener resultListener = new StringResultListener();
-                provider.getTypeAsync(url, new RemoteCallback(resultListener));
+                provider.getTypeAsync(mContext.getAttributionSource(),
+                        url, new RemoteCallback(resultListener));
                 resultListener.waitForResult(CONTENT_PROVIDER_TIMEOUT_MILLIS);
                 if (resultListener.exception != null) {
                     throw resultListener.exception;
@@ -945,7 +945,11 @@ public abstract class ContentResolver implements ContentInterface {
                 Log.w(TAG, "Failed to get type for: " + url + " (" + e.getMessage() + ")");
                 return null;
             } finally {
-                releaseProvider(provider);
+                try {
+                    releaseProvider(provider);
+                } catch (java.lang.NullPointerException e) {
+                    // does nothing, Binder connection already null
+                }
             }
         }
 
@@ -955,7 +959,7 @@ public abstract class ContentResolver implements ContentInterface {
 
         try {
             final StringResultListener resultListener = new StringResultListener();
-            ActivityManager.getService().getProviderMimeTypeAsync(
+            ActivityManager.getService().getMimeTypeFilterAsync(
                     ContentProvider.getUriWithoutUserId(url),
                     resolveUserId(url),
                     new RemoteCallback(resultListener));
@@ -986,7 +990,7 @@ public abstract class ContentResolver implements ContentInterface {
         @Override
         public void onResult(Bundle result) {
             synchronized (this) {
-                ParcelableException e = result.getParcelable(REMOTE_CALLBACK_ERROR);
+                ParcelableException e = result.getParcelable(REMOTE_CALLBACK_ERROR, android.os.ParcelableException.class);
                 if (e != null) {
                     Throwable t = e.getCause();
                     if (t instanceof RuntimeException) {
@@ -1027,7 +1031,7 @@ public abstract class ContentResolver implements ContentInterface {
     private static class UriResultListener extends ResultListener<Uri> {
         @Override
         protected Uri getResultFromBundle(Bundle result) {
-            return result.getParcelable(REMOTE_CALLBACK_RESULT);
+            return result.getParcelable(REMOTE_CALLBACK_RESULT, android.net.Uri.class);
         }
     }
 
@@ -1065,7 +1069,7 @@ public abstract class ContentResolver implements ContentInterface {
         }
 
         try {
-            return provider.getStreamTypes(url, mimeTypeFilter);
+            return provider.getStreamTypes(mContext.getAttributionSource(), url, mimeTypeFilter);
         } catch (RemoteException e) {
             // Arbitrary and not worth documenting, as Activity
             // Manager will kill this process shortly anyway.
@@ -1251,27 +1255,12 @@ public abstract class ContentResolver implements ContentInterface {
             final CursorWrapperInner wrapper = new CursorWrapperInner(qCursor, provider);
             stableProvider = null;
             qCursor = null;
-
-            if (GmsCompat.isEnabled()) {
-                Cursor modified = GmsHooks.maybeModifyQueryResult(uri, projection, queryArgs, wrapper);
-                if (modified != null) {
-                    return modified;
-                }
-            }
-
             return wrapper;
         } catch (RemoteException e) {
             // Arbitrary and not worth documenting, as Activity
             // Manager will kill this process shortly anyway.
             return null;
-        } catch (SecurityException se) {
-            if (GmsCompat.isEnabled()) {
-                Log.d("GmsCompat", "", se);
-                return null;
-            }
-            throw se;
-        }
-        finally {
+        } finally {
             if (qCursor != null) {
                 qCursor.close();
             }
@@ -1547,7 +1536,8 @@ public abstract class ContentResolver implements ContentInterface {
 
     /**
      * Synonym for {@link #openOutputStream(Uri, String)
-     * openOutputStream(uri, "w")}.
+     * openOutputStream(uri, "w")}. Please note the implementation of "w" is up to each
+     * Provider implementation and it may or may not truncate.
      *
      * @param uri The desired URI.
      * @return an OutputStream or {@code null} if the provider recently crashed.
@@ -1573,7 +1563,8 @@ public abstract class ContentResolver implements ContentInterface {
      *
      * @param uri The desired URI.
      * @param mode The string representation of the file mode. Can be "r", "w", "wt", "wa", "rw"
-     *             or "rwt". See{@link ParcelFileDescriptor#parseMode} for more details.
+     *             or "rwt". Please note the exact implementation of these may differ for each
+     *             Provider implementation - for example, "w" may or may not truncate.
      * @return an OutputStream or {@code null} if the provider recently crashed.
      * @throws FileNotFoundException if the provided URI could not be opened.
      * @see #openAssetFileDescriptor(Uri, String)
@@ -1630,7 +1621,8 @@ public abstract class ContentResolver implements ContentInterface {
      *
      * @param uri The desired URI to open.
      * @param mode The string representation of the file mode. Can be "r", "w", "wt", "wa", "rw"
-     *             or "rwt". See{@link ParcelFileDescriptor#parseMode} for more details.
+     *             or "rwt". Please note the exact implementation of these may differ for each
+     *             Provider implementation - for example, "w" may or may not truncate.
      * @return Returns a new ParcelFileDescriptor pointing to the file or {@code null} if the
      * provider recently crashed. You own this descriptor and are responsible for closing it
      * when done.
@@ -1673,7 +1665,8 @@ public abstract class ContentResolver implements ContentInterface {
      *
      * @param uri The desired URI to open.
      * @param mode The string representation of the file mode. Can be "r", "w", "wt", "wa", "rw"
-     *             or "rwt". See{@link ParcelFileDescriptor#parseMode} for more details.
+     *             or "rwt". Please note the exact implementation of these may differ for each
+     *             Provider implementation - for example, "w" may or may not truncate.
      * @param cancellationSignal A signal to cancel the operation in progress,
      *         or null if none. If the operation is canceled, then
      *         {@link OperationCanceledException} will be thrown.
@@ -1767,7 +1760,8 @@ public abstract class ContentResolver implements ContentInterface {
      *
      * @param uri The desired URI to open.
      * @param mode The string representation of the file mode. Can be "r", "w", "wt", "wa", "rw"
-     *             or "rwt". See{@link ParcelFileDescriptor#parseMode} for more details.
+     *             or "rwt". Please note the exact implementation of these may differ for each
+     *             Provider implementation - for example, "w" may or may not truncate.
      * @return Returns a new ParcelFileDescriptor pointing to the file or {@code null} if the
      * provider recently crashed. You own this descriptor and are responsible for closing it
      * when done.
@@ -1821,7 +1815,8 @@ public abstract class ContentResolver implements ContentInterface {
      *
      * @param uri The desired URI to open.
      * @param mode The string representation of the file mode. Can be "r", "w", "wt", "wa", "rw"
-     *             or "rwt". See{@link ParcelFileDescriptor#parseMode} for more details.
+     *             or "rwt". Please note "w" is write only and "wt" is write and truncate.
+     *             See{@link ParcelFileDescriptor#parseMode} for more details.
      * @param cancellationSignal A signal to cancel the operation in progress, or null if
      *            none. If the operation is canceled, then
      *            {@link OperationCanceledException} will be thrown.
@@ -1990,7 +1985,7 @@ public abstract class ContentResolver implements ContentInterface {
      * Open a raw file descriptor to access (potentially type transformed)
      * data from a "content:" URI.  This interacts with the underlying
      * {@link ContentProvider#openTypedAssetFile} method of the provider
-     * associated with the given URI, to retrieve retrieve any appropriate
+     * associated with the given URI, to retrieve any appropriate
      * data stream for the data stored there.
      *
      * <p>Unlike {@link #openAssetFileDescriptor}, this function only works
@@ -2198,9 +2193,6 @@ public abstract class ContentResolver implements ContentInterface {
     public final @Nullable Uri insert(@RequiresPermission.Write @NonNull Uri url,
             @Nullable ContentValues values, @Nullable Bundle extras) {
         Objects.requireNonNull(url, "url");
-        if (GmsCompat.isEnabled()) {
-            GmsHooks.filterContentValues(url, values);
-        }
 
         try {
             if (mWrapped != null) return mWrapped.insert(url, values, extras);
@@ -2498,8 +2490,6 @@ public abstract class ContentResolver implements ContentInterface {
         }
         final String auth = uri.getAuthority();
         if (auth != null) {
-            GmsDynamiteClientHooks.maybeInit(auth);
-
             return acquireProvider(mContext, auth);
         }
         return null;
@@ -2578,18 +2568,7 @@ public abstract class ContentResolver implements ContentInterface {
      */
     public final @Nullable ContentProviderClient acquireContentProviderClient(@NonNull Uri uri) {
         Objects.requireNonNull(uri, "uri");
-
-        IContentProvider provider;
-        try {
-            provider = acquireProvider(uri);
-        } catch (SecurityException se) {
-            if (GmsCompat.isEnabled()) {
-                Log.d("GmsCompat", "uri: " + uri, se);
-                return null;
-            }
-            throw se;
-        }
-
+        IContentProvider provider = acquireProvider(uri);
         if (provider != null) {
             return new ContentProviderClient(this, provider, uri.getAuthority(), true);
         }
@@ -2745,27 +2724,11 @@ public abstract class ContentResolver implements ContentInterface {
     @UnsupportedAppUsage
     public final void registerContentObserver(Uri uri, boolean notifyForDescendents,
             ContentObserver observer, @UserIdInt int userHandle) {
-        if (ContentProviderRedirector.shouldSkipRegisterContentObserver(uri, notifyForDescendents,
-                observer, userHandle)) {
-            return;
-        }
-
-        if (GmsCompat.isEnabled()) {
-            if (GmsCompatApp.registerObserver(uri, observer)) {
-                return;
-            }
-        }
-
         try {
             getContentService().registerContentObserver(uri, notifyForDescendents,
                     observer.getContentObserver(), userHandle, mTargetSdkVersion);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
-        } catch (SecurityException se) {
-            if ("com.google.android.gsf.gservices".equals(uri.getAuthority())) {
-                return;
-            }
-            throw se;
         }
     }
 
@@ -2777,17 +2740,6 @@ public abstract class ContentResolver implements ContentInterface {
      */
     public final void unregisterContentObserver(@NonNull ContentObserver observer) {
         Objects.requireNonNull(observer, "observer");
-
-        if (ContentProviderRedirector.shouldSkipUnregisterContentObserver(observer)) {
-            return;
-        }
-
-        if (GmsCompat.isEnabled()) {
-            if (GmsCompatApp.unregisterObserver(observer)) {
-                return;
-            }
-        }
-
         try {
             IContentObserver contentObserver = observer.releaseContentObserver();
             if (contentObserver != null) {
@@ -2882,11 +2834,6 @@ public abstract class ContentResolver implements ContentInterface {
     public void notifyChange(@NonNull Uri uri, @Nullable ContentObserver observer,
             @NotifyFlags int flags) {
         Objects.requireNonNull(uri, "uri");
-
-        if (ContentProviderRedirector.shouldSkipNotifyChange(uri, observer, flags)) {
-            return;
-        }
-
         notifyChange(
                 ContentProvider.getUriWithoutUserId(uri),
                 observer,
@@ -2934,10 +2881,6 @@ public abstract class ContentResolver implements ContentInterface {
         // Cluster based on user ID
         final SparseArray<ArrayList<Uri>> clusteredByUser = new SparseArray<>();
         for (Uri uri : uris) {
-            if (ContentProviderRedirector.shouldSkipNotifyChange(uri, observer, flags)) {
-                continue;
-            }
-
             final int userId = ContentProvider.getUserIdFromUri(uri, mContext.getUserId());
             ArrayList<Uri> list = clusteredByUser.get(userId);
             if (list == null) {
@@ -4012,11 +3955,6 @@ public abstract class ContentResolver implements ContentInterface {
     private static volatile IContentService sContentService;
     @UnsupportedAppUsage
     private final Context mContext;
-
-    /** @hide */
-    public Context getContext() {
-        return mContext;
-    }
 
     @Deprecated
     @UnsupportedAppUsage

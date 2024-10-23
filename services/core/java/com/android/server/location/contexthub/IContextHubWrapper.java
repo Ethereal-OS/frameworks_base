@@ -17,7 +17,10 @@ package com.android.server.location.contexthub;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.chre.flags.Flags;
 import android.hardware.contexthub.HostEndpointInfo;
+import android.hardware.contexthub.MessageDeliveryStatus;
+import android.hardware.contexthub.NanSessionRequest;
 import android.hardware.contexthub.V1_0.ContextHub;
 import android.hardware.contexthub.V1_0.ContextHubMsg;
 import android.hardware.contexthub.V1_0.TransactionResult;
@@ -32,6 +35,7 @@ import android.hardware.location.NanoAppMessage;
 import android.hardware.location.NanoAppState;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.IBinder;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
@@ -85,13 +89,43 @@ public abstract class IContextHubWrapper {
         /**
          * Handles a message from a nanoapp to a ContextHubClient.
          *
-         * @param hostEndpointId     The host endpoint ID of the recipient.
-         * @param message            The message from the nanoapp.
-         * @param nanoappPermissions The list of permissions held by the nanoapp.
-         * @param messagePermissions The list of permissions required to receive the message.
+         * @param hostEndpointId            The host endpoint ID of the recipient.
+         * @param message                   The message from the nanoapp.
+         * @param nanoappPermissions        The list of permissions held by the nanoapp.
+         * @param messagePermissions        The list of permissions required to receive the message.
          */
         void handleNanoappMessage(short hostEndpointId, NanoAppMessage message,
                 List<String> nanoappPermissions, List<String> messagePermissions);
+
+        /**
+         * Handles a restart of the service.
+         */
+        void handleServiceRestart();
+
+        /**
+         * Handles a message delivery status.
+         *
+         * @param messageDeliveryStatus     The message delivery status to deliver.
+         */
+        void handleMessageDeliveryStatus(MessageDeliveryStatus messageDeliveryStatus);
+    }
+
+    /**
+     * @return the IContextHubWrapper interface
+     */
+    public static IContextHubWrapper getContextHubWrapper() {
+        IContextHubWrapper wrapper = maybeConnectToAidl();
+        if (wrapper == null) {
+            wrapper = maybeConnectTo1_2();
+        }
+        if (wrapper == null) {
+            wrapper = maybeConnectTo1_1();
+        }
+        if (wrapper == null) {
+            wrapper = maybeConnectTo1_0();
+        }
+
+        return wrapper;
     }
 
     /**
@@ -152,12 +186,9 @@ public abstract class IContextHubWrapper {
     }
 
     /**
-     * Attempts to connect to the Contexthub HAL AIDL service, if it exists.
-     *
-     * @return A valid IContextHubWrapper if the connection was successful, null otherwise.
+     * Attempts to connect to the AIDL HAL and returns the proxy IContextHub.
      */
-    @Nullable
-    public static IContextHubWrapper maybeConnectToAidl() {
+    public static android.hardware.contexthub.IContextHub maybeConnectToAidlGetProxy() {
         android.hardware.contexthub.IContextHub proxy = null;
         final String aidlServiceName =
                 android.hardware.contexthub.IContextHub.class.getCanonicalName() + "/default";
@@ -170,8 +201,18 @@ public abstract class IContextHubWrapper {
         } else {
             Log.d(TAG, "Context Hub AIDL service is not declared");
         }
+        return proxy;
+    }
 
-        return (proxy == null) ? null : new ContextHubWrapperAidl(proxy);
+    /**
+     * Attempts to connect to the Contexthub HAL AIDL service, if it exists.
+     *
+     * @return A valid IContextHubWrapper if the connection was successful, null otherwise.
+     */
+    @Nullable
+    public static IContextHubWrapper maybeConnectToAidl() {
+        android.hardware.contexthub.IContextHub proxy = maybeConnectToAidlGetProxy();
+        return proxy == null ? null : new ContextHubWrapperAidl(proxy);
     }
 
     /**
@@ -275,15 +316,25 @@ public abstract class IContextHubWrapper {
     /**
      * Sends a message to the Context Hub.
      *
-     * @param hostEndpointId The host endpoint ID of the sender.
-     * @param contextHubId   The ID of the Context Hub to send the message to.
-     * @param message        The message to send.
+     * @param hostEndpointId         The host endpoint ID of the sender.
+     * @param contextHubId           The ID of the Context Hub to send the message to.
+     * @param message                The message to send.
      * @return the result of the message sending.
      */
     @ContextHubTransaction.Result
-    public abstract int sendMessageToContextHub(
-            short hostEndpointId, int contextHubId, NanoAppMessage message)
-            throws RemoteException;
+    public abstract int sendMessageToContextHub(short hostEndpointId, int contextHubId,
+            NanoAppMessage message) throws RemoteException;
+
+    /**
+     * Sends a transaction status to the Context Hub.
+     *
+     * @param contextHubId The ID of the context hub to sent the status to.
+     * @param status       The status of the transaction.
+     * @return the result of the message sending.
+     */
+    @ContextHubTransaction.Result
+    public abstract int sendMessageDeliveryStatusToContextHub(
+            int contextHubId, MessageDeliveryStatus status);
 
     /**
      * Loads a nanoapp on the Context Hub.
@@ -328,6 +379,16 @@ public abstract class IContextHubWrapper {
     public abstract int queryNanoapps(int contextHubId) throws RemoteException;
 
     /**
+     * Provides the list of preloaded nanoapp IDs on the system. The output of this API must
+     * not change.
+     *
+     * @param contextHubId  The context Hub ID.
+     *
+     * @return The list of preloaded nanoapp IDs.
+     */
+    public abstract long[] getPreloadedNanoappIds(int contextHubId);
+
+    /**
      * Registers a callback with the Context Hub.
      *
      * @param contextHubId The ID of the Context Hub to register the callback with.
@@ -336,11 +397,38 @@ public abstract class IContextHubWrapper {
     public abstract void registerCallback(int contextHubId, @NonNull ICallback callback)
             throws RemoteException;
 
-    private static class ContextHubWrapperAidl extends IContextHubWrapper {
+    /**
+     * Registers an existing callback with the Context Hub.
+     *
+     * @param contextHubId The ID of the Context Hub to register the callback with.
+     */
+    public abstract void registerExistingCallback(int contextHubId) throws RemoteException;
+
+    /**
+     * Puts the context hub in and out of test mode. Test mode is a clean state
+     * where tests can be executed in the same environment. If enable is true,
+     * this will enable test mode by unloading all nanoapps. If enable is false,
+     * this will disable test mode and reverse the actions of enabling test mode
+     * by loading all preloaded nanoapps. This puts CHRE in a normal state.
+     *
+     * This should only be used for a test environment, either through a
+     * @TestApi or development tools. This should not be used in a production
+     * environment.
+     *
+     * @param enable If true, put the context hub in test mode. If false, disable
+     *               test mode.
+     * @return       If true, the operation was successful; false otherwise.
+     */
+    public abstract boolean setTestMode(boolean enable);
+
+    private static class ContextHubWrapperAidl extends IContextHubWrapper
+            implements IBinder.DeathRecipient {
         private android.hardware.contexthub.IContextHub mHub;
 
         private final Map<Integer, ContextHubAidlCallback> mAidlCallbackMap =
                     new HashMap<>();
+
+        private Runnable mHandleServiceRestartCallback = null;
 
         // Use this thread in case where the execution requires to be on a service thread.
         // For instance, AppOpsManager.noteOp requires the UPDATE_APP_OPS_STATS permission.
@@ -352,6 +440,10 @@ public abstract class IContextHubWrapper {
                 android.hardware.contexthub.IContextHubCallback.Stub {
             private final int mContextHubId;
             private final ICallback mCallback;
+            // 9a17008d-6bf1-445a-9011-6d21bd985b6c
+            private static final byte[] UUID = {-102, 23, 0, -115, 107, -15, 68, 90,
+                                                -112, 17, 109, 33, -67, -104, 91, 108};
+            private static final String NAME = "ContextHubService";
 
             ContextHubAidlCallback(int contextHubId, ICallback callback) {
                 mContextHubId = contextHubId;
@@ -369,8 +461,7 @@ public abstract class IContextHubWrapper {
             public void handleContextHubMessage(android.hardware.contexthub.ContextHubMessage msg,
                     String[] msgContentPerms) {
                 mHandler.post(() -> {
-                    mCallback.handleNanoappMessage(
-                            (short) msg.hostEndPoint,
+                    mCallback.handleNanoappMessage((short) msg.hostEndPoint,
                             ContextHubServiceUtil.createNanoAppMessage(msg),
                             new ArrayList<>(Arrays.asList(msg.permissions)),
                             new ArrayList<>(Arrays.asList(msgContentPerms)));
@@ -389,6 +480,32 @@ public abstract class IContextHubWrapper {
                     mCallback.handleTransactionResult(transactionId, success);
                 });
             }
+
+            public void handleNanSessionRequest(NanSessionRequest request) {
+                // TODO(271471342): Implement
+            }
+
+            public void handleMessageDeliveryStatus(
+                    char hostEndpointId,
+                    MessageDeliveryStatus messageDeliveryStatus) {
+                if (Flags.reliableMessageImplementation()) {
+                    mHandler.post(() -> {
+                        mCallback.handleMessageDeliveryStatus(messageDeliveryStatus);
+                    });
+                } else {
+                    Log.w(TAG, "handleMessageDeliveryStatus called when the "
+                            + "reliableMessageImplementation flag is disabled");
+                }
+            }
+
+            public byte[] getUuid() {
+                return UUID;
+            }
+
+            public String getName() {
+                return NAME;
+            }
+
             @Override
             public String getInterfaceHash() {
                 return android.hardware.contexthub.IContextHubCallback.HASH;
@@ -401,17 +518,51 @@ public abstract class IContextHubWrapper {
         }
 
         ContextHubWrapperAidl(android.hardware.contexthub.IContextHub hub) {
-            mHub = hub;
+            setHub(hub);
             mHandlerThread.start();
             mHandler = new Handler(mHandlerThread.getLooper());
+            linkWrapperToHubDeath();
+        }
+
+        private synchronized android.hardware.contexthub.IContextHub getHub() {
+            return mHub;
+        }
+
+        private synchronized void setHub(android.hardware.contexthub.IContextHub hub) {
+            mHub = hub;
+        }
+
+        @Override
+        public void binderDied() {
+            Log.i(TAG, "Context Hub AIDL HAL died");
+
+            setHub(maybeConnectToAidlGetProxy());
+            if (getHub() == null) {
+                // TODO(b/256860015): Make this reconnection more robust
+                Log.e(TAG, "Could not reconnect to Context Hub AIDL HAL");
+                return;
+            }
+            linkWrapperToHubDeath();
+
+            if (mHandleServiceRestartCallback != null) {
+                mHandleServiceRestartCallback.run();
+            } else {
+                Log.e(TAG, "mHandleServiceRestartCallback is not set");
+            }
         }
 
         public Pair<List<ContextHubInfo>, List<String>> getHubs() throws RemoteException {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return new Pair<List<ContextHubInfo>, List<String>>(new ArrayList<ContextHubInfo>(),
+                        new ArrayList<String>());
+            }
+
             Set<String> supportedPermissions = new HashSet<>();
             ArrayList<ContextHubInfo> hubInfoList = new ArrayList<>();
-            for (android.hardware.contexthub.ContextHubInfo hub : mHub.getContextHubs()) {
-                hubInfoList.add(new ContextHubInfo(hub));
-                for (String permission : hub.supportedPermissions) {
+            for (android.hardware.contexthub.ContextHubInfo hubInfo : hub.getContextHubs()) {
+                hubInfoList.add(new ContextHubInfo(hubInfo));
+                for (String permission : hubInfo.supportedPermissions) {
                     supportedPermissions.add(permission);
                 }
             }
@@ -471,8 +622,13 @@ public abstract class IContextHubWrapper {
 
         @Override
         public void onHostEndpointConnected(HostEndpointInfo info) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return;
+            }
+
             try {
-                mHub.onHostEndpointConnected(info);
+                hub.onHostEndpointConnected(info);
             } catch (RemoteException | ServiceSpecificException e) {
                 Log.e(TAG, "Exception in onHostEndpointConnected" + e.getMessage());
             }
@@ -480,20 +636,48 @@ public abstract class IContextHubWrapper {
 
         @Override
         public void onHostEndpointDisconnected(short hostEndpointId) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return;
+            }
+
             try {
-                mHub.onHostEndpointDisconnected((char) hostEndpointId);
+                hub.onHostEndpointDisconnected((char) hostEndpointId);
             } catch (RemoteException | ServiceSpecificException e) {
                 Log.e(TAG, "Exception in onHostEndpointDisconnected" + e.getMessage());
             }
         }
 
         @ContextHubTransaction.Result
-        public int sendMessageToContextHub(
-                short hostEndpointId, int contextHubId, NanoAppMessage message)
-                throws RemoteException {
+        public int sendMessageToContextHub(short hostEndpointId, int contextHubId,
+                NanoAppMessage message) throws RemoteException {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+
             try {
-                mHub.sendMessageToHub(contextHubId,
-                        ContextHubServiceUtil.createAidlContextHubMessage(hostEndpointId, message));
+                var msg = ContextHubServiceUtil.createAidlContextHubMessage(
+                        hostEndpointId, message);
+                hub.sendMessageToHub(contextHubId, msg);
+                return ContextHubTransaction.RESULT_SUCCESS;
+            } catch (RemoteException | ServiceSpecificException e) {
+                return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
+            } catch (IllegalArgumentException e) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+        }
+
+        @ContextHubTransaction.Result
+        public int sendMessageDeliveryStatusToContextHub(int contextHubId,
+                MessageDeliveryStatus status) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+
+            try {
+                hub.sendMessageDeliveryStatusToHub(contextHubId, status);
                 return ContextHubTransaction.RESULT_SUCCESS;
             } catch (RemoteException | ServiceSpecificException e) {
                 return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
@@ -505,10 +689,15 @@ public abstract class IContextHubWrapper {
         @ContextHubTransaction.Result
         public int loadNanoapp(int contextHubId, NanoAppBinary binary,
                 int transactionId) throws RemoteException {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+
             android.hardware.contexthub.NanoappBinary aidlNanoAppBinary =
                     ContextHubServiceUtil.createAidlNanoAppBinary(binary);
             try {
-                mHub.loadNanoapp(contextHubId, aidlNanoAppBinary, transactionId);
+                hub.loadNanoapp(contextHubId, aidlNanoAppBinary, transactionId);
                 return ContextHubTransaction.RESULT_SUCCESS;
             } catch (RemoteException | ServiceSpecificException | UnsupportedOperationException e) {
                 return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
@@ -520,8 +709,13 @@ public abstract class IContextHubWrapper {
         @ContextHubTransaction.Result
         public int unloadNanoapp(int contextHubId, long nanoappId, int transactionId)
                 throws RemoteException {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+
             try {
-                mHub.unloadNanoapp(contextHubId, nanoappId, transactionId);
+                hub.unloadNanoapp(contextHubId, nanoappId, transactionId);
                 return ContextHubTransaction.RESULT_SUCCESS;
             } catch (RemoteException | ServiceSpecificException | UnsupportedOperationException e) {
                 return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
@@ -533,8 +727,13 @@ public abstract class IContextHubWrapper {
         @ContextHubTransaction.Result
         public int enableNanoapp(int contextHubId, long nanoappId, int transactionId)
                 throws RemoteException {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+
             try {
-                mHub.enableNanoapp(contextHubId, nanoappId, transactionId);
+                hub.enableNanoapp(contextHubId, nanoappId, transactionId);
                 return ContextHubTransaction.RESULT_SUCCESS;
             } catch (RemoteException | ServiceSpecificException | UnsupportedOperationException e) {
                 return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
@@ -546,8 +745,13 @@ public abstract class IContextHubWrapper {
         @ContextHubTransaction.Result
         public int disableNanoapp(int contextHubId, long nanoappId, int transactionId)
                 throws RemoteException {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+
             try {
-                mHub.disableNanoapp(contextHubId, nanoappId, transactionId);
+                hub.disableNanoapp(contextHubId, nanoappId, transactionId);
                 return ContextHubTransaction.RESULT_SUCCESS;
             } catch (RemoteException | ServiceSpecificException | UnsupportedOperationException e) {
                 return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
@@ -558,8 +762,13 @@ public abstract class IContextHubWrapper {
 
         @ContextHubTransaction.Result
         public int queryNanoapps(int contextHubId) throws RemoteException {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
+
             try {
-                mHub.queryNanoapps(contextHubId);
+                hub.queryNanoapps(contextHubId);
                 return ContextHubTransaction.RESULT_SUCCESS;
             } catch (RemoteException | ServiceSpecificException | UnsupportedOperationException e) {
                 return ContextHubTransaction.RESULT_FAILED_UNKNOWN;
@@ -568,20 +777,93 @@ public abstract class IContextHubWrapper {
             }
         }
 
-        public void registerCallback(int contextHubId, ICallback callback) throws RemoteException {
-            mAidlCallbackMap.put(contextHubId, new ContextHubAidlCallback(contextHubId, callback));
+        public long[] getPreloadedNanoappIds(int contextHubId) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return null;
+            }
+
             try {
-                mHub.registerCallback(contextHubId, mAidlCallbackMap.get(contextHubId));
+                return hub.getPreloadedNanoappIds(contextHubId);
+            } catch (RemoteException e) {
+                Log.e(TAG, "Exception while getting preloaded nanoapp IDs: " + e.getMessage());
+                return null;
+            }
+        }
+
+        public void registerExistingCallback(int contextHubId) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return;
+            }
+
+            ContextHubAidlCallback callback = mAidlCallbackMap.get(contextHubId);
+            if (callback == null) {
+                Log.e(TAG, "Could not find existing callback to register for context hub ID = "
+                        + contextHubId);
+                return;
+            }
+
+            try {
+                hub.registerCallback(contextHubId, callback);
             } catch (RemoteException | ServiceSpecificException | IllegalArgumentException e) {
                 Log.e(TAG, "Exception while registering callback: " + e.getMessage());
             }
         }
 
-        private void onSettingChanged(byte setting, boolean enabled) {
+        public void registerCallback(int contextHubId, ICallback callback) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return;
+            }
+
+            mHandleServiceRestartCallback = callback::handleServiceRestart;
+            mAidlCallbackMap.put(contextHubId, new ContextHubAidlCallback(contextHubId, callback));
+            registerExistingCallback(contextHubId);
+        }
+
+        public boolean setTestMode(boolean enable) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return false;
+            }
+
             try {
-                mHub.onSettingChanged(setting, enabled);
+                hub.setTestMode(enable);
+                return true;
+            } catch (RemoteException | ServiceSpecificException e) {
+                Log.e(TAG, "Exception while setting test mode (enable: "
+                        + (enable ? "true" : "false") + "): " + e.getMessage());
+                return false;
+            }
+        }
+
+        private void onSettingChanged(byte setting, boolean enabled) {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return;
+            }
+
+            try {
+                hub.onSettingChanged(setting, enabled);
             } catch (RemoteException | ServiceSpecificException e) {
                 Log.e(TAG, "Exception while sending setting update: " + e.getMessage());
+            }
+        }
+
+        /**
+         * Links the mHub death handler to this
+         */
+        private void linkWrapperToHubDeath() {
+            android.hardware.contexthub.IContextHub hub = getHub();
+            if (hub == null) {
+                return;
+            }
+
+            try {
+                hub.asBinder().linkToDeath(this, 0);
+            } catch (RemoteException exception) {
+                Log.e(TAG, "Context Hub AIDL service death receipt could not be linked");
             }
         }
     }
@@ -608,8 +890,7 @@ public abstract class IContextHubWrapper {
 
             @Override
             public void handleClientMsg(ContextHubMsg message) {
-                mCallback.handleNanoappMessage(
-                        message.hostEndPoint,
+                mCallback.handleNanoappMessage(message.hostEndPoint,
                         ContextHubServiceUtil.createNanoAppMessage(message),
                         Collections.emptyList() /* nanoappPermissions */,
                         Collections.emptyList() /* messagePermissions */);
@@ -641,8 +922,7 @@ public abstract class IContextHubWrapper {
             @Override
             public void handleClientMsg_1_2(android.hardware.contexthub.V1_2.ContextHubMsg message,
                     ArrayList<String> messagePermissions) {
-                mCallback.handleNanoappMessage(
-                        message.msg_1_0.hostEndPoint,
+                mCallback.handleNanoappMessage(message.msg_1_0.hostEndPoint,
                         ContextHubServiceUtil.createNanoAppMessage(message.msg_1_0),
                         message.permissions, messagePermissions);
             }
@@ -660,13 +940,23 @@ public abstract class IContextHubWrapper {
         }
 
         @ContextHubTransaction.Result
-        public int sendMessageToContextHub(
-                short hostEndpointId, int contextHubId, NanoAppMessage message)
-                throws RemoteException {
+        public int sendMessageToContextHub(short hostEndpointId, int contextHubId,
+                NanoAppMessage message) throws RemoteException {
+            if (message.isReliable()) {
+                Log.e(TAG, "Reliable messages are only supported with the AIDL HAL");
+                return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
+            }
             ContextHubMsg messageToNanoApp =
                     ContextHubServiceUtil.createHidlContextHubMessage(hostEndpointId, message);
             return ContextHubServiceUtil.toTransactionResult(
                     mHub.sendMessageToHub(contextHubId, messageToNanoApp));
+        }
+
+        @ContextHubTransaction.Result
+        public int sendMessageDeliveryStatusToContextHub(int contextHubId,
+                MessageDeliveryStatus status) {
+            // Only supported on the AIDL implementation.
+            return ContextHubTransaction.RESULT_FAILED_NOT_SUPPORTED;
         }
 
         @ContextHubTransaction.Result
@@ -705,10 +995,29 @@ public abstract class IContextHubWrapper {
                     mHub.queryApps(contextHubId));
         }
 
+        public long[] getPreloadedNanoappIds(int contextHubId) {
+            return new long[0];
+        }
+
         public void registerCallback(int contextHubId, ICallback callback) throws RemoteException {
             mHidlCallbackMap.put(contextHubId,
                         new ContextHubWrapperHidlCallback(contextHubId, callback));
             mHub.registerCallback(contextHubId, mHidlCallbackMap.get(contextHubId));
+        }
+
+        public void registerExistingCallback(int contextHubId) throws RemoteException {
+            ContextHubWrapperHidlCallback callback = mHidlCallbackMap.get(contextHubId);
+            if (callback == null) {
+                Log.e(TAG, "Could not find existing callback for context hub with ID = "
+                        + contextHubId);
+                return;
+            }
+
+            mHub.registerCallback(contextHubId, callback);
+        }
+
+        public boolean setTestMode(boolean enable) {
+            return false;
         }
 
         public boolean supportsBtSettingNotifications() {

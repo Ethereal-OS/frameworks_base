@@ -52,9 +52,12 @@ public final class TaskFragmentCreationParams implements Parcelable {
     @NonNull
     private final IBinder mOwnerToken;
 
-    /** The initial bounds of the TaskFragment. Fills parent if empty. */
+    /**
+     * The initial relative bounds of the TaskFragment in parent coordinate.
+     * Fills parent if empty.
+     */
     @NonNull
-    private final Rect mInitialBounds = new Rect();
+    private final Rect mInitialRelativeBounds = new Rect();
 
     /** The initial windowing mode of the TaskFragment. Inherits from parent if not set. */
     @WindowingMode
@@ -91,11 +94,18 @@ public final class TaskFragmentCreationParams implements Parcelable {
     @Nullable
     private final IBinder mPairedActivityToken;
 
+    /**
+     * If {@code true}, transitions are allowed even if the TaskFragment is empty. If
+     * {@code false}, transitions will wait until the TaskFragment becomes non-empty or other
+     * conditions are met. Default to {@code false}.
+     */
+    private final boolean mAllowTransitionWhenEmpty;
+
     private TaskFragmentCreationParams(
             @NonNull TaskFragmentOrganizerToken organizer, @NonNull IBinder fragmentToken,
-            @NonNull IBinder ownerToken, @NonNull Rect initialBounds,
+            @NonNull IBinder ownerToken, @NonNull Rect initialRelativeBounds,
             @WindowingMode int windowingMode, @Nullable IBinder pairedPrimaryFragmentToken,
-            @Nullable IBinder pairedActivityToken) {
+            @Nullable IBinder pairedActivityToken, boolean allowTransitionWhenEmpty) {
         if (pairedPrimaryFragmentToken != null && pairedActivityToken != null) {
             throw new IllegalArgumentException("pairedPrimaryFragmentToken and"
                     + " pairedActivityToken should not be set at the same time.");
@@ -103,10 +113,11 @@ public final class TaskFragmentCreationParams implements Parcelable {
         mOrganizer = organizer;
         mFragmentToken = fragmentToken;
         mOwnerToken = ownerToken;
-        mInitialBounds.set(initialBounds);
+        mInitialRelativeBounds.set(initialRelativeBounds);
         mWindowingMode = windowingMode;
         mPairedPrimaryFragmentToken = pairedPrimaryFragmentToken;
         mPairedActivityToken = pairedActivityToken;
+        mAllowTransitionWhenEmpty = allowTransitionWhenEmpty;
     }
 
     @NonNull
@@ -125,8 +136,8 @@ public final class TaskFragmentCreationParams implements Parcelable {
     }
 
     @NonNull
-    public Rect getInitialBounds() {
-        return mInitialBounds;
+    public Rect getInitialRelativeBounds() {
+        return mInitialRelativeBounds;
     }
 
     @WindowingMode
@@ -152,14 +163,20 @@ public final class TaskFragmentCreationParams implements Parcelable {
         return mPairedActivityToken;
     }
 
+    /** @hide */
+    public boolean getAllowTransitionWhenEmpty() {
+        return mAllowTransitionWhenEmpty;
+    }
+
     private TaskFragmentCreationParams(Parcel in) {
         mOrganizer = TaskFragmentOrganizerToken.CREATOR.createFromParcel(in);
         mFragmentToken = in.readStrongBinder();
         mOwnerToken = in.readStrongBinder();
-        mInitialBounds.readFromParcel(in);
+        mInitialRelativeBounds.readFromParcel(in);
         mWindowingMode = in.readInt();
         mPairedPrimaryFragmentToken = in.readStrongBinder();
         mPairedActivityToken = in.readStrongBinder();
+        mAllowTransitionWhenEmpty = in.readBoolean();
     }
 
     /** @hide */
@@ -168,10 +185,11 @@ public final class TaskFragmentCreationParams implements Parcelable {
         mOrganizer.writeToParcel(dest, flags);
         dest.writeStrongBinder(mFragmentToken);
         dest.writeStrongBinder(mOwnerToken);
-        mInitialBounds.writeToParcel(dest, flags);
+        mInitialRelativeBounds.writeToParcel(dest, flags);
         dest.writeInt(mWindowingMode);
         dest.writeStrongBinder(mPairedPrimaryFragmentToken);
         dest.writeStrongBinder(mPairedActivityToken);
+        dest.writeBoolean(mAllowTransitionWhenEmpty);
     }
 
     @NonNull
@@ -194,10 +212,11 @@ public final class TaskFragmentCreationParams implements Parcelable {
                 + " organizer=" + mOrganizer
                 + " fragmentToken=" + mFragmentToken
                 + " ownerToken=" + mOwnerToken
-                + " initialBounds=" + mInitialBounds
+                + " initialRelativeBounds=" + mInitialRelativeBounds
                 + " windowingMode=" + mWindowingMode
                 + " pairedFragmentToken=" + mPairedPrimaryFragmentToken
                 + " pairedActivityToken=" + mPairedActivityToken
+                + " allowTransitionWhenEmpty=" + mAllowTransitionWhenEmpty
                 + "}";
     }
 
@@ -220,7 +239,7 @@ public final class TaskFragmentCreationParams implements Parcelable {
         private final IBinder mOwnerToken;
 
         @NonNull
-        private final Rect mInitialBounds = new Rect();
+        private final Rect mInitialRelativeBounds = new Rect();
 
         @WindowingMode
         private int mWindowingMode = WINDOWING_MODE_UNDEFINED;
@@ -231,6 +250,8 @@ public final class TaskFragmentCreationParams implements Parcelable {
         @Nullable
         private IBinder mPairedActivityToken;
 
+        private boolean mAllowTransitionWhenEmpty;
+
         public Builder(@NonNull TaskFragmentOrganizerToken organizer,
                 @NonNull IBinder fragmentToken, @NonNull IBinder ownerToken) {
             mOrganizer = organizer;
@@ -238,10 +259,13 @@ public final class TaskFragmentCreationParams implements Parcelable {
             mOwnerToken = ownerToken;
         }
 
-        /** Sets the initial bounds for the TaskFragment. */
+        /**
+         * Sets the initial relative bounds for the TaskFragment in parent coordinate.
+         * Set to empty to fill parent.
+         */
         @NonNull
-        public Builder setInitialBounds(@NonNull Rect bounds) {
-            mInitialBounds.set(bounds);
+        public Builder setInitialRelativeBounds(@NonNull Rect bounds) {
+            mInitialRelativeBounds.set(bounds);
             return this;
         }
 
@@ -292,12 +316,26 @@ public final class TaskFragmentCreationParams implements Parcelable {
             return this;
         }
 
+        /**
+         * Sets whether transitions are allowed when the TaskFragment is empty. If {@code true},
+         * transitions are allowed when the TaskFragment is empty. If {@code false}, transitions
+         * will wait until the TaskFragment becomes non-empty or other conditions are met. Default
+         * to {@code false}.
+         *
+         * @hide
+         */
+        @NonNull
+        public Builder setAllowTransitionWhenEmpty(boolean allowTransitionWhenEmpty) {
+            mAllowTransitionWhenEmpty = allowTransitionWhenEmpty;
+            return this;
+        }
+
         /** Constructs the options to create TaskFragment with. */
         @NonNull
         public TaskFragmentCreationParams build() {
             return new TaskFragmentCreationParams(mOrganizer, mFragmentToken, mOwnerToken,
-                    mInitialBounds, mWindowingMode, mPairedPrimaryFragmentToken,
-                    mPairedActivityToken);
+                    mInitialRelativeBounds, mWindowingMode, mPairedPrimaryFragmentToken,
+                    mPairedActivityToken, mAllowTransitionWhenEmpty);
         }
     }
 }

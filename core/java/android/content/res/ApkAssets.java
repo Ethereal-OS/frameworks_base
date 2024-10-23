@@ -25,7 +25,8 @@ import android.content.res.loader.ResourcesProvider;
 import android.text.TextUtils;
 
 import com.android.internal.annotations.GuardedBy;
-import com.android.internal.gmscompat.dynamite.GmsDynamiteClientHooks;
+
+import dalvik.annotation.optimization.CriticalNative;
 
 import java.io.FileDescriptor;
 import java.io.IOException;
@@ -76,6 +77,11 @@ public final class ApkAssets {
      * protections for this APK must be disabled.
      */
     public static final int PROPERTY_DISABLE_INCREMENTAL_HARDENING = 1 << 4;
+
+    /**
+     * The apk assets only contain the overlayable declarations information.
+     */
+    public static final int PROPERTY_ONLY_OVERLAYABLES = 1 << 5;
 
     /** Flags that change the behavior of loaded apk assets. */
     @IntDef(prefix = { "PROPERTY_" }, value = {
@@ -143,7 +149,7 @@ public final class ApkAssets {
      */
     public static @NonNull ApkAssets loadFromPath(@NonNull String path, @PropertyFlags int flags)
             throws IOException {
-        return loadFromPath(path, flags, null);
+        return new ApkAssets(FORMAT_APK, path, flags, null /* assets */);
     }
 
     /**
@@ -157,13 +163,6 @@ public final class ApkAssets {
      */
     public static @NonNull ApkAssets loadFromPath(@NonNull String path, @PropertyFlags int flags,
             @Nullable AssetsProvider assets) throws IOException {
-        if (GmsDynamiteClientHooks.enabled()) {
-            ApkAssets apkAssets = GmsDynamiteClientHooks.loadAssetsFromPath(path, flags, assets);
-            if (apkAssets != null) {
-                return apkAssets;
-            }
-        }
-
         return new ApkAssets(FORMAT_APK, path, flags, assets);
     }
 
@@ -467,7 +466,7 @@ public final class ApkAssets {
     private static native @NonNull String nativeGetAssetPath(long ptr);
     private static native @NonNull String nativeGetDebugName(long ptr);
     private static native long nativeGetStringBlock(long ptr);
-    private static native boolean nativeIsUpToDate(long ptr);
+    @CriticalNative private static native boolean nativeIsUpToDate(long ptr);
     private static native long nativeOpenXml(long ptr, @NonNull String fileName) throws IOException;
     private static native @Nullable OverlayableInfo nativeGetOverlayableInfo(long ptr,
             String overlayableName) throws IOException;

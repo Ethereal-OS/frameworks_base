@@ -36,6 +36,12 @@ prebuilt_etc {
 }
 
 prebuilt_etc {
+    name: "initial-package-stopped-states.xml",
+    sub_dir: "sysconfig",
+    src: "initial-package-stopped-states.xml",
+}
+
+prebuilt_etc {
     name: "preinstalled-packages-platform-overlays.xml",
     product_specific: true,
     sub_dir: "sysconfig",
@@ -46,6 +52,30 @@ prebuilt_etc {
     name: "hiddenapi-package-whitelist.xml",
     sub_dir: "sysconfig",
     src: "hiddenapi-package-whitelist.xml",
+}
+
+prebuilt_etc {
+    name: "preinstalled-packages-asl-files.xml",
+    sub_dir: "sysconfig",
+    src: "preinstalled-packages-asl-files.xml",
+}
+
+prebuilt_etc {
+    name: "preinstalled-packages-strict-signature.xml",
+    sub_dir: "sysconfig",
+    src: "preinstalled-packages-strict-signature.xml",
+}
+
+prebuilt_etc {
+    name: "enhanced-confirmation.xml",
+    sub_dir: "sysconfig",
+    src: "enhanced-confirmation.xml",
+}
+
+prebuilt_etc {
+    name: "package-shareduid-allowlist.xml",
+    sub_dir: "sysconfig",
+    src: "package-shareduid-allowlist.xml",
 }
 
 // Privapp permission whitelist files
@@ -171,13 +201,12 @@ prebuilt_etc {
     filename_from_src: true,
 }
 
-prebuilt_etc {
-    name: "com.android.timezone.updater.xml",
-    sub_dir: "permissions",
-    src: "com.android.timezone.updater.xml",
-}
-
 filegroup {
     name: "services.core.protolog.json",
     srcs: ["services.core.protolog.json"],
+}
+
+filegroup {
+    name: "file-core.protolog.pb",
+    srcs: ["core.protolog.pb"],
 }

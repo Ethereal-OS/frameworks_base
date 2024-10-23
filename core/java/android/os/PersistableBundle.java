@@ -22,12 +22,12 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.util.ArrayMap;
 import android.util.Slog;
-import android.util.TypedXmlPullParser;
-import android.util.TypedXmlSerializer;
 import android.util.Xml;
 import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.util.XmlUtils;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -49,6 +49,7 @@ import java.util.ArrayList;
  *
  * @see Bundle
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class PersistableBundle extends BaseBundle implements Cloneable, Parcelable,
         XmlUtils.WriteMapCallback {
     private static final String TAG = "PersistableBundle";

@@ -15,6 +15,8 @@
  */
 package com.android.systemui.theme;
 
+import static com.android.systemui.shared.Flags.enableHomeDelay;
+
 import android.annotation.AnyThread;
 import android.content.om.FabricatedOverlay;
 import android.content.om.OverlayIdentifier;
@@ -32,6 +34,7 @@ import androidx.annotation.VisibleForTesting;
 import com.android.systemui.Dumpable;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Background;
+import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.dump.DumpManager;
 
 import com.google.android.collect.Lists;
@@ -65,6 +68,8 @@ public class ThemeOverlayApplier implements Dumpable {
     @VisibleForTesting
     static final String SYSUI_PACKAGE = "com.android.systemui";
 
+    static final String OVERLAY_CATEGORY_DYNAMIC_COLOR =
+            "android.theme.customization.dynamic_color";
     static final String OVERLAY_CATEGORY_BG_COLOR =
             "android.theme.customization.bg_color";
     static final String OVERLAY_CATEGORY_ACCENT_COLOR =
@@ -85,6 +90,8 @@ public class ThemeOverlayApplier implements Dumpable {
     static final String OVERLAY_CHROMA_FACTOR = "android.theme.customization.chroma_factor";
 
     static final String OVERLAY_TINT_BACKGROUND = "android.theme.customization.tint_background";
+
+    static final String OVERLAY_SECONDARY_COLOR = "android.theme.customization.secondary_color";
 
     static final String COLOR_SOURCE_PRESET = "preset";
 
@@ -114,6 +121,15 @@ public class ThemeOverlayApplier implements Dumpable {
     @VisibleForTesting
     static final String OVERLAY_CATEGORY_ICON_THEME_PICKER =
             "android.theme.customization.icon_pack.themepicker";
+    @VisibleForTesting
+    static final String OVERLAY_CATEGORY_ICON_SIGNAL =
+            "android.theme.customization.signal_icon";
+    @VisibleForTesting
+    static final String OVERLAY_CATEGORY_ICON_WIFI =
+            "android.theme.customization.wifi_icon";
+    @VisibleForTesting
+    static final String OVERLAY_CATEGORY_DATA =
+            "android.customization.sb_data";
 
     /*
      * All theme customization categories used by the system, in order that they should be applied,
@@ -125,20 +141,26 @@ public class ThemeOverlayApplier implements Dumpable {
             OVERLAY_CATEGORY_SHAPE,
             OVERLAY_CATEGORY_FONT,
             OVERLAY_CATEGORY_ACCENT_COLOR,
+            OVERLAY_CATEGORY_DYNAMIC_COLOR,
             OVERLAY_CATEGORY_ICON_ANDROID,
             OVERLAY_CATEGORY_ICON_SYSUI,
             OVERLAY_CATEGORY_ICON_SETTINGS,
-            OVERLAY_CATEGORY_ICON_THEME_PICKER);
+            OVERLAY_CATEGORY_ICON_THEME_PICKER,
+            OVERLAY_CATEGORY_ICON_SIGNAL,
+            OVERLAY_CATEGORY_ICON_WIFI,
+            OVERLAY_CATEGORY_DATA);
 
     /* Categories that need to be applied to the current user as well as the system user. */
     @VisibleForTesting
     static final Set<String> SYSTEM_USER_CATEGORIES = Sets.newHashSet(
             OVERLAY_CATEGORY_SYSTEM_PALETTE,
             OVERLAY_CATEGORY_ACCENT_COLOR,
+            OVERLAY_CATEGORY_DYNAMIC_COLOR,
             OVERLAY_CATEGORY_FONT,
             OVERLAY_CATEGORY_SHAPE,
             OVERLAY_CATEGORY_ICON_ANDROID,
-            OVERLAY_CATEGORY_ICON_SYSUI);
+            OVERLAY_CATEGORY_ICON_SYSUI,
+            OVERLAY_CATEGORY_DATA);
 
     /* Allowed overlay categories for each target package. */
     private final Map<String, Set<String>> mTargetPackageToCategories = new ArrayMap<>();
@@ -146,22 +168,27 @@ public class ThemeOverlayApplier implements Dumpable {
     private final Map<String, String> mCategoryToTargetPackage = new ArrayMap<>();
     private final OverlayManager mOverlayManager;
     private final Executor mBgExecutor;
+    private final Executor mMainExecutor;
     private final String mLauncherPackage;
     private final String mThemePickerPackage;
     private boolean mIsBlackTheme;
 
     @Inject
+
     public ThemeOverlayApplier(OverlayManager overlayManager,
             @Background Executor bgExecutor,
             @Named(ThemeModule.LAUNCHER_PACKAGE) String launcherPackage,
             @Named(ThemeModule.THEME_PICKER_PACKAGE) String themePickerPackage,
-            DumpManager dumpManager) {
+            DumpManager dumpManager,
+            @Main Executor mainExecutor) {
         mOverlayManager = overlayManager;
         mBgExecutor = bgExecutor;
+        mMainExecutor = mainExecutor;
         mLauncherPackage = launcherPackage;
         mThemePickerPackage = themePickerPackage;
         mTargetPackageToCategories.put(ANDROID_PACKAGE, Sets.newHashSet(
                 OVERLAY_CATEGORY_SYSTEM_PALETTE, OVERLAY_CATEGORY_ACCENT_COLOR,
+                OVERLAY_CATEGORY_DYNAMIC_COLOR,
                 OVERLAY_CATEGORY_FONT, OVERLAY_CATEGORY_SHAPE,
                 OVERLAY_CATEGORY_ICON_ANDROID));
         mTargetPackageToCategories.put(SYSUI_PACKAGE,
@@ -173,6 +200,7 @@ public class ThemeOverlayApplier implements Dumpable {
         mTargetPackageToCategories.put(mThemePickerPackage,
                 Sets.newHashSet(OVERLAY_CATEGORY_ICON_THEME_PICKER));
         mCategoryToTargetPackage.put(OVERLAY_CATEGORY_ACCENT_COLOR, ANDROID_PACKAGE);
+        mCategoryToTargetPackage.put(OVERLAY_CATEGORY_DYNAMIC_COLOR, ANDROID_PACKAGE);
         mCategoryToTargetPackage.put(OVERLAY_CATEGORY_FONT, ANDROID_PACKAGE);
         mCategoryToTargetPackage.put(OVERLAY_CATEGORY_SHAPE, ANDROID_PACKAGE);
         mCategoryToTargetPackage.put(OVERLAY_CATEGORY_ICON_ANDROID, ANDROID_PACKAGE);
@@ -180,6 +208,9 @@ public class ThemeOverlayApplier implements Dumpable {
         mCategoryToTargetPackage.put(OVERLAY_CATEGORY_ICON_SETTINGS, SETTINGS_PACKAGE);
         mCategoryToTargetPackage.put(OVERLAY_CATEGORY_ICON_LAUNCHER, mLauncherPackage);
         mCategoryToTargetPackage.put(OVERLAY_CATEGORY_ICON_THEME_PICKER, mThemePickerPackage);
+        mCategoryToTargetPackage.put(OVERLAY_CATEGORY_ICON_SIGNAL, SYSUI_PACKAGE);
+        mCategoryToTargetPackage.put(OVERLAY_CATEGORY_ICON_WIFI, SYSUI_PACKAGE);
+        mCategoryToTargetPackage.put(OVERLAY_CATEGORY_DATA, SYSUI_PACKAGE);
 
         dumpManager.registerDumpable(TAG, this);
     }
@@ -187,12 +218,21 @@ public class ThemeOverlayApplier implements Dumpable {
     /**
      * Apply the set of overlay packages to the set of {@code UserHandle}s provided. Overlays that
      * affect sysui will also be applied to the system user.
+     *
+     * @param categoryToPackage Overlay packages to be applied
+     * @param pendingCreation Overlays yet to be created
+     * @param currentUser Current User ID
+     * @param managedProfiles Profiles get overlays
+     * @param onComplete Callback for when resources are ready. Runs in the main thread.
      */
     public void applyCurrentUserOverlays(
             Map<String, OverlayIdentifier> categoryToPackage,
             FabricatedOverlay[] pendingCreation,
             int currentUser,
-            Set<UserHandle> managedProfiles) {
+            Set<UserHandle> managedProfiles,
+            Runnable onComplete
+    ) {
+
         mBgExecutor.execute(() -> {
 
             // Disable all overlays that have not been specified in the user setting.
@@ -243,20 +283,23 @@ public class ThemeOverlayApplier implements Dumpable {
 
             try {
                 mOverlayManager.commit(transaction.build());
+                if (enableHomeDelay() && onComplete != null) {
+                    Log.d(TAG, "Executing onComplete runnable");
+                    mMainExecutor.execute(onComplete);
+                }
             } catch (SecurityException | IllegalStateException e) {
                 Log.e(TAG, "setEnabled failed", e);
             }
         });
     }
 
-    public void setIsBlackTheme(boolean black) {
-        mIsBlackTheme = black;
-    }
+    protected static final String OVERLAY_BLACK_THEME =
+            "com.android.system.theme.black";
 
     public void applyBlackTheme(boolean enable) {
         mBgExecutor.execute(() -> {
             try {
-                mOverlayManager.setEnabled("com.android.system.theme.black",
+                mOverlayManager.setEnabled(OVERLAY_BLACK_THEME,
                         enable, UserHandle.SYSTEM);
             } catch (SecurityException | IllegalStateException e) {
                 Log.e(TAG, "setEnabled failed", e);

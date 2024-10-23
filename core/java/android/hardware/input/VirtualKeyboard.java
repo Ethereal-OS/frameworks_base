@@ -18,12 +18,14 @@ package android.hardware.input;
 
 import android.annotation.NonNull;
 import android.annotation.RequiresPermission;
+import android.annotation.SuppressLint;
 import android.annotation.SystemApi;
+import android.annotation.TestApi;
 import android.companion.virtual.IVirtualDevice;
 import android.os.IBinder;
 import android.os.RemoteException;
-
-import java.io.Closeable;
+import android.util.Log;
+import android.view.KeyEvent;
 
 /**
  * A virtual keyboard representing a key input mechanism on a remote device, such as a built-in
@@ -35,25 +37,14 @@ import java.io.Closeable;
  * @hide
  */
 @SystemApi
-public class VirtualKeyboard implements Closeable {
+public class VirtualKeyboard extends VirtualInputDevice {
 
-    private final IVirtualDevice mVirtualDevice;
-    private final IBinder mToken;
+    private final int mUnsupportedKeyCode = KeyEvent.KEYCODE_DPAD_CENTER;
 
     /** @hide */
-    public VirtualKeyboard(IVirtualDevice virtualDevice, IBinder token) {
-        mVirtualDevice = virtualDevice;
-        mToken = token;
-    }
-
-    @Override
-    @RequiresPermission(android.Manifest.permission.CREATE_VIRTUAL_DEVICE)
-    public void close() {
-        try {
-            mVirtualDevice.unregisterInputDevice(mToken);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
+    public VirtualKeyboard(VirtualKeyboardConfig config,
+            IVirtualDevice virtualDevice, IBinder token) {
+        super(config, virtualDevice, token);
     }
 
     /**
@@ -64,9 +55,28 @@ public class VirtualKeyboard implements Closeable {
     @RequiresPermission(android.Manifest.permission.CREATE_VIRTUAL_DEVICE)
     public void sendKeyEvent(@NonNull VirtualKeyEvent event) {
         try {
-            mVirtualDevice.sendKeyEvent(mToken, event);
+            if (mUnsupportedKeyCode == event.getKeyCode()) {
+                throw new IllegalArgumentException(
+                    "Unsupported key code " + event.getKeyCode()
+                        + " sent to a VirtualKeyboard input device.");
+            }
+            if (!mVirtualDevice.sendKeyEvent(mToken, event)) {
+                Log.w(TAG, "Failed to send key event to virtual keyboard "
+                        + mConfig.getInputDeviceName());
+            }
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+    }
+
+    /**
+     * @return The id of the {@link android.view.InputDevice} corresponding to this keyboard.
+     * @hide
+     */
+    @SuppressLint("UnflaggedApi") // @TestApi without associated feature.
+    @TestApi
+    @Override
+    public int getInputDeviceId() {
+        return super.getInputDeviceId();
     }
 }

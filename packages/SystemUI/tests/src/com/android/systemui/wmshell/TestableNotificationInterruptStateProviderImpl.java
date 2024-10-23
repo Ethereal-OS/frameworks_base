@@ -16,8 +16,6 @@
 
 package com.android.systemui.wmshell;
 
-import android.content.ContentResolver;
-import android.content.Context;
 import android.hardware.display.AmbientDisplayConfiguration;
 import android.os.Handler;
 import android.os.PowerManager;
@@ -30,15 +28,17 @@ import com.android.systemui.statusbar.notification.interruption.KeyguardNotifica
 import com.android.systemui.statusbar.notification.interruption.NotificationInterruptLogger;
 import com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProviderImpl;
 import com.android.systemui.statusbar.policy.BatteryController;
+import com.android.systemui.statusbar.policy.DeviceProvisionedController;
 import com.android.systemui.statusbar.policy.HeadsUpManager;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
+import com.android.systemui.util.EventLog;
+import com.android.systemui.util.settings.GlobalSettings;
+import com.android.systemui.util.time.SystemClock;
 
 public class TestableNotificationInterruptStateProviderImpl
         extends NotificationInterruptStateProviderImpl {
 
     TestableNotificationInterruptStateProviderImpl(
-            Context context,
-            ContentResolver contentResolver,
             PowerManager powerManager,
             AmbientDisplayConfiguration ambientDisplayConfiguration,
             StatusBarStateController statusBarStateController,
@@ -50,9 +50,12 @@ public class TestableNotificationInterruptStateProviderImpl
             NotifPipelineFlags flags,
             KeyguardNotificationVisibilityProvider keyguardNotificationVisibilityProvider,
             UiEventLogger uiEventLogger,
-            UserTracker userTracker) {
-        super(context,
-                contentResolver,
+            UserTracker userTracker,
+            DeviceProvisionedController deviceProvisionedController,
+            SystemClock systemClock,
+            GlobalSettings globalSettings,
+            EventLog eventLog) {
+        super(
                 powerManager,
                 ambientDisplayConfiguration,
                 batteryController,
@@ -64,7 +67,11 @@ public class TestableNotificationInterruptStateProviderImpl
                 flags,
                 keyguardNotificationVisibilityProvider,
                 uiEventLogger,
-                userTracker);
+                userTracker,
+                deviceProvisionedController,
+                systemClock,
+                globalSettings,
+                eventLog);
         mUseHeadsUp = true;
     }
 }

@@ -46,13 +46,10 @@ internal class MobileState(
     @JvmField var dataState: Int = TelephonyManager.DATA_DISCONNECTED,
     // Tracks the on/off state of the defaultDataSubscription
     @JvmField var defaultDataOff: Boolean = false,
-    @JvmField var imsRegistered: Boolean = false,
-    @JvmField var voiceCapable: Boolean = false,
-    @JvmField var videoCapable: Boolean = false,
 ) : ConnectivityState() {
 
     @JvmField var telephonyDisplayInfo = TelephonyDisplayInfo(TelephonyManager.NETWORK_TYPE_UNKNOWN,
-            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE)
+            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE, false)
     @JvmField var serviceState: ServiceState? = null
     @JvmField var signalStrength: SignalStrength? = null
 
@@ -98,9 +95,6 @@ internal class MobileState(
         roaming = o.roaming
         dataState = o.dataState
         defaultDataOff = o.defaultDataOff
-        imsRegistered = o.imsRegistered;
-        voiceCapable = o.voiceCapable;
-        videoCapable = o.videoCapable;
 
         telephonyDisplayInfo = o.telephonyDisplayInfo
         serviceState = o.serviceState
@@ -137,7 +131,7 @@ internal class MobileState(
     }
 
     fun isRoaming(): Boolean {
-        return serviceState != null && serviceState!!.roaming
+        return telephonyDisplayInfo != null && telephonyDisplayInfo.isRoaming
     }
 
     /**
@@ -153,10 +147,6 @@ internal class MobileState(
     fun getNetworkTypeIcon(context: Context): Int {
         val icon = (iconGroup as MobileIconGroup)
         return networkTypeResIdCache.get(icon, carrierId, context)
-    }
-
-    fun getDataNetworkType(): Int {
-        return serviceState?.getDataNetworkType() ?: 0
     }
 
     fun setFromMobileStatus(mobileStatus: MobileStatus) {
@@ -186,9 +176,6 @@ internal class MobileState(
         builder.append("userSetup=$userSetup,")
         builder.append("dataState=$dataState,")
         builder.append("defaultDataOff=$defaultDataOff,")
-        builder.append("imsRegistered=$imsRegistered,")
-        builder.append("voiceCapable=$voiceCapable,")
-        builder.append("videoCapable=$videoCapable,")
 
         // Computed properties
         builder.append("showQuickSettingsRatIcon=${showQuickSettingsRatIcon()},")
@@ -272,9 +259,6 @@ internal class MobileState(
         if (roaming != other.roaming) return false
         if (dataState != other.dataState) return false
         if (defaultDataOff != other.defaultDataOff) return false
-        if (imsRegistered != other.imsRegistered) return false
-        if (voiceCapable != other.voiceCapable) return false
-        if (videoCapable != other.videoCapable) return false
         if (telephonyDisplayInfo != other.telephonyDisplayInfo) return false
         if (serviceState != other.serviceState) return false
         if (signalStrength != other.signalStrength) return false

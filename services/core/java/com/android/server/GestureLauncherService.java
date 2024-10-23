@@ -19,12 +19,10 @@ package com.android.server;
 import android.app.ActivityManager;
 import android.app.StatusBarManager;
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.hardware.Sensor;
@@ -40,8 +38,6 @@ import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.os.Trace;
 import android.os.UserHandle;
-import android.os.VibrationEffect;
-import android.os.Vibrator;
 import android.provider.Settings;
 import android.util.MutableBoolean;
 import android.util.Slog;
@@ -53,7 +49,6 @@ import com.android.internal.logging.UiEvent;
 import com.android.internal.logging.UiEventLogger;
 import com.android.internal.logging.UiEventLoggerImpl;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
-import com.android.internal.util.ethereal.EtherealUtils;
 import com.android.server.statusbar.StatusBarManagerInternal;
 import com.android.server.wm.WindowManagerInternal;
 
@@ -114,19 +109,6 @@ public class GestureLauncherService extends SystemService {
      */
     private static final int CAMERA_POWER_TAP_COUNT_THRESHOLD = 2;
 
-    /** Action for starting emergency alerts on Wear OS. */
-    private static final String WEAR_LAUNCH_EMERGENCY_ACTION =
-            "com.android.systemui.action.LAUNCH_EMERGENCY";
-
-    /** Action for starting emergency alerts in retail mode on Wear OS. */
-    private static final String WEAR_LAUNCH_EMERGENCY_RETAIL_ACTION =
-            "com.android.systemui.action.LAUNCH_EMERGENCY_RETAIL";
-
-    /**
-     * Boolean extra for distinguishing intents coming from power button gesture.
-     */
-    private static final String EXTRA_LAUNCH_EMERGENCY_VIA_GESTURE = "launch_emergency_via_gesture";
-
     /** The listener that receives the gesture event. */
     private final GestureEventListener mGestureListener = new GestureEventListener();
     private final CameraLiftTriggerEventListener mCameraLiftTriggerListener =
@@ -181,11 +163,6 @@ public class GestureLauncherService extends SystemService {
     private boolean mCameraDoubleTapPowerEnabled;
 
     /**
-     * Whether torch double tap power button gesture is currently enabled;
-     */
-    private boolean mTorchDoubleTapPowerEnabled;
-
-    /**
      * Whether emergency gesture is currently enabled
      */
     private boolean mEmergencyGestureEnabled;
@@ -204,7 +181,6 @@ public class GestureLauncherService extends SystemService {
     private final UiEventLogger mUiEventLogger;
 
     private boolean mHasFeatureWatch;
-    private long mVibrateMilliSecondsForPanicGesture;
 
     @VisibleForTesting
     public enum GestureLauncherEvent implements UiEventLogger.UiEventEnum {
@@ -274,13 +250,6 @@ public class GestureLauncherService extends SystemService {
 
             mHasFeatureWatch =
                     mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WATCH);
-            mVibrateMilliSecondsForPanicGesture =
-                    resources.getInteger(
-                            com.android
-                                    .internal
-                                    .R
-                                    .integer
-                                    .config_mashPressVibrateTimeOnPowerButton);
         }
     }
 
@@ -290,9 +259,6 @@ public class GestureLauncherService extends SystemService {
                 false, mSettingObserver, mUserId);
         mContext.getContentResolver().registerContentObserver(
                 Settings.Secure.getUriFor(Settings.Secure.CAMERA_DOUBLE_TAP_POWER_GESTURE_DISABLED),
-                false, mSettingObserver, mUserId);
-        mContext.getContentResolver().registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.TORCH_DOUBLE_TAP_POWER_GESTURE_ENABLED),
                 false, mSettingObserver, mUserId);
         mContext.getContentResolver().registerContentObserver(
                 Settings.Secure.getUriFor(Settings.Secure.CAMERA_LIFT_TRIGGER_ENABLED),
@@ -326,14 +292,6 @@ public class GestureLauncherService extends SystemService {
         boolean enabled = isCameraDoubleTapPowerSettingEnabled(mContext, mUserId);
         synchronized (this) {
             mCameraDoubleTapPowerEnabled = enabled;
-        }
-    }
-
-    private void updateTorchDoubleTapPowerEnabled() {
-        final boolean enabled = Settings.Secure.getIntForUser(mContext.getContentResolver(),
-            Settings.Secure.TORCH_DOUBLE_TAP_POWER_GESTURE_ENABLED, 0, mUserId) == 1;
-        synchronized (this) {
-            mTorchDoubleTapPowerEnabled = enabled;
         }
     }
 
@@ -483,7 +441,8 @@ public class GestureLauncherService extends SystemService {
     public static boolean isEmergencyGestureSettingEnabled(Context context, int userId) {
         return isEmergencyGestureEnabled(context.getResources())
                 && Settings.Secure.getIntForUser(context.getContentResolver(),
-                Settings.Secure.EMERGENCY_GESTURE_ENABLED, 1, userId) != 0;
+                Settings.Secure.EMERGENCY_GESTURE_ENABLED,
+                isDefaultEmergencyGestureEnabled(context.getResources()) ? 1 : 0, userId) != 0;
     }
 
     /**
@@ -530,6 +489,11 @@ public class GestureLauncherService extends SystemService {
         return resources.getBoolean(com.android.internal.R.bool.config_emergencyGestureEnabled);
     }
 
+    private static boolean isDefaultEmergencyGestureEnabled(Resources resources) {
+        return resources.getBoolean(
+                com.android.internal.R.bool.config_defaultEmergencyGestureEnabled);
+    }
+
     /**
      * Whether GestureLauncherService should be enabled according to system properties.
      */
@@ -572,7 +536,6 @@ public class GestureLauncherService extends SystemService {
         boolean launchCamera = false;
         boolean launchEmergencyGesture = false;
         boolean intercept = false;
-        boolean toggleFlashlight = false;
         long powerTapInterval;
         synchronized (this) {
             powerTapInterval = event.getEventTime() - mLastPowerDown;
@@ -625,15 +588,11 @@ public class GestureLauncherService extends SystemService {
                     }
                 }
             }
-            if (powerTapInterval < CAMERA_POWER_DOUBLE_TAP_MAX_TIME_MS
+            if (mCameraDoubleTapPowerEnabled
+                    && powerTapInterval < CAMERA_POWER_DOUBLE_TAP_MAX_TIME_MS
                     && mPowerButtonConsecutiveTaps == CAMERA_POWER_TAP_COUNT_THRESHOLD) {
-                if (mCameraDoubleTapPowerEnabled) {
-                    launchCamera = true;
-                    intercept = interactive;
-                } else if (mTorchDoubleTapPowerEnabled) {
-                    toggleFlashlight = true;
-                    intercept = interactive;
-                }
+                launchCamera = true;
+                intercept = interactive;
             }
         }
         if (mPowerButtonConsecutiveTaps > 1 || mPowerButtonSlowConsecutiveTaps > 1) {
@@ -652,8 +611,6 @@ public class GestureLauncherService extends SystemService {
                         (int) powerTapInterval);
                 mUiEventLogger.log(GestureLauncherEvent.GESTURE_CAMERA_DOUBLE_TAP_POWER);
             }
-        } else if (toggleFlashlight) {
-            EtherealUtils.toggleCameraFlash();
         } else if (launchEmergencyGesture) {
             Slog.i(TAG, "Emergency gesture detected, launching.");
             launchEmergencyGesture = handleEmergencyGesture();
@@ -669,7 +626,7 @@ public class GestureLauncherService extends SystemService {
                 mPowerButtonSlowConsecutiveTaps);
         mMetricsLogger.histogram("power_double_tap_interval", (int) powerTapInterval);
 
-        outLaunched.value = launchCamera || toggleFlashlight || launchEmergencyGesture;
+        outLaunched.value = launchCamera || launchEmergencyGesture;
         // Intercept power key event if the press is part of a gesture (camera, eGesture) and the
         // user has completed setup.
         return intercept && isUserSetupComplete();
@@ -732,11 +689,6 @@ public class GestureLauncherService extends SystemService {
                         userSetupComplete));
             }
 
-            if (mHasFeatureWatch) {
-                onEmergencyGestureDetectedOnWatch();
-                return true;
-            }
-
             StatusBarManagerInternal service = LocalServices.getService(
                     StatusBarManagerInternal.class);
             service.onEmergencyActionLaunchGestureDetected();
@@ -744,37 +696,6 @@ public class GestureLauncherService extends SystemService {
         } finally {
             Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
         }
-    }
-
-    private void onEmergencyGestureDetectedOnWatch() {
-        Intent emergencyIntent =
-                new Intent(
-                        isInRetailMode()
-                                ? WEAR_LAUNCH_EMERGENCY_RETAIL_ACTION
-                                : WEAR_LAUNCH_EMERGENCY_ACTION);
-        PackageManager pm = mContext.getPackageManager();
-        ResolveInfo resolveInfo = pm.resolveActivity(emergencyIntent, /*flags=*/0);
-        if (resolveInfo == null) {
-            Slog.w(TAG, "Couldn't find an app to process the emergency intent "
-                    + emergencyIntent.getAction());
-            return;
-        }
-
-        Vibrator vibrator = mContext.getSystemService(Vibrator.class);
-        vibrator.vibrate(VibrationEffect.createOneShot(mVibrateMilliSecondsForPanicGesture,
-                VibrationEffect.DEFAULT_AMPLITUDE));
-
-        emergencyIntent.setComponent(
-                new ComponentName(
-                        resolveInfo.activityInfo.packageName, resolveInfo.activityInfo.name));
-        emergencyIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        emergencyIntent.putExtra(EXTRA_LAUNCH_EMERGENCY_VIA_GESTURE, true);
-        mContext.startActivityAsUser(emergencyIntent, new UserHandle(mUserId));
-    }
-
-    private boolean isInRetailMode() {
-        return Settings.Global.getInt(mContext.getContentResolver(),
-                Settings.Global.DEVICE_DEMO_MODE, 0) == 1;
     }
 
     private boolean isUserSetupComplete() {
@@ -791,7 +712,6 @@ public class GestureLauncherService extends SystemService {
                 registerContentObservers();
                 updateCameraRegistered();
                 updateCameraDoubleTapPowerEnabled();
-                updateTorchDoubleTapPowerEnabled();
                 updateEmergencyGestureEnabled();
                 updateEmergencyGesturePowerButtonCooldownPeriodMs();
             }
@@ -803,7 +723,6 @@ public class GestureLauncherService extends SystemService {
             if (userId == mUserId) {
                 updateCameraRegistered();
                 updateCameraDoubleTapPowerEnabled();
-                updateTorchDoubleTapPowerEnabled();
                 updateEmergencyGestureEnabled();
                 updateEmergencyGesturePowerButtonCooldownPeriodMs();
             }

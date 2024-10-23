@@ -23,12 +23,13 @@ import android.graphics.Rect;
 import android.hardware.biometrics.IBiometricContextListener;
 import android.hardware.biometrics.IBiometricSysuiReceiver;
 import android.hardware.biometrics.PromptInfo;
-import android.hardware.fingerprint.IUdfpsHbmListener;
+import android.hardware.fingerprint.IUdfpsRefreshRateRequestCallback;
 import android.media.INearbyMediaDevicesProvider;
 import android.media.MediaRoute2Info;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.UserHandle;
+import android.view.KeyEvent;
 import android.service.notification.StatusBarNotification;
 
 import com.android.internal.logging.InstanceId;
@@ -90,7 +91,7 @@ interface IStatusBarService
     void onNotificationSettingsViewed(String key);
     void onNotificationBubbleChanged(String key, boolean isBubble, int flags);
     void onBubbleMetadataFlagChanged(String key, int flags);
-    void hideCurrentInputMethodForBubbles();
+    void hideCurrentInputMethodForBubbles(int displayId);
     void grantInlineReplyUriPermission(String key, in Uri uri, in UserHandle user, String packageName);
     oneway void clearInlineReplyUriPermissions(String key);
     void onNotificationFeedbackReceived(String key, in Bundle feedback);
@@ -112,7 +113,8 @@ interface IStatusBarService
     void remTile(in ComponentName tile);
     void clickTile(in ComponentName tile);
     @UnsupportedAppUsage
-    void handleSystemKey(in int key);
+    void handleSystemKey(in KeyEvent key);
+    int getLastSystemKey();
 
     /**
      * Methods to show toast messages for screen pinning
@@ -123,8 +125,7 @@ interface IStatusBarService
     // Used to show the authentication dialog (Biometrics, Device Credential)
     void showAuthenticationDialog(in PromptInfo promptInfo, IBiometricSysuiReceiver sysuiReceiver,
             in int[] sensorIds, boolean credentialAllowed, boolean requireConfirmation,
-            int userId, long operationId, String opPackageName, long requestId,
-            int multiSensorConfig);
+            int userId, long operationId, String opPackageName, long requestId);
 
     // Used to notify the authentication dialog that a biometric has been authenticated
     void onBiometricAuthenticated(int modality);
@@ -138,9 +139,9 @@ interface IStatusBarService
     void setBiometicContextListener(in IBiometricContextListener listener);
 
     /**
-     * Sets an instance of IUdfpsHbmListener for UdfpsController.
+     * Sets an instance of IUdfpsRefreshRateRequestCallback for UdfpsController.
      */
-    void setUdfpsHbmListener(in IUdfpsHbmListener listener);
+    void setUdfpsRefreshRateCallback(in IUdfpsRefreshRateRequestCallback callback);
 
     /**
      * Show a warning that the device is about to go to sleep due to user inactivity.
@@ -232,16 +233,12 @@ interface IStatusBarService
     /** Shows rear display educational dialog */
     void showRearDisplayDialog(int currentBaseState);
 
-    /** Ethereal additions. */
+
+    /** euclidOS additions. */
     void toggleCameraFlash();
-    void toggleRecentApps();
-    void toggleSplitScreen();
-    void preloadRecentApps();
-    void cancelPreloadRecentApps();
+
     void killForegroundApp();
 
-    /** Starts the default assistant app. */
-    void startAssist(in Bundle args);
-
-    void screenPinningStateChanged(boolean enabled);
+    /** Used to block or unblock usage of gestural navigation. */
+    void setBlockedGesturalNavigation(boolean blocked);
 }

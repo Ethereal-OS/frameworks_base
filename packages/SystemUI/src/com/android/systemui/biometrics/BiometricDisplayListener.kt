@@ -20,7 +20,8 @@ import android.content.Context
 import android.hardware.display.DisplayManager
 import android.hardware.fingerprint.FingerprintSensorPropertiesInternal
 import android.os.Handler
-import android.view.Surface
+import android.view.DisplayInfo
+import com.android.app.tracing.traceSection
 import com.android.systemui.biometrics.BiometricDisplayListener.SensorType.Generic
 
 /**
@@ -37,33 +38,34 @@ class BiometricDisplayListener(
     private val onChanged: () -> Unit
 ) : DisplayManager.DisplayListener {
 
-    private var lastRotation = Surface.ROTATION_0
+    private var cachedDisplayInfo = DisplayInfo()
 
     override fun onDisplayAdded(displayId: Int) {}
     override fun onDisplayRemoved(displayId: Int) {}
     override fun onDisplayChanged(displayId: Int) {
-        val rotationChanged = didRotationChange()
+        traceSection({ "BiometricDisplayListener($sensorType)#onDisplayChanged" }) {
+            val rotationChanged = didRotationChange()
 
-        when (sensorType) {
-            is SensorType.SideFingerprint -> onChanged()
-            else -> {
-                if (rotationChanged) {
-                    onChanged()
+            when (sensorType) {
+                is SensorType.SideFingerprint -> onChanged()
+                else -> {
+                    if (rotationChanged) {
+                        onChanged()
+                    }
                 }
             }
         }
     }
 
     private fun didRotationChange(): Boolean {
-        val rotation = context.display?.rotation ?: return false
-        val last = lastRotation
-        lastRotation = rotation
-        return last != rotation
+        val last = cachedDisplayInfo.rotation
+        context.display?.getDisplayInfo(cachedDisplayInfo)
+        return last != cachedDisplayInfo.rotation
     }
 
     /** Listen for changes. */
     fun enable() {
-        lastRotation = context.display?.rotation ?: Surface.ROTATION_0
+        context.display?.getDisplayInfo(cachedDisplayInfo)
         displayManager.registerDisplayListener(
             this,
             handler,
@@ -83,8 +85,8 @@ class BiometricDisplayListener(
      * biometric prompt (and this object will likely change as multi-mode auth is added).
      */
     sealed class SensorType {
-        object Generic : SensorType()
-        object UnderDisplayFingerprint : SensorType()
+        data object Generic : SensorType()
+        data object UnderDisplayFingerprint : SensorType()
         data class SideFingerprint(
             val properties: FingerprintSensorPropertiesInternal
         ) : SensorType()

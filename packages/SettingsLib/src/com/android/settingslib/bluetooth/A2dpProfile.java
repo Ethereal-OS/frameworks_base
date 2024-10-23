@@ -42,8 +42,7 @@ import java.util.List;
 
 public class A2dpProfile implements LocalBluetoothProfile {
     private static final String TAG = "A2dpProfile";
-
-    private static final int SOURCE_CODEC_TYPE_OPUS = 6; // TODO remove in U
+    private static boolean V = true;
 
     private Context mContext;
 
@@ -83,12 +82,13 @@ public class A2dpProfile implements LocalBluetoothProfile {
                 device.onProfileStateChanged(A2dpProfile.this, BluetoothProfile.STATE_CONNECTED);
                 device.refresh();
             }
-            mIsProfileReady=true;
+            mIsProfileReady = true;
             mProfileManager.callServiceConnectedListeners();
         }
 
         public void onServiceDisconnected(int profile) {
-            mIsProfileReady=false;
+            mIsProfileReady = false;
+            mProfileManager.callServiceDisconnectedListeners();
         }
     }
 
@@ -199,19 +199,19 @@ public class A2dpProfile implements LocalBluetoothProfile {
 
     @Override
     public boolean setEnabled(BluetoothDevice device, boolean enabled) {
-        boolean isEnabled = false;
+        boolean isSuccessful = false;
         if (mService == null) {
             return false;
         }
         if (enabled) {
             if (mService.getConnectionPolicy(device) < CONNECTION_POLICY_ALLOWED) {
-                isEnabled = mService.setConnectionPolicy(device, CONNECTION_POLICY_ALLOWED);
+                isSuccessful = mService.setConnectionPolicy(device, CONNECTION_POLICY_ALLOWED);
             }
         } else {
-            isEnabled = mService.setConnectionPolicy(device, CONNECTION_POLICY_FORBIDDEN);
+            isSuccessful = mService.setConnectionPolicy(device, CONNECTION_POLICY_FORBIDDEN);
         }
 
-        return isEnabled;
+        return isSuccessful;
     }
     boolean isA2dpPlaying() {
         if (mService == null) return false;
@@ -225,6 +225,11 @@ public class A2dpProfile implements LocalBluetoothProfile {
     }
 
     public boolean supportsHighQualityAudio(BluetoothDevice device) {
+        if (V) Log.d(TAG, " execute supportsHighQualityAudio()");
+        if (mService == null) {
+            if (V) Log.d(TAG,"mService is null.");
+            return false;
+        }
         BluetoothDevice bluetoothDevice = (device != null) ? device : getActiveDevice();
         if (bluetoothDevice == null) {
             return false;
@@ -238,6 +243,11 @@ public class A2dpProfile implements LocalBluetoothProfile {
      */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     public boolean isHighQualityAudioEnabled(BluetoothDevice device) {
+        if (V) Log.d(TAG, " execute isHighQualityAudioEnabled()");
+        if (mService == null) {
+            if (V) Log.d(TAG,"mService is null.");
+            return false;
+        }
         BluetoothDevice bluetoothDevice = (device != null) ? device : getActiveDevice();
         if (bluetoothDevice == null) {
             return false;
@@ -264,6 +274,11 @@ public class A2dpProfile implements LocalBluetoothProfile {
     }
 
     public void setHighQualityAudioEnabled(BluetoothDevice device, boolean enabled) {
+        if (V) Log.d(TAG, " execute setHighQualityAudioEnabled()");
+        if (mService == null) {
+            if (V) Log.d(TAG,"mService is null.");
+            return;
+        }
         BluetoothDevice bluetoothDevice = (device != null) ? device : getActiveDevice();
         if (bluetoothDevice == null) {
             return;
@@ -290,6 +305,7 @@ public class A2dpProfile implements LocalBluetoothProfile {
      */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     public String getHighQualityAudioOptionLabel(BluetoothDevice device) {
+        if (V) Log.d(TAG, " execute getHighQualityAudioOptionLabel()");
         BluetoothDevice bluetoothDevice = (device != null) ? device : getActiveDevice();
         int unknownCodecId = R.string.bluetooth_profile_a2dp_high_quality_unknown_codec;
         if (bluetoothDevice == null || !supportsHighQualityAudio(device)
@@ -299,7 +315,7 @@ public class A2dpProfile implements LocalBluetoothProfile {
         // We want to get the highest priority codec, since that's the one that will be used with
         // this device, and see if it is high-quality (ie non-mandatory).
         List<BluetoothCodecConfig> selectable = null;
-        if (mService.getCodecStatus(device) != null) {
+        if (mService != null && mService.getCodecStatus(device) != null) {
             selectable = mService.getCodecStatus(device).getCodecsSelectableCapabilities();
             // To get the highest priority, we sort in reverse.
             Collections.sort(selectable,
@@ -333,7 +349,7 @@ public class A2dpProfile implements LocalBluetoothProfile {
             case BluetoothCodecConfig.SOURCE_CODEC_TYPE_LC3:
                 index = 6;
                 break;
-            case SOURCE_CODEC_TYPE_OPUS: // TODO update in U
+            case BluetoothCodecConfig.SOURCE_CODEC_TYPE_OPUS:
                 index = 7;
                 break;
            }

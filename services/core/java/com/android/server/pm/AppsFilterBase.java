@@ -24,6 +24,7 @@ import static com.android.server.pm.AppsFilterUtils.requestsQueryAllPackages;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.content.pm.Flags;
 import android.content.pm.SigningDetails;
 import android.os.Binder;
 import android.os.Handler;
@@ -38,14 +39,13 @@ import android.util.SparseArray;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.function.QuadFunction;
-import com.android.server.ext.PackageManagerHooks;
 import com.android.server.om.OverlayReferenceMapper;
-import com.android.server.pm.parsing.pkg.AndroidPackage;
+import com.android.server.pm.pkg.AndroidPackage;
 import com.android.server.pm.pkg.PackageStateInternal;
+import com.android.server.pm.pkg.SharedUserApi;
 import com.android.server.pm.snapshot.PackageDataSnapshot;
 import com.android.server.utils.SnapshotCache;
 import com.android.server.utils.Watched;
-import com.android.server.utils.WatchedArrayList;
 import com.android.server.utils.WatchedArrayMap;
 import com.android.server.utils.WatchedArraySet;
 import com.android.server.utils.WatchedSparseBooleanMatrix;
@@ -53,7 +53,6 @@ import com.android.server.utils.WatchedSparseSetArray;
 
 import java.io.PrintWriter;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -129,10 +128,19 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
     protected SnapshotCache<WatchedSparseSetArray<Integer>> mQueryableViaUsesLibrarySnapshot;
 
     /**
-     * Handler for running reasonably short background tasks such as building the initial
-     * visibility cache.
+     * A mapping from the set of App IDs that query other App IDs via custom permissions to the
+     * list of packages that they can see.
      */
-    protected Handler mBackgroundHandler;
+    @NonNull
+    @Watched
+    protected WatchedSparseSetArray<Integer> mQueryableViaUsesPermission;
+    @NonNull
+    protected SnapshotCache<WatchedSparseSetArray<Integer>> mQueryableViaUsesPermissionSnapshot;
+
+    /**
+     * Handler for running tasks such as building the initial visibility cache.
+     */
+    protected Handler mHandler;
 
     /**
      * Pending full recompute of mQueriesViaComponent. Occurs when a package adds a new set of
@@ -170,9 +178,9 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
 
     @NonNull
     @Watched
-    protected WatchedArrayList<String> mProtectedBroadcasts;
+    protected WatchedArraySet<String> mProtectedBroadcasts;
     @NonNull
-    protected SnapshotCache<WatchedArrayList<String>> mProtectedBroadcastsSnapshot;
+    protected SnapshotCache<WatchedArraySet<String>> mProtectedBroadcastsSnapshot;
 
     /**
      * This structure maps uid -> uid and indicates whether access from the first should be
@@ -189,10 +197,12 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
     protected SnapshotCache<WatchedSparseBooleanMatrix> mShouldFilterCacheSnapshot;
 
     protected volatile boolean mCacheReady = false;
+    protected volatile boolean mCacheEnabled = true;
+    protected volatile boolean mNeedToUpdateCacheForImplicitAccess = false;
 
     protected static final boolean CACHE_VALID = true;
     protected static final boolean CACHE_INVALID = false;
-    protected AtomicBoolean mCacheValid = new AtomicBoolean(CACHE_INVALID);
+    protected final AtomicBoolean mCacheValid = new AtomicBoolean(CACHE_INVALID);
 
     protected boolean isForceQueryable(int callingAppId) {
         return mForceQueryable.contains(callingAppId);
@@ -216,6 +226,10 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
 
     protected boolean isQueryableViaUsesLibrary(int callingAppId, int targetAppId) {
         return mQueryableViaUsesLibrary.contains(callingAppId, targetAppId);
+    }
+
+    protected boolean isQueryableViaUsesPermission(int callingAppId, int targetAppId) {
+        return mQueryableViaUsesPermission.contains(callingAppId, targetAppId);
     }
 
     protected boolean isQueryableViaComponentWhenRequireRecompute(
@@ -305,6 +319,11 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
                 existingSettings.untrackedStorage());
     }
 
+    private static boolean isQueryableBySdkSandbox(int callingUid, int targetUid) {
+        return Flags.allowSdkSandboxQueryIntentActivities()
+                && targetUid == Process.getAppUidForSdkSandboxUid(callingUid);
+    }
+
     /**
      * See
      * {@link AppsFilterSnapshot#shouldFilterApplication(PackageDataSnapshot, int, Object,
@@ -325,18 +344,21 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
             } else if (Process.isSdkSandboxUid(callingAppId)) {
                 final int targetAppId = targetPkgSetting.getAppId();
                 final int targetUid = UserHandle.getUid(userId, targetAppId);
-                // we only allow sdk sandbox processes access to forcequeryable packages
+                // we only allow sdk sandbox processes access to forcequeryable packages or
+                // if the target app is the sandbox's client app
                 return !isForceQueryable(targetPkgSetting.getAppId())
-                      && !isImplicitlyQueryable(callingUid, targetUid);
+                        && !isImplicitlyQueryable(callingUid, targetUid)
+                        && !isQueryableBySdkSandbox(callingUid, targetUid);
             }
-            if (mCacheReady) { // use cache
+            // use cache
+            if (mCacheReady && mCacheEnabled) {
                 if (!shouldFilterApplicationUsingCache(callingUid,
                         targetPkgSetting.getAppId(),
                         userId)) {
                     return false;
                 }
             } else {
-                if (!shouldFilterApplicationInternal(snapshot,
+                if (!shouldFilterApplicationInternal((Computer) snapshot,
                         callingUid, callingSetting, targetPkgSetting, userId)) {
                     return false;
                 }
@@ -369,7 +391,7 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
         return mShouldFilterCache.valueAt(callingIndex, targetIndex);
     }
 
-    protected boolean shouldFilterApplicationInternal(PackageDataSnapshot snapshot, int callingUid,
+    protected boolean shouldFilterApplicationInternal(Computer snapshot, int callingUid,
             Object callingSetting, PackageStateInternal targetPkgSetting, int targetUserId) {
         if (DEBUG_TRACING) {
             Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "shouldFilterApplicationInternal");
@@ -386,6 +408,24 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
                 Slog.wtf(TAG, "No setting found for non system uid " + callingUid);
                 return true;
             }
+
+            if (DEBUG_TRACING) {
+                Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "getAppId");
+            }
+            final int callingAppId = UserHandle.getAppId(callingUid);
+            final int targetAppId = targetPkgSetting.getAppId();
+            if (DEBUG_TRACING) {
+                Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+            }
+            if (callingAppId == targetAppId
+                    || callingAppId < Process.FIRST_APPLICATION_UID
+                    || targetAppId < Process.FIRST_APPLICATION_UID) {
+                if (DEBUG_LOGGING) {
+                    log(callingSetting, targetPkgSetting, "same app id or core app id");
+                }
+                return false;
+            }
+
             final PackageStateInternal callingPkgSetting;
             if (DEBUG_TRACING) {
                 Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "callingSetting instanceof");
@@ -396,9 +436,11 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
                 final PackageStateInternal packageState = (PackageStateInternal) callingSetting;
                 if (packageState.hasSharedUser()) {
                     callingPkgSetting = null;
-                    callingSharedPkgSettings.addAll(getSharedUserPackages(
-                            packageState.getSharedUserAppId(), snapshot.getAllSharedUsers()));
-
+                    final SharedUserApi sharedUserApi =
+                            snapshot.getSharedUser(packageState.getSharedUserAppId());
+                    if (sharedUserApi != null) {
+                        callingSharedPkgSettings.addAll(sharedUserApi.getPackageStates());
+                    }
                 } else {
                     callingPkgSetting = packageState;
                 }
@@ -409,11 +451,6 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
             }
             if (DEBUG_TRACING) {
                 Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
-            }
-
-            if (PackageManagerHooks.shouldFilterAccess(callingPkgSetting, callingSharedPkgSettings,
-                    targetPkgSetting)) {
-                return true;
             }
 
             if (callingPkgSetting != null) {
@@ -434,27 +471,6 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
                         return false;
                     }
                 }
-            }
-
-            if (DEBUG_TRACING) {
-                Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "getAppId");
-            }
-            final int callingAppId;
-            if (callingPkgSetting != null) {
-                callingAppId = callingPkgSetting.getAppId();
-            } else {
-                // all should be the same
-                callingAppId = callingSharedPkgSettings.valueAt(0).getAppId();
-            }
-            final int targetAppId = targetPkgSetting.getAppId();
-            if (DEBUG_TRACING) {
-                Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
-            }
-            if (callingAppId == targetAppId) {
-                if (DEBUG_LOGGING) {
-                    log(callingSetting, targetPkgSetting, "same app id");
-                }
-                return false;
             }
 
             try {
@@ -636,6 +652,22 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
                 }
             }
 
+            try {
+                if (DEBUG_TRACING) {
+                    Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "mQueryableViaUsesPermission");
+                }
+                if (isQueryableViaUsesPermission(callingAppId, targetAppId)) {
+                    if (DEBUG_LOGGING) {
+                        log(callingSetting, targetPkgSetting, "queryable for permission users");
+                    }
+                    return false;
+                }
+            } finally {
+                if (DEBUG_TRACING) {
+                    Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+                }
+            }
+
             return true;
         } finally {
             if (DEBUG_TRACING) {
@@ -672,17 +704,6 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
         Slog.i(TAG,
                 "interaction: " + (callingSetting == null ? "system" : callingSetting) + " -> "
                         + targetPkgSetting + " " + description);
-    }
-
-    protected ArraySet<? extends PackageStateInternal> getSharedUserPackages(int sharedUserAppId,
-            Collection<SharedUserSetting> sharedUserSettings) {
-        for (SharedUserSetting setting : sharedUserSettings) {
-            if (setting.mAppId != sharedUserAppId) {
-                continue;
-            }
-            return setting.getPackageStates();
-        }
-        return new ArraySet<>();
     }
 
     /**
@@ -768,6 +789,13 @@ public abstract class AppsFilterBase implements AppsFilterSnapshot {
             ToString<Integer> expandPackages) {
         pw.println("  queryable via uses-library:");
         dumpQueriesMap(pw, filteringAppId, mQueryableViaUsesLibrary, "    ",
+                expandPackages);
+    }
+
+    protected void dumpQueriesViaUsesPermission(PrintWriter pw, @Nullable Integer filteringAppId,
+            ToString<Integer> expandPackages) {
+        pw.println("  queryable via uses-permission:");
+        dumpQueriesMap(pw, filteringAppId, mQueryableViaUsesPermission, "    ",
                 expandPackages);
     }
 

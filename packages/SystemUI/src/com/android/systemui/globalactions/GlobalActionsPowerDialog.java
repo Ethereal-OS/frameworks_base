@@ -19,6 +19,7 @@ import android.annotation.NonNull;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.res.Resources;
+import android.view.CrossWindowBlurListeners;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -26,6 +27,8 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.ListAdapter;
 
+import com.android.systemui.statusbar.BlurUtils;
+import com.android.systemui.dump.DumpManager;
 import androidx.constraintlayout.helper.widget.Flow;
 
 /**
@@ -38,7 +41,7 @@ public class GlobalActionsPowerDialog {
      */
     public static Dialog create(@NonNull Context context, ListAdapter adapter) {
         ViewGroup listView = (ViewGroup) LayoutInflater.from(context).inflate(
-                com.android.systemui.R.layout.global_actions_power_dialog_flow, null);
+                com.android.systemui.res.R.layout.global_actions_power_dialog_flow, null);
 
         Flow flow = listView.findViewById(com.android.systemui.R.id.power_flow);
 
@@ -51,16 +54,33 @@ public class GlobalActionsPowerDialog {
 
         Resources res = context.getResources();
 
-        Dialog dialog = new Dialog(context);
+        Dialog dialog = new Dialog(context,
+                com.android.systemui.R.style.Theme_SystemUI_Dialog_GlobalActionsLite);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         dialog.setContentView(listView);
+
+        BlurUtils blurUtils = new BlurUtils(context.getResources(),
+                CrossWindowBlurListeners.getInstance(), new DumpManager());
 
         Window window = dialog.getWindow();
         window.setType(WindowManager.LayoutParams.TYPE_VOLUME_OVERLAY);
         window.setTitle(""); // prevent Talkback from speaking first item name twice
         window.setBackgroundDrawable(res.getDrawable(
-                com.android.systemui.R.drawable.global_actions_lite_background, context.getTheme()));
+                com.android.systemui.res.R.drawable.global_actions_lite_background, context.getTheme()));
         window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        if (blurUtils.supportsBlursOnWindows()) {
+            // Enable blur behind
+            // Enable dim behind since we are setting some amount dim for the blur.
+            window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+            // Set blur behind radius
+            int blurBehindRadius = context.getResources()
+                    .getDimensionPixelSize(com.android.systemui.R.dimen.max_window_blur_radius);
+            window.getAttributes().setBlurBehindRadius(blurBehindRadius);
+            window.setDimAmount(0.54f);
+        } else {
+            window.setDimAmount(0.88f);
+        }
 
         return dialog;
     }

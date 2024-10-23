@@ -16,23 +16,22 @@
 
 package com.android.systemui.shade
 
-import android.content.Context
+import android.graphics.Point
 import android.hardware.display.AmbientDisplayConfiguration
 import android.os.PowerManager
-import android.os.SystemClock
 import android.provider.Settings
 import android.view.GestureDetector
 import android.view.MotionEvent
 import com.android.systemui.Dumpable
+import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dock.DockManager
 import com.android.systemui.dump.DumpManager
+import com.android.systemui.keyguard.domain.interactor.DozeInteractor
 import com.android.systemui.plugins.FalsingManager
 import com.android.systemui.plugins.FalsingManager.LOW_PENALTY
 import com.android.systemui.plugins.statusbar.StatusBarStateController
+import com.android.systemui.power.domain.interactor.PowerInteractor
 import com.android.systemui.settings.UserTracker
-import com.android.systemui.statusbar.phone.CentralSurfaces
-import com.android.systemui.statusbar.phone.dagger.CentralSurfacesComponent
-import com.android.systemui.statusbar.StatusBarState
 import com.android.systemui.tuner.TunerService
 import com.android.systemui.tuner.TunerService.Tunable
 import java.io.PrintWriter
@@ -47,31 +46,22 @@ import javax.inject.Inject
  * screen is still ON and not in the true AoD display state. When the device is in the true AoD
  * display state, wake-ups are handled by [com.android.systemui.doze.DozeSensors].
  */
-@CentralSurfacesComponent.CentralSurfacesScope
+@SysUISingleton
 class PulsingGestureListener @Inject constructor(
-        private val notificationShadeWindowView: NotificationShadeWindowView,
         private val falsingManager: FalsingManager,
         private val dockManager: DockManager,
-        private val centralSurfaces: CentralSurfaces,
+        private val powerInteractor: PowerInteractor,
         private val ambientDisplayConfiguration: AmbientDisplayConfiguration,
         private val statusBarStateController: StatusBarStateController,
         private val shadeLogger: ShadeLogger,
-        private val powerManager: PowerManager,
+        private val dozeInteractor: DozeInteractor,
         userTracker: UserTracker,
         tunerService: TunerService,
-        dumpManager: DumpManager,
-        context: Context
+        dumpManager: DumpManager
 ) : GestureDetector.SimpleOnGestureListener(), Dumpable {
     private var doubleTapEnabled = false
     private var singleTapEnabled = false
     private var doubleTapEnabledNative = false
-
-    companion object {
-        internal val DOUBLE_TAP_SLEEP_GESTURE =
-            "system:" + Settings.System.DOUBLE_TAP_SLEEP_GESTURE
-    }
-    private var doubleTapToSleepEnabled = false
-    private val quickQsOffsetHeight: Int
 
     init {
         val tunable = Tunable { key: String?, value: String? ->
@@ -79,25 +69,19 @@ class PulsingGestureListener @Inject constructor(
                 Settings.Secure.DOUBLE_TAP_TO_WAKE ->
                     doubleTapEnabledNative = TunerService.parseIntegerSwitch(value, false)
                 Settings.Secure.DOZE_DOUBLE_TAP_GESTURE ->
-                    doubleTapEnabled = Settings.Secure.getIntForUser(context.getContentResolver(),
-                            Settings.Secure.DOZE_DOUBLE_TAP_GESTURE, 1, userTracker.userId) == 1;
+                    doubleTapEnabled = ambientDisplayConfiguration.doubleTapGestureEnabled(
+                            userTracker.userId)
                 Settings.Secure.DOZE_TAP_SCREEN_GESTURE ->
                     singleTapEnabled = ambientDisplayConfiguration.tapGestureEnabled(
                             userTracker.userId)
-                DOUBLE_TAP_SLEEP_GESTURE ->
-                    doubleTapToSleepEnabled = TunerService.parseIntegerSwitch(value, true)
             }
         }
         tunerService.addTunable(tunable,
                 Settings.Secure.DOUBLE_TAP_TO_WAKE,
                 Settings.Secure.DOZE_DOUBLE_TAP_GESTURE,
-                Settings.Secure.DOZE_TAP_SCREEN_GESTURE,
-                DOUBLE_TAP_SLEEP_GESTURE)
+                Settings.Secure.DOZE_TAP_SCREEN_GESTURE)
 
         dumpManager.registerDumpable(this)
-
-        quickQsOffsetHeight = context.getResources().getDimensionPixelSize(
-                com.android.internal.R.dimen.quick_qs_offset_height)
     }
 
     override fun onSingleTapUp(e: MotionEvent): Boolean {
@@ -109,12 +93,8 @@ class PulsingGestureListener @Inject constructor(
             shadeLogger.logSingleTapUpFalsingState(proximityIsNotNear, isNotAFalseTap)
             if (proximityIsNotNear && isNotAFalseTap) {
                 shadeLogger.d("Single tap handled, requesting centralSurfaces.wakeUpIfDozing")
-                centralSurfaces.wakeUpIfDozing(
-                    SystemClock.uptimeMillis(),
-                    notificationShadeWindowView,
-                    "PULSING_SINGLE_TAP",
-                    PowerManager.WAKE_REASON_TAP
-                )
+                dozeInteractor.setLastTapToWakePosition(Point(e.x.toInt(), e.y.toInt()))
+                powerInteractor.wakeUpIfDozing("PULSING_SINGLE_TAP", PowerManager.WAKE_REASON_TAP)
             }
             return true
         }
@@ -129,30 +109,14 @@ class PulsingGestureListener @Inject constructor(
     override fun onDoubleTapEvent(e: MotionEvent): Boolean {
         // React to the [MotionEvent.ACTION_UP] event after double tap is detected. Falsing
         // checks MUST be on the ACTION_UP event.
-        if (e.actionMasked == MotionEvent.ACTION_UP && !falsingManager.isFalseDoubleTap) {
-            if (statusBarStateController.isDozing &&
+        if (e.actionMasked == MotionEvent.ACTION_UP &&
+                statusBarStateController.isDozing &&
                 (doubleTapEnabled || singleTapEnabled || doubleTapEnabledNative) &&
-                !falsingManager.isProximityNear
-            ) {
-                centralSurfaces.wakeUpIfDozing(
-                        SystemClock.uptimeMillis(),
-                        notificationShadeWindowView,
-                        "PULSING_DOUBLE_TAP",
-                        PowerManager.WAKE_REASON_TAP)
-                return true
-            } else if (!statusBarStateController.isDozing &&
-                doubleTapToSleepEnabled &&
-                e.getY() < quickQsOffsetHeight
-            ) {
-                powerManager.goToSleep(e.getEventTime())
-                return true
-            } else if (!statusBarStateController.isDozing &&
-                doubleTapToSleepEnabled &&
-                statusBarStateController.getState() == StatusBarState.KEYGUARD
-            ) {
-                powerManager.goToSleep(e.getEventTime())
-                return true
-            }
+                !falsingManager.isProximityNear &&
+                !falsingManager.isFalseDoubleTap
+        ) {
+            powerInteractor.wakeUpIfDozing("PULSING_DOUBLE_TAP", PowerManager.WAKE_REASON_TAP)
+            return true
         }
         return false
     }
@@ -161,7 +125,6 @@ class PulsingGestureListener @Inject constructor(
         pw.println("singleTapEnabled=$singleTapEnabled")
         pw.println("doubleTapEnabled=$doubleTapEnabled")
         pw.println("doubleTapEnabledNative=$doubleTapEnabledNative")
-        pw.println("doubleTapToSleepEnabled=$doubleTapToSleepEnabled")
         pw.println("isDocked=${dockManager.isDocked}")
         pw.println("isProxCovered=${falsingManager.isProximityNear}")
     }

@@ -17,7 +17,6 @@
 package android.security.keystore2;
 
 import android.annotation.NonNull;
-import android.security.KeyStore;
 import android.security.KeyStore2;
 import android.security.KeyStoreSecurityLevel;
 import android.security.keymaster.KeymasterDefs;
@@ -38,10 +37,12 @@ import java.security.PublicKey;
 import java.security.Security;
 import java.security.Signature;
 import java.security.UnrecoverableKeyException;
+import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
 
 import javax.crypto.Cipher;
+import javax.crypto.KeyAgreement;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 
@@ -156,13 +157,13 @@ public class AndroidKeyStoreProvider extends Provider {
     }
 
     /**
-     * Gets the {@link KeyStore} operation handle corresponding to the provided JCA crypto
+     * Gets the Android KeyStore operation handle corresponding to the provided JCA crypto
      * primitive.
      *
      * <p>The following primitives are supported: {@link Cipher}, {@link Signature} and {@link Mac}.
      *
-     * @return KeyStore operation handle or {@code 0} if the provided primitive's KeyStore operation
-     *         is not in progress.
+     * @return Android KeyStore operation handle or {@code 0} if the provided primitive's Android
+     *         KeyStore operation is not in progress.
      *
      * @throws IllegalArgumentException if the provided primitive is not supported or is not backed
      *         by AndroidKeyStore provider.
@@ -180,6 +181,8 @@ public class AndroidKeyStoreProvider extends Provider {
             spi = ((Mac) cryptoPrimitive).getCurrentSpi();
         } else if (cryptoPrimitive instanceof Cipher) {
             spi = ((Cipher) cryptoPrimitive).getCurrentSpi();
+        } else if (cryptoPrimitive instanceof KeyAgreement) {
+            spi = ((KeyAgreement) cryptoPrimitive).getCurrentSpi();
         } else {
             throw new IllegalArgumentException("Unsupported crypto primitive: " + cryptoPrimitive
                     + ". Supported: Signature, Mac, Cipher");
@@ -221,7 +224,14 @@ public class AndroidKeyStoreProvider extends Provider {
         }
         final byte[] x509PublicCert = metadata.certificate;
 
-        PublicKey publicKey = AndroidKeyStoreSpi.toCertificate(x509PublicCert).getPublicKey();
+        final X509Certificate parsedX509Certificate =
+                AndroidKeyStoreSpi.toCertificate(x509PublicCert);
+        if (parsedX509Certificate == null) {
+            throw new UnrecoverableKeyException("Failed to parse the X.509 certificate containing"
+                   + " the public key. This likely indicates a hardware problem.");
+        }
+
+        PublicKey publicKey = parsedX509Certificate.getPublicKey();
 
         String jcaKeyAlgorithm = publicKey.getAlgorithm();
 

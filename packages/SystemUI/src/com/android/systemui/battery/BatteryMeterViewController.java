@@ -27,14 +27,19 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 
+import com.android.systemui.res.R;
+import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.flags.FeatureFlags;
 import com.android.systemui.flags.Flags;
 import com.android.systemui.settings.UserTracker;
+import com.android.systemui.statusbar.phone.StatusBarLocation;
 import com.android.systemui.statusbar.policy.BatteryController;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.util.ViewController;
+
+import java.io.PrintWriter;
 
 import javax.inject.Inject;
 
@@ -47,14 +52,18 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
             "system:" + Settings.System.STATUS_BAR_SHOW_BATTERY_PERCENT;
     public static final String STATUS_BAR_BATTERY_TEXT_CHARGING =
             "system:" + Settings.System.STATUS_BAR_BATTERY_TEXT_CHARGING;
+    public static final String TEXT_CHARGING_SYMBOL =
+            "system:" + Settings.System.TEXT_CHARGING_SYMBOL;
 
     private final ConfigurationController mConfigurationController;
     private final TunerService mTunerService;
     private final Handler mMainHandler;
     private final ContentResolver mContentResolver;
+    private final FeatureFlags mFeatureFlags;
     private final BatteryController mBatteryController;
 
     private final SettingObserver mSettingObserver;
+    private final StatusBarLocation mLocation;
 
     private final ConfigurationController.ConfigurationListener mConfigurationListener =
             new ConfigurationController.ConfigurationListener() {
@@ -83,6 +92,11 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
                             TunerService.parseIntegerSwitch(newValue, true);
                     mView.setBatteryPercentCharging(batteryPercentCharging);
                     break;
+                case TEXT_CHARGING_SYMBOL:
+                    int textChargingSymbol =
+                            TunerService.parseInteger(newValue, 1);
+                    mView.updateTextChargingSymbol(textChargingSymbol);
+                    break;
                 default:
                     break;
             }
@@ -107,8 +121,22 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
                 }
 
                 @Override
-                public void onIsOverheatedChanged(boolean isOverheated) {
-                    mView.onIsOverheatedChanged(isOverheated);
+                public void onIsBatteryDefenderChanged(boolean isBatteryDefender) {
+                    mView.onIsBatteryDefenderChanged(isBatteryDefender);
+                }
+
+                @Override
+                public void onIsIncompatibleChargingChanged(boolean isIncompatibleCharging) {
+                    if (mFeatureFlags.isEnabled(Flags.INCOMPATIBLE_CHARGING_BATTERY_ICON)) {
+                        mView.onIsIncompatibleChargingChanged(isIncompatibleCharging);
+                    }
+                }
+
+                @Override
+                public void dump(@NonNull PrintWriter pw, @NonNull String[] args) {
+                    pw.print(super.toString());
+                    pw.println(" location=" + mLocation);
+                    mView.dump(pw, args);
                 }
             };
 
@@ -119,6 +147,7 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
     @Inject
     public BatteryMeterViewController(
             BatteryMeterView view,
+            StatusBarLocation location,
             UserTracker userTracker,
             ConfigurationController configurationController,
             TunerService tunerService,
@@ -127,14 +156,17 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
             FeatureFlags featureFlags,
             BatteryController batteryController) {
         super(view);
+        mLocation = location;
         mConfigurationController = configurationController;
         mTunerService = tunerService;
         mMainHandler = mainHandler;
         mContentResolver = contentResolver;
+        mFeatureFlags = featureFlags;
         mBatteryController = batteryController;
 
         mView.setBatteryEstimateFetcher(mBatteryController::getEstimatedTimeRemainingString);
-        mView.setDisplayShieldEnabled(featureFlags.isEnabled(Flags.BATTERY_SHIELD_ICON));
+        mView.setDisplayShieldEnabled(
+                getContext().getResources().getBoolean(R.bool.flag_battery_shield_icon));
 
         mSettingObserver = new SettingObserver(mMainHandler);
     }
@@ -176,6 +208,7 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
         mTunerService.addTunable(mTunable, STATUS_BAR_BATTERY_STYLE);
         mTunerService.addTunable(mTunable, STATUS_BAR_SHOW_BATTERY_PERCENT);
         mTunerService.addTunable(mTunable, STATUS_BAR_BATTERY_TEXT_CHARGING);
+        mTunerService.addTunable(mTunable, TEXT_CHARGING_SYMBOL);
         mIsSubscribedForTunerUpdates = true;
     }
 
@@ -209,6 +242,52 @@ public class BatteryMeterViewController extends ViewController<BatteryMeterView>
                 // update the text for sure if the estimate in the cache was updated
                 mView.updatePercentText();
             }
+        }
+    }
+
+    /** */
+    @SysUISingleton
+    public static class Factory {
+        private final UserTracker mUserTracker;
+        private final ConfigurationController mConfigurationController;
+        private final TunerService mTunerService;
+        private final @Main Handler mMainHandler;
+        private final ContentResolver mContentResolver;
+        private final FeatureFlags mFeatureFlags;
+        private final BatteryController mBatteryController;
+
+        @Inject
+        public Factory(
+                UserTracker userTracker,
+                ConfigurationController configurationController,
+                TunerService tunerService,
+                @Main Handler mainHandler,
+                ContentResolver contentResolver,
+                FeatureFlags featureFlags,
+                BatteryController batteryController
+        ) {
+            mUserTracker = userTracker;
+            mConfigurationController = configurationController;
+            mTunerService = tunerService;
+            mMainHandler = mainHandler;
+            mContentResolver = contentResolver;
+            mFeatureFlags = featureFlags;
+            mBatteryController = batteryController;
+        }
+
+        /** */
+        public BatteryMeterViewController create(View view, StatusBarLocation location) {
+            return new BatteryMeterViewController(
+                    (BatteryMeterView) view,
+                    location,
+                    mUserTracker,
+                    mConfigurationController,
+                    mTunerService,
+                    mMainHandler,
+                    mContentResolver,
+                    mFeatureFlags,
+                    mBatteryController
+            );
         }
     }
 }

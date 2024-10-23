@@ -16,24 +16,34 @@
 
 package com.android.server.companion;
 
+import static android.companion.AssociationRequest.DEVICE_PROFILE_AUTOMOTIVE_PROJECTION;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SuppressLint;
 import android.annotation.UserIdInt;
 import android.companion.AssociationInfo;
 import android.companion.CompanionDeviceService;
+import android.companion.DevicePresenceEvent;
 import android.content.ComponentName;
 import android.content.Context;
+import android.hardware.power.Mode;
 import android.os.Handler;
+import android.os.ParcelUuid;
+import android.os.PowerManagerInternal;
 import android.util.Log;
 import android.util.Slog;
 import android.util.SparseArray;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.infra.PerUser;
-import com.android.internal.util.CollectionUtils;
+import com.android.server.companion.presence.CompanionDevicePresenceMonitor;
+import com.android.server.companion.presence.ObservableUuid;
+import com.android.server.companion.presence.ObservableUuidStore;
+import com.android.server.companion.utils.PackageUtils;
 
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -43,8 +53,10 @@ import java.util.Map;
  * Manages communication with companion applications via
  * {@link android.companion.ICompanionDeviceService} interface, including "connecting" (binding) to
  * the services, maintaining the connection (the binding), and invoking callback methods such as
- * {@link CompanionDeviceService#onDeviceAppeared(AssociationInfo)} and
- * {@link CompanionDeviceService#onDeviceDisappeared(AssociationInfo)} in the application process.
+ * {@link CompanionDeviceService#onDeviceAppeared(AssociationInfo)},
+ * {@link CompanionDeviceService#onDeviceDisappeared(AssociationInfo)} and
+ * {@link CompanionDeviceService#onDevicePresenceEvent(DevicePresenceEvent)} in the
+ * application process.
  *
  * <p>
  * The following is the list of the APIs provided by {@link CompanionApplicationController} (to be
@@ -52,8 +64,7 @@ import java.util.Map;
  * <ul>
  * <li> {@link #bindCompanionApplication(int, String, boolean)}
  * <li> {@link #unbindCompanionApplication(int, String)}
- * <li> {@link #notifyCompanionApplicationDeviceAppeared(AssociationInfo)}
- * <li> {@link #notifyCompanionApplicationDeviceDisappeared(AssociationInfo)}
+ * <li> {@link #notifyCompanionDevicePresenceEvent(AssociationInfo, int)}
  * <li> {@link #isCompanionApplicationBound(int, String)}
  * <li> {@link #isRebindingCompanionApplicationScheduled(int, String)}
  * </ul>
@@ -63,38 +74,35 @@ import java.util.Map;
  * @see CompanionDeviceServiceConnector
  */
 @SuppressLint("LongLogTag")
-class CompanionApplicationController {
+public class CompanionApplicationController {
     static final boolean DEBUG = false;
-    private static final String TAG = "CompanionDevice_ApplicationController";
+    private static final String TAG = "CDM_CompanionApplicationController";
 
     private static final long REBIND_TIMEOUT = 10 * 1000; // 10 sec
 
-    interface Callback {
-        /**
-         * @return {@code true} if should schedule rebinding.
-         *         {@code false} if we do not need to rebind.
-         */
-        boolean onCompanionApplicationBindingDied(
-                @UserIdInt int userId, @NonNull String packageName);
-
-        /**
-         * Callback after timeout for previously scheduled rebind has passed.
-         */
-        void onRebindCompanionApplicationTimeout(
-                @UserIdInt int userId, @NonNull String packageName);
-    }
-
     private final @NonNull Context mContext;
-    private final @NonNull Callback mCallback;
+    private final @NonNull AssociationStore mAssociationStore;
+    private final @NonNull ObservableUuidStore mObservableUuidStore;
+    private final @NonNull CompanionDevicePresenceMonitor mDevicePresenceMonitor;
     private final @NonNull CompanionServicesRegister mCompanionServicesRegister;
+
+    private final PowerManagerInternal mPowerManagerInternal;
+
     @GuardedBy("mBoundCompanionApplications")
     private final @NonNull AndroidPackageMap<List<CompanionDeviceServiceConnector>>
             mBoundCompanionApplications;
+    @GuardedBy("mScheduledForRebindingCompanionApplications")
     private final @NonNull AndroidPackageMap<Boolean> mScheduledForRebindingCompanionApplications;
 
-    CompanionApplicationController(Context context, Callback callback) {
+    CompanionApplicationController(Context context, AssociationStore associationStore,
+            ObservableUuidStore observableUuidStore,
+            CompanionDevicePresenceMonitor companionDevicePresenceMonitor,
+            PowerManagerInternal powerManagerInternal) {
         mContext = context;
-        mCallback = callback;
+        mAssociationStore = associationStore;
+        mObservableUuidStore =  observableUuidStore;
+        mDevicePresenceMonitor = companionDevicePresenceMonitor;
+        mPowerManagerInternal = powerManagerInternal;
         mCompanionServicesRegister = new CompanionServicesRegister();
         mBoundCompanionApplications = new AndroidPackageMap<>();
         mScheduledForRebindingCompanionApplications = new AndroidPackageMap<>();
@@ -104,7 +112,10 @@ class CompanionApplicationController {
         mCompanionServicesRegister.invalidate(userId);
     }
 
-    void bindCompanionApplication(@UserIdInt int userId, @NonNull String packageName,
+    /**
+     * CDM binds to the companion app.
+     */
+    public void bindCompanionApplication(@UserIdInt int userId, @NonNull String packageName,
             boolean isSelfManaged) {
         if (DEBUG) {
             Log.i(TAG, "bind() u" + userId + "/" + packageName
@@ -122,21 +133,26 @@ class CompanionApplicationController {
             return;
         }
 
-        final List<CompanionDeviceServiceConnector> serviceConnectors;
+        final List<CompanionDeviceServiceConnector> serviceConnectors = new ArrayList<>();
         synchronized (mBoundCompanionApplications) {
             if (mBoundCompanionApplications.containsValueForPackage(userId, packageName)) {
                 if (DEBUG) Log.e(TAG, "u" + userId + "/" + packageName + " is ALREADY bound.");
                 return;
             }
 
-            serviceConnectors = CollectionUtils.map(companionServices, componentName ->
-                            CompanionDeviceServiceConnector.newInstance(mContext, userId,
-                                    componentName, isSelfManaged));
+            for (int i = 0; i < companionServices.size(); i++) {
+                boolean isPrimary = i == 0;
+                serviceConnectors.add(CompanionDeviceServiceConnector.newInstance(mContext, userId,
+                        companionServices.get(i), isSelfManaged, isPrimary));
+            }
+
             mBoundCompanionApplications.setValueForPackage(userId, packageName, serviceConnectors);
         }
 
-        // The first connector in the list is always the primary connector: set a listener to it.
-        serviceConnectors.get(0).setListener(this::onPrimaryServiceBindingDied);
+        // Set listeners for both Primary and Secondary connectors.
+        for (CompanionDeviceServiceConnector serviceConnector : serviceConnectors) {
+            serviceConnector.setListener(this::onBinderDied);
+        }
 
         // Now "bind" all the connectors: the primary one and the rest of them.
         for (CompanionDeviceServiceConnector serviceConnector : serviceConnectors) {
@@ -144,13 +160,22 @@ class CompanionApplicationController {
         }
     }
 
-    void unbindCompanionApplication(@UserIdInt int userId, @NonNull String packageName) {
+    /**
+     * CDM unbinds the companion app.
+     */
+    public void unbindCompanionApplication(@UserIdInt int userId, @NonNull String packageName) {
         if (DEBUG) Log.i(TAG, "unbind() u" + userId + "/" + packageName);
 
         final List<CompanionDeviceServiceConnector> serviceConnectors;
+
         synchronized (mBoundCompanionApplications) {
             serviceConnectors = mBoundCompanionApplications.removePackage(userId, packageName);
         }
+
+        synchronized (mScheduledForRebindingCompanionApplications) {
+            mScheduledForRebindingCompanionApplications.removePackage(userId, packageName);
+        }
+
         if (serviceConnectors == null) {
             if (DEBUG) {
                 Log.e(TAG, "unbindCompanionApplication(): "
@@ -165,74 +190,176 @@ class CompanionApplicationController {
         }
     }
 
-    boolean isCompanionApplicationBound(@UserIdInt int userId, @NonNull String packageName) {
+    /**
+     * @return whether the companion application is bound now.
+     */
+    public boolean isCompanionApplicationBound(@UserIdInt int userId, @NonNull String packageName) {
         synchronized (mBoundCompanionApplications) {
             return mBoundCompanionApplications.containsValueForPackage(userId, packageName);
         }
     }
 
-    private void scheduleRebinding(@UserIdInt int userId, @NonNull String packageName) {
-        mScheduledForRebindingCompanionApplications.setValueForPackage(userId, packageName, true);
+    private void scheduleRebinding(@UserIdInt int userId, @NonNull String packageName,
+            CompanionDeviceServiceConnector serviceConnector) {
+        Slog.i(TAG, "scheduleRebinding() " + userId + "/" + packageName);
 
+        if (isRebindingCompanionApplicationScheduled(userId, packageName)) {
+            if (DEBUG) {
+                Log.i(TAG, "CompanionApplication rebinding has been scheduled, skipping "
+                        + serviceConnector.getComponentName());
+            }
+            return;
+        }
+
+        if (serviceConnector.isPrimary()) {
+            synchronized (mScheduledForRebindingCompanionApplications) {
+                mScheduledForRebindingCompanionApplications.setValueForPackage(
+                        userId, packageName, true);
+            }
+        }
+
+        // Rebinding in 10 seconds.
         Handler.getMain().postDelayed(() ->
-                onRebindingCompanionApplicationTimeout(userId, packageName), REBIND_TIMEOUT);
+                onRebindingCompanionApplicationTimeout(userId, packageName, serviceConnector),
+                REBIND_TIMEOUT);
     }
 
-    boolean isRebindingCompanionApplicationScheduled(
+    private boolean isRebindingCompanionApplicationScheduled(
             @UserIdInt int userId, @NonNull String packageName) {
-        return mScheduledForRebindingCompanionApplications
-                .containsValueForPackage(userId, packageName);
+        synchronized (mScheduledForRebindingCompanionApplications) {
+            return mScheduledForRebindingCompanionApplications.containsValueForPackage(
+                    userId, packageName);
+        }
     }
 
     private void onRebindingCompanionApplicationTimeout(
-            @UserIdInt int userId, @NonNull String packageName) {
-        mScheduledForRebindingCompanionApplications.removePackage(userId, packageName);
+            @UserIdInt int userId, @NonNull String packageName,
+            @NonNull CompanionDeviceServiceConnector serviceConnector) {
+        // Re-mark the application is bound.
+        if (serviceConnector.isPrimary()) {
+            synchronized (mBoundCompanionApplications) {
+                if (!mBoundCompanionApplications.containsValueForPackage(userId, packageName)) {
+                    List<CompanionDeviceServiceConnector> serviceConnectors =
+                            Collections.singletonList(serviceConnector);
+                    mBoundCompanionApplications.setValueForPackage(userId, packageName,
+                            serviceConnectors);
+                }
+            }
 
-        mCallback.onRebindCompanionApplicationTimeout(userId, packageName);
+            synchronized (mScheduledForRebindingCompanionApplications) {
+                mScheduledForRebindingCompanionApplications.removePackage(userId, packageName);
+            }
+        }
+
+        serviceConnector.connect();
     }
 
-    void notifyCompanionApplicationDeviceAppeared(AssociationInfo association) {
+    /**
+     * Notify the app that the device appeared.
+     *
+     * @deprecated use {@link #notifyCompanionDevicePresenceEvent(AssociationInfo, int)} instead
+     */
+    @Deprecated
+    public void notifyCompanionApplicationDeviceAppeared(AssociationInfo association) {
         final int userId = association.getUserId();
         final String packageName = association.getPackageName();
-        if (DEBUG) {
-            Log.i(TAG, "notifyDevice_Appeared() id=" + association.getId() + " u" + userId
+
+        Slog.i(TAG, "notifyDevice_Appeared() id=" + association.getId() + " u" + userId
                     + "/" + packageName);
-        }
 
         final CompanionDeviceServiceConnector primaryServiceConnector =
                 getPrimaryServiceConnector(userId, packageName);
         if (primaryServiceConnector == null) {
-            if (DEBUG) {
-                Log.e(TAG, "notify_CompanionApplicationDevice_Appeared(): "
+            Slog.e(TAG, "notify_CompanionApplicationDevice_Appeared(): "
                         + "u" + userId + "/" + packageName + " is NOT bound.");
-                Log.d(TAG, "Stacktrace", new Throwable());
-            }
+            Slog.e(TAG, "Stacktrace", new Throwable());
             return;
         }
+
+        Log.i(TAG, "Calling onDeviceAppeared to userId=[" + userId + "] package=["
+                + packageName + "] associationId=[" + association.getId() + "]");
 
         primaryServiceConnector.postOnDeviceAppeared(association);
     }
 
-    void notifyCompanionApplicationDeviceDisappeared(AssociationInfo association) {
+    /**
+     * Notify the app that the device disappeared.
+     *
+     * @deprecated use {@link #notifyCompanionDevicePresenceEvent(AssociationInfo, int)} instead
+     */
+    @Deprecated
+    public void notifyCompanionApplicationDeviceDisappeared(AssociationInfo association) {
         final int userId = association.getUserId();
         final String packageName = association.getPackageName();
-        if (DEBUG) {
-            Log.i(TAG, "notifyDevice_Disappeared() id=" + association.getId() + " u" + userId
-                    + "/" + packageName);
-        }
+
+        Slog.i(TAG, "notifyDevice_Disappeared() id=" + association.getId() + " u" + userId
+                + "/" + packageName);
 
         final CompanionDeviceServiceConnector primaryServiceConnector =
                 getPrimaryServiceConnector(userId, packageName);
         if (primaryServiceConnector == null) {
-            if (DEBUG) {
-                Log.e(TAG, "notify_CompanionApplicationDevice_Disappeared(): "
+            Slog.e(TAG, "notify_CompanionApplicationDevice_Disappeared(): "
                         + "u" + userId + "/" + packageName + " is NOT bound.");
-                Log.d(TAG, "Stacktrace", new Throwable());
-            }
+            Slog.e(TAG, "Stacktrace", new Throwable());
             return;
         }
 
+        Log.i(TAG, "Calling onDeviceDisappeared to userId=[" + userId + "] package=["
+                + packageName + "] associationId=[" + association.getId() + "]");
+
         primaryServiceConnector.postOnDeviceDisappeared(association);
+    }
+
+    /**
+     * Notify the app that the device appeared.
+     */
+    public void notifyCompanionDevicePresenceEvent(AssociationInfo association, int event) {
+        final int userId = association.getUserId();
+        final String packageName = association.getPackageName();
+        final CompanionDeviceServiceConnector primaryServiceConnector =
+                getPrimaryServiceConnector(userId, packageName);
+        final DevicePresenceEvent devicePresenceEvent =
+                new DevicePresenceEvent(association.getId(), event, null);
+
+        if (primaryServiceConnector == null) {
+            Slog.e(TAG, "notifyCompanionApplicationDevicePresenceEvent(): "
+                        + "u" + userId + "/" + packageName
+                        + " event=[ " + event  + " ] is NOT bound.");
+            Slog.e(TAG, "Stacktrace", new Throwable());
+            return;
+        }
+
+        Slog.i(TAG, "Calling onDevicePresenceEvent() to userId=[" + userId + "] package=["
+                + packageName + "] associationId=[" + association.getId()
+                + "] event=[" + event + "]");
+
+        primaryServiceConnector.postOnDevicePresenceEvent(devicePresenceEvent);
+    }
+
+    /**
+     * Notify the app that the device disappeared.
+     */
+    public void notifyUuidDevicePresenceEvent(ObservableUuid uuid, int event) {
+        final int userId = uuid.getUserId();
+        final ParcelUuid parcelUuid = uuid.getUuid();
+        final String packageName = uuid.getPackageName();
+        final CompanionDeviceServiceConnector primaryServiceConnector =
+                getPrimaryServiceConnector(userId, packageName);
+        final DevicePresenceEvent devicePresenceEvent =
+                new DevicePresenceEvent(DevicePresenceEvent.NO_ASSOCIATION, event, parcelUuid);
+
+        if (primaryServiceConnector == null) {
+            Slog.e(TAG, "notifyApplicationDevicePresenceChanged(): "
+                    + "u" + userId + "/" + packageName
+                    + " event=[ " + event  + " ] is NOT bound.");
+            Slog.e(TAG, "Stacktrace", new Throwable());
+            return;
+        }
+
+        Slog.i(TAG, "Calling onDevicePresenceEvent() to userId=[" + userId + "] package=["
+                + packageName + "]" + "event= [" + event + "]");
+
+        primaryServiceConnector.postOnDevicePresenceEvent(devicePresenceEvent);
     }
 
     void dump(@NonNull PrintWriter out) {
@@ -257,19 +384,39 @@ class CompanionApplicationController {
         }
     }
 
-    private void onPrimaryServiceBindingDied(@UserIdInt int userId, @NonNull String packageName) {
-        if (DEBUG) Log.i(TAG, "onPrimaryServiceBindingDied() u" + userId + "/" + packageName);
+    /**
+     * Rebinding for Self-Managed secondary services OR Non-Self-Managed services.
+     */
+    private void onBinderDied(@UserIdInt int userId, @NonNull String packageName,
+            @NonNull CompanionDeviceServiceConnector serviceConnector) {
 
-        // First: mark as NOT bound.
-        synchronized (mBoundCompanionApplications) {
-            mBoundCompanionApplications.removePackage(userId, packageName);
+        boolean isPrimary = serviceConnector.isPrimary();
+        Slog.i(TAG, "onBinderDied() u" + userId + "/" + packageName + " isPrimary: " + isPrimary);
+
+        // First, disable hint mode for Auto profile and mark not BOUND for primary service ONLY.
+        if (isPrimary) {
+            final List<AssociationInfo> associations =
+                    mAssociationStore.getAssociationsForPackage(userId, packageName);
+
+            for (AssociationInfo association : associations) {
+                final String deviceProfile = association.getDeviceProfile();
+                if (DEVICE_PROFILE_AUTOMOTIVE_PROJECTION.equals(deviceProfile)) {
+                    Slog.i(TAG, "Disable hint mode for device profile: " + deviceProfile);
+                    mPowerManagerInternal.setPowerMode(Mode.AUTOMOTIVE_PROJECTION, false);
+                    break;
+                }
+            }
+
+            synchronized (mBoundCompanionApplications) {
+                mBoundCompanionApplications.removePackage(userId, packageName);
+            }
         }
 
-        // Second: invoke callback, schedule rebinding if needed.
-        final boolean shouldScheduleRebind =
-                mCallback.onCompanionApplicationBindingDied(userId, packageName);
+        // Second: schedule rebinding if needed.
+        final boolean shouldScheduleRebind = shouldScheduleRebind(userId, packageName, isPrimary);
+
         if (shouldScheduleRebind) {
-            scheduleRebinding(userId, packageName);
+            scheduleRebinding(userId, packageName, serviceConnector);
         }
     }
 
@@ -280,6 +427,47 @@ class CompanionApplicationController {
             connectors = mBoundCompanionApplications.getValueForPackage(userId, packageName);
         }
         return connectors != null ? connectors.get(0) : null;
+    }
+
+    private boolean shouldScheduleRebind(int userId, String packageName, boolean isPrimary) {
+        // Make sure do not schedule rebind for the case ServiceConnector still gets callback after
+        // app is uninstalled.
+        boolean stillAssociated = false;
+        // Make sure to clean up the state for all the associations
+        // that associate with this package.
+        boolean shouldScheduleRebind = false;
+        boolean shouldScheduleRebindForUuid = false;
+        final List<ObservableUuid> uuids =
+                mObservableUuidStore.getObservableUuidsForPackage(userId, packageName);
+
+        for (AssociationInfo ai :
+                mAssociationStore.getAssociationsForPackage(userId, packageName)) {
+            final int associationId = ai.getId();
+            stillAssociated = true;
+            if (ai.isSelfManaged()) {
+                // Do not rebind if primary one is died for selfManaged application.
+                if (isPrimary
+                        && mDevicePresenceMonitor.isDevicePresent(associationId)) {
+                    mDevicePresenceMonitor.onSelfManagedDeviceReporterBinderDied(associationId);
+                    shouldScheduleRebind = false;
+                }
+                // Do not rebind if both primary and secondary services are died for
+                // selfManaged application.
+                shouldScheduleRebind = isCompanionApplicationBound(userId, packageName);
+            } else if (ai.isNotifyOnDeviceNearby()) {
+                // Always rebind for non-selfManaged devices.
+                shouldScheduleRebind = true;
+            }
+        }
+
+        for (ObservableUuid uuid : uuids) {
+            if (mDevicePresenceMonitor.isDeviceUuidPresent(uuid.getUuid())) {
+                shouldScheduleRebindForUuid = true;
+                break;
+            }
+        }
+
+        return (stillAssociated && shouldScheduleRebind) || shouldScheduleRebindForUuid;
     }
 
     private class CompanionServicesRegister extends PerUser<Map<String, List<ComponentName>>> {

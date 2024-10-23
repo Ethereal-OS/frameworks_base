@@ -21,11 +21,9 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.DeviceConfig;
 import android.provider.Settings;
 import android.provider.SettingsSlicesContract;
 import android.text.TextUtils;
@@ -48,14 +46,12 @@ import androidx.slice.SliceMetadata;
 import androidx.slice.widget.EventInfo;
 import androidx.slice.widget.SliceLiveData;
 
-import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
-
 import com.android.settingslib.bluetooth.A2dpProfile;
 import com.android.settingslib.bluetooth.BluetoothUtils;
 import com.android.settingslib.bluetooth.LocalBluetoothManager;
 import com.android.settingslib.bluetooth.LocalBluetoothProfileManager;
 import com.android.settingslib.media.MediaOutputConstants;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
 
@@ -72,7 +68,7 @@ public class VolumePanelDialog extends SystemUIDialog implements LifecycleOwner 
     private static final String TAG = "VolumePanelDialog";
 
     private static final int DURATION_SLICE_BINDING_TIMEOUT_MS = 200;
-    private static final int DEFAULT_SLICE_SIZE = 4;
+    private static final int DEFAULT_SLICE_SIZE = 5;
 
     private final ActivityStarter mActivityStarter;
     private RecyclerView mVolumePanelSlices;
@@ -83,8 +79,6 @@ public class VolumePanelDialog extends SystemUIDialog implements LifecycleOwner 
     private final HashSet<Uri> mLoadedSlices = new HashSet<>();
     private boolean mSlicesReadyToLoad;
     private LocalBluetoothProfileManager mProfileManager;
-
-    private static final boolean CONFIG_SEPARATE_NOTIFICATION_DEFAULT_VAL = false;
 
     public VolumePanelDialog(Context context,
             ActivityStarter activityStarter, boolean aboveStatusBar) {
@@ -125,8 +119,6 @@ public class VolumePanelDialog extends SystemUIDialog implements LifecycleOwner 
 
         mVolumePanelSlices = dialogView.findViewById(R.id.volume_panel_parent_layout);
         mVolumePanelSlices.setLayoutManager(new LinearLayoutManager(getContext()));
-
-        loadAllSlices();
 
         mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
     }
@@ -202,16 +194,15 @@ public class VolumePanelDialog extends SystemUIDialog implements LifecycleOwner 
     }
 
     @Override
-    protected void onStart() {
-        super.onStart();
+    protected void start() {
         Log.d(TAG, "onStart");
+        loadAllSlices();
         mLifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
         mLifecycleRegistry.setCurrentState(Lifecycle.State.RESUMED);
     }
 
     @Override
-    protected void onStop() {
-        super.onStop();
+    protected void stop() {
         Log.d(TAG, "onStop");
         mLifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
     }
@@ -227,12 +218,9 @@ public class VolumePanelDialog extends SystemUIDialog implements LifecycleOwner 
         }
         uris.add(MEDIA_OUTPUT_INDICATOR_SLICE_URI);
         uris.add(VOLUME_CALL_URI);
-        if (isSeparateNotificationConfigEnabled()) {
-            uris.add(VOLUME_SEPARATE_RING_URI);
-            uris.add(VOLUME_NOTIFICATION_URI);
-        } else {
-            uris.add(VOLUME_RINGER_URI);
-        }
+        uris.add(VOLUME_RINGER_URI);
+        uris.add(VOLUME_SEPARATE_RING_URI);
+        uris.add(VOLUME_NOTIFICATION_URI);
         uris.add(VOLUME_ALARM_URI);
         return uris;
     }
@@ -324,12 +312,5 @@ public class VolumePanelDialog extends SystemUIDialog implements LifecycleOwner 
     @Override
     public Lifecycle getLifecycle() {
         return mLifecycleRegistry;
-    }
-
-    protected boolean isSeparateNotificationConfigEnabled() {
-        return Binder.withCleanCallingIdentity(()
-                -> DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_SYSTEMUI,
-                SystemUiDeviceConfigFlags.VOLUME_SEPARATE_NOTIFICATION,
-                CONFIG_SEPARATE_NOTIFICATION_DEFAULT_VAL));
     }
 }

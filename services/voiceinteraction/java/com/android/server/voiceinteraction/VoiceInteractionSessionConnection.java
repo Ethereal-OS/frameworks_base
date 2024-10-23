@@ -20,6 +20,7 @@ import static android.app.AppOpsManager.OP_ASSIST_SCREENSHOT;
 import static android.app.AppOpsManager.OP_ASSIST_STRUCTURE;
 import static android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION;
 import static android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+import static android.service.voice.VoiceInteractionSession.KEY_FOREGROUND_ACTIVITIES;
 import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.WindowManager.LayoutParams.TYPE_VOICE_INTERACTION;
 
@@ -30,10 +31,12 @@ import static com.android.server.wm.ActivityTaskManagerInternal.ASSIST_KEY_STRUC
 import static com.android.server.wm.ActivityTaskManagerInternal.ASSIST_TASK_ID;
 
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
 import android.app.AppOpsManager;
 import android.app.IActivityManager;
+import android.app.IActivityTaskManager;
 import android.app.UriGrantsManager;
 import android.app.assist.AssistContent;
 import android.app.assist.AssistStructure;
@@ -50,6 +53,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.PowerManagerInternal;
 import android.os.RemoteException;
 import android.os.ServiceManager;
@@ -110,6 +114,7 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
     final Callback mCallback;
     final int mCallingUid;
     final Handler mHandler;
+    final IActivityTaskManager mActivityTaskManager;
     final IActivityManager mAm;
     final UriGrantsManagerInternal mUgmInternal;
     final IWindowManager mIWindowManager;
@@ -222,6 +227,7 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
         mCallback = callback;
         mCallingUid = callingUid;
         mHandler = handler;
+        mActivityTaskManager = ActivityTaskManager.getService();
         mAm = ActivityManager.getService();
         mUgmInternal = LocalServices.getService(UriGrantsManagerInternal.class);
         mIWindowManager = IWindowManager.Stub.asInterface(
@@ -269,14 +275,15 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
         return flags;
     }
 
-    public boolean showLocked(Bundle args, int flags, int disabledContext,
-            IVoiceInteractionSessionShowCallback showCallback,
-            List<ActivityAssistInfo> topActivities) {
+    public boolean showLocked(@NonNull Bundle args, int flags, @Nullable String attributionTag,
+            int disabledContext, @Nullable IVoiceInteractionSessionShowCallback showCallback,
+            @NonNull List<ActivityAssistInfo> topActivities) {
         if (mBound) {
             if (!mFullyBound) {
                 mFullyBound = mContext.bindServiceAsUser(mBindIntent, mFullConnection,
                         Context.BIND_AUTO_CREATE | Context.BIND_TREAT_LIKE_ACTIVITY
                                 | Context.BIND_SCHEDULE_LIKE_TOP_APP
+                                | Context.BIND_TREAT_LIKE_VISIBLE_FOREGROUND_SERVICE
                                 | Context.BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS,
                         new UserHandle(mUser));
             }
@@ -297,12 +304,34 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
                 for (int i = 0; i < topActivitiesCount; i++) {
                     topActivitiesToken.add(topActivities.get(i).getActivityToken());
                 }
+                boolean fetchDataAllowed =
+                        (disabledContext & VoiceInteractionSession.SHOW_WITH_ASSIST) == 0;
+
+                // Ensure that the current activity supports assist data
+                boolean isAssistDataAllowed = false;
+                try {
+                    isAssistDataAllowed = mActivityTaskManager.isAssistDataAllowed();
+                } catch (RemoteException e) {
+                    // Should never happen
+                }
+
+                // TODO: Refactor to have all assist data allowed checks in one place.
+                if (fetchDataAllowed && isAssistDataAllowed) {
+                    ArrayList<ComponentName> topComponents = new ArrayList<>(topActivitiesCount);
+                    for (int i = 0; i < topActivitiesCount; i++) {
+                        topComponents.add(topActivities.get(i).getComponentName());
+                    }
+                    mShowArgs.putParcelableArrayList(KEY_FOREGROUND_ACTIVITIES, topComponents);
+                }
+
                 mAssistDataRequester.requestAssistData(topActivitiesToken,
                         fetchData,
                         fetchScreenshot,
-                        (disabledContext & VoiceInteractionSession.SHOW_WITH_ASSIST) == 0,
+                        fetchDataAllowed,
                         (disabledContext & VoiceInteractionSession.SHOW_WITH_SCREENSHOT) == 0,
-                        mCallingUid, mSessionComponentName.getPackageName());
+                        mCallingUid,
+                        mSessionComponentName.getPackageName(),
+                        attributionTag);
 
                 boolean needDisclosure = mAssistDataRequester.getPendingDataCount() > 0
                         || mAssistDataRequester.getPendingScreenshotCount() > 0;
@@ -342,7 +371,8 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
             mFgHandler.post(mSetPowerBoostRunnable);
 
             if (mLowPowerStandbyControllerInternal != null) {
-                mLowPowerStandbyControllerInternal.addToAllowlist(mCallingUid);
+                mLowPowerStandbyControllerInternal.addToAllowlist(mCallingUid,
+                        PowerManager.LOW_POWER_STANDBY_ALLOWED_REASON_VOICE_INTERACTION);
                 mLowPowerStandbyAllowlisted = true;
                 mFgHandler.removeCallbacks(mRemoveFromLowPowerStandbyAllowlistRunnable);
                 mFgHandler.postDelayed(mRemoveFromLowPowerStandbyAllowlistRunnable,
@@ -405,8 +435,8 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
             final int taskId = data.getInt(ASSIST_TASK_ID);
             final IBinder activityId = data.getBinder(ASSIST_ACTIVITY_ID);
             final Bundle assistData = data.getBundle(ASSIST_KEY_DATA);
-            final AssistStructure structure = data.getParcelable(ASSIST_KEY_STRUCTURE);
-            final AssistContent content = data.getParcelable(ASSIST_KEY_CONTENT);
+            final AssistStructure structure = data.getParcelable(ASSIST_KEY_STRUCTURE, android.app.assist.AssistStructure.class);
+            final AssistContent content = data.getParcelable(ASSIST_KEY_CONTENT, android.app.assist.AssistContent.class);
             int uid = -1;
             if (assistData != null) {
                 uid = assistData.getInt(Intent.EXTRA_ASSIST_UID, -1);
@@ -857,7 +887,8 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
         synchronized (mLock) {
             if (mLowPowerStandbyAllowlisted) {
                 mFgHandler.removeCallbacks(mRemoveFromLowPowerStandbyAllowlistRunnable);
-                mLowPowerStandbyControllerInternal.removeFromAllowlist(mCallingUid);
+                mLowPowerStandbyControllerInternal.removeFromAllowlist(mCallingUid,
+                        PowerManager.LOW_POWER_STANDBY_ALLOWED_REASON_VOICE_INTERACTION);
                 mLowPowerStandbyAllowlisted = false;
             }
         }
@@ -909,4 +940,4 @@ final class VoiceInteractionSessionConnection implements ServiceConnection,
             }
         }
     };
-};
+}

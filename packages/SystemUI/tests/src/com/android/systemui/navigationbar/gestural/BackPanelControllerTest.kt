@@ -20,6 +20,7 @@ import android.os.Handler
 import android.os.Looper
 import android.testing.AndroidTestingRunner
 import android.testing.TestableLooper
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.MotionEvent.ACTION_DOWN
 import android.view.MotionEvent.ACTION_MOVE
@@ -27,6 +28,7 @@ import android.view.MotionEvent.ACTION_UP
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import androidx.test.filters.SmallTest
+import com.android.internal.jank.InteractionJankMonitor
 import com.android.internal.util.LatencyTracker
 import com.android.systemui.SysuiTestCase
 import com.android.systemui.plugins.NavigationEdgeBackPlugin
@@ -36,9 +38,13 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mockito.ArgumentMatchers.any
+import org.mockito.ArgumentMatchers.eq
 import org.mockito.Mock
+import org.mockito.Mockito.anyInt
 import org.mockito.Mockito.clearInvocations
 import org.mockito.Mockito.verify
+import org.mockito.Mockito.`when`
 import org.mockito.MockitoAnnotations
 
 @SmallTest
@@ -56,21 +62,26 @@ class BackPanelControllerTest : SysuiTestCase() {
     @Mock private lateinit var windowManager: WindowManager
     @Mock private lateinit var configurationController: ConfigurationController
     @Mock private lateinit var latencyTracker: LatencyTracker
+    @Mock private lateinit var interactionJankMonitor: InteractionJankMonitor
     @Mock private lateinit var layoutParams: WindowManager.LayoutParams
     @Mock private lateinit var backCallback: NavigationEdgeBackPlugin.BackCallback
 
     @Before
     fun setup() {
         MockitoAnnotations.initMocks(this)
+        `when`(interactionJankMonitor.begin(any(), anyInt())).thenReturn(true)
+        `when`(interactionJankMonitor.end(anyInt())).thenReturn(true)
+        `when`(interactionJankMonitor.cancel(anyInt())).thenReturn(true)
         mBackPanelController =
             BackPanelController(
                 context,
                 windowManager,
                 ViewConfiguration.get(context),
-                Handler.createAsync(Looper.myLooper()),
+                Handler.createAsync(checkNotNull(Looper.myLooper())),
                 vibratorHelper,
                 configurationController,
-                latencyTracker
+                latencyTracker,
+                interactionJankMonitor,
             )
         mBackPanelController.setLayoutParams(layoutParams)
         mBackPanelController.setBackCallback(backCallback)
@@ -104,37 +115,49 @@ class BackPanelControllerTest : SysuiTestCase() {
         continueTouch(START_X + touchSlop.toFloat() + 1)
         // Move again to cross the back trigger threshold
         continueTouch(START_X + touchSlop + triggerThreshold + 1)
+        // Wait threshold duration and hold touch past trigger threshold
+        Thread.sleep((MAX_DURATION_ENTRY_BEFORE_ACTIVE_ANIMATION + 1).toLong())
+        continueTouch(START_X + touchSlop + triggerThreshold + 1)
 
         assertThat(mBackPanelController.currentState)
             .isEqualTo(BackPanelController.GestureState.ACTIVE)
         verify(backCallback).setTriggerBack(true)
         testableLooper.moveTimeForward(100)
         testableLooper.processAllMessages()
-        verify(vibratorHelper).vibrate(VIBRATE_ACTIVATED_EFFECT)
-
+        verify(vibratorHelper)
+            .performHapticFeedback(any(), eq(HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE))
         finishTouchActionUp(START_X + touchSlop + triggerThreshold + 1)
         assertThat(mBackPanelController.currentState)
-            .isEqualTo(BackPanelController.GestureState.FLUNG)
+            .isEqualTo(BackPanelController.GestureState.COMMITTED)
         verify(backCallback).triggerBack()
     }
 
     @Test
     fun handlesBackCancelled() {
         startTouch()
+        // Move once to cross the touch slop
         continueTouch(START_X + touchSlop.toFloat() + 1)
+        // Move again to cross the back trigger threshold
         continueTouch(
             START_X + touchSlop + triggerThreshold -
-                mBackPanelController.params.deactivationSwipeTriggerThreshold
+                mBackPanelController.params.deactivationTriggerThreshold
+        )
+        // Wait threshold duration and hold touch before trigger threshold
+        Thread.sleep((MAX_DURATION_ENTRY_BEFORE_ACTIVE_ANIMATION + 1).toLong())
+        continueTouch(
+            START_X + touchSlop + triggerThreshold -
+                mBackPanelController.params.deactivationTriggerThreshold
         )
         clearInvocations(backCallback)
-        Thread.sleep(MIN_DURATION_ACTIVE_ANIMATION)
+        Thread.sleep(MIN_DURATION_ACTIVE_BEFORE_INACTIVE_ANIMATION)
         // Move in the opposite direction to cross the deactivation threshold and cancel back
         continueTouch(START_X)
 
         assertThat(mBackPanelController.currentState)
             .isEqualTo(BackPanelController.GestureState.INACTIVE)
         verify(backCallback).setTriggerBack(false)
-        verify(vibratorHelper).vibrate(VIBRATE_DEACTIVATED_EFFECT)
+        verify(vibratorHelper)
+            .performHapticFeedback(any(), eq(HapticFeedbackConstants.GESTURE_THRESHOLD_DEACTIVATE))
 
         finishTouchActionUp(START_X)
         verify(backCallback).cancelBack()

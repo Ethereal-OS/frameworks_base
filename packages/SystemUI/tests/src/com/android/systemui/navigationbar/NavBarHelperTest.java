@@ -35,6 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.ComponentName;
+import android.content.res.Configuration;
 import android.view.IWindowManager;
 import android.view.accessibility.AccessibilityManager;
 
@@ -52,7 +53,10 @@ import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.settings.DisplayTracker;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.CommandQueue;
+import com.android.systemui.statusbar.NotificationShadeWindowController;
 import com.android.systemui.statusbar.phone.CentralSurfaces;
+import com.android.systemui.statusbar.policy.ConfigurationController;
+import com.android.systemui.statusbar.policy.FakeConfigurationController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 
 import org.junit.Before;
@@ -64,6 +68,7 @@ import org.mockito.MockitoAnnotations;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executor;
 
 import dagger.Lazy;
 
@@ -112,12 +117,18 @@ public class NavBarHelperTest extends SysuiTestCase {
     EdgeBackGestureHandler mEdgeBackGestureHandler;
     @Mock
     EdgeBackGestureHandler.Factory mEdgeBackGestureHandlerFactory;
+    @Mock
+    NotificationShadeWindowController mNotificationShadeWindowController;
+    ConfigurationController mConfigurationController = new FakeConfigurationController();
+
     private AccessibilityManager.AccessibilityServicesStateChangeListener
             mAccessibilityServicesStateChangeListener;
 
     private static final int ACCESSIBILITY_BUTTON_CLICKABLE_STATE =
             SYSUI_STATE_A11Y_BUTTON_CLICKABLE | SYSUI_STATE_A11Y_BUTTON_LONG_CLICKABLE;
     private NavBarHelper mNavBarHelper;
+
+    private final Executor mSynchronousExecutor = runnable -> runnable.run();
 
     @Before
     public void setup() {
@@ -136,8 +147,8 @@ public class NavBarHelperTest extends SysuiTestCase {
                 mSystemActions, mOverviewProxyService, mAssistManagerLazy,
                 () -> Optional.of(mock(CentralSurfaces.class)), mock(KeyguardStateController.class),
                 mNavigationModeController, mEdgeBackGestureHandlerFactory, mWm, mUserTracker,
-                mDisplayTracker, mDumpManager, mCommandQueue);
-
+                mDisplayTracker, mNotificationShadeWindowController, mConfigurationController,
+                mDumpManager, mCommandQueue, mSynchronousExecutor);
     }
 
     @Test
@@ -324,6 +335,12 @@ public class NavBarHelperTest extends SysuiTestCase {
         // Ensure we get first state back
         assertThat(state2.mWindowState).isEqualTo(state1.mWindowState);
         assertThat(state2.mWindowState).isNotEqualTo(newState);
+    }
+
+    @Test
+    public void configUpdatePropagatesToEdgeBackGestureHandler() {
+        mConfigurationController.onConfigurationChanged(Configuration.EMPTY);
+        verify(mEdgeBackGestureHandler, times(1)).onConfigurationChanged(any());
     }
 
     private List<String> createFakeShortcutTargets() {

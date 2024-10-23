@@ -18,18 +18,26 @@ package com.android.server.biometrics.sensors.fingerprint.hidl;
 
 import static android.Manifest.permission.RESET_FINGERPRINT_LOCKOUT;
 
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.util.Slog;
 import android.util.SparseBooleanArray;
 import android.util.SparseIntArray;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.biometrics.sensors.LockoutTracker;
+
+import java.util.function.Function;
 
 /**
  * Tracks and enforces biometric lockout for biometric sensors that do not support lockout in the
@@ -37,7 +45,7 @@ import com.android.server.biometrics.sensors.LockoutTracker;
  */
 public class LockoutFrameworkImpl implements LockoutTracker {
 
-    private static final String TAG = "LockoutTracker";
+    private static final String TAG = "LockoutFrameworkImpl";
     private static final String ACTION_LOCKOUT_RESET =
             "com.android.server.biometrics.sensors.fingerprint.ACTION_LOCKOUT_RESET";
     private static final int MAX_FAILED_ATTEMPTS_LOCKOUT_TIMED = 10;
@@ -63,20 +71,47 @@ public class LockoutFrameworkImpl implements LockoutTracker {
         void onLockoutReset(int userId);
     }
 
-    private final Context mContext;
+    private Context mContext;
     private final LockoutResetCallback mLockoutResetCallback;
     private final SparseBooleanArray mTimedLockoutCleared;
     private final SparseIntArray mFailedAttempts;
     private final AlarmManager mAlarmManager;
     private final LockoutReceiver mLockoutReceiver;
+    private final Handler mHandler;
+    private final Function<Integer, PendingIntent> mLockoutResetIntent;
 
-    public LockoutFrameworkImpl(Context context, LockoutResetCallback lockoutResetCallback) {
+    public LockoutFrameworkImpl(@NonNull Context context,
+            @NonNull LockoutResetCallback lockoutResetCallback) {
+        this(context, lockoutResetCallback, (userId) -> PendingIntent.getBroadcast(context, userId,
+                new Intent(ACTION_LOCKOUT_RESET).putExtra(KEY_LOCKOUT_RESET_USER, userId),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE),
+                null /* handler */);
+        mContext = context;
+    }
+
+    public LockoutFrameworkImpl(@NonNull Context context,
+            @NonNull LockoutResetCallback lockoutResetCallback,
+            @NonNull Handler handler) {
+        this(context, lockoutResetCallback, (userId) -> PendingIntent.getBroadcast(context, userId,
+                new Intent(ACTION_LOCKOUT_RESET).putExtra(KEY_LOCKOUT_RESET_USER, userId),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE),
+                handler);
+        mContext = context;
+    }
+
+    @VisibleForTesting
+    LockoutFrameworkImpl(@NonNull Context context,
+            @NonNull LockoutResetCallback lockoutResetCallback,
+            @NonNull Function<Integer, PendingIntent> lockoutResetIntent,
+            @Nullable Handler handler) {
         mContext = context;
         mLockoutResetCallback = lockoutResetCallback;
         mTimedLockoutCleared = new SparseBooleanArray();
         mFailedAttempts = new SparseIntArray();
         mAlarmManager = context.getSystemService(AlarmManager.class);
         mLockoutReceiver = new LockoutReceiver();
+        mHandler = handler == null ? new Handler(Looper.getMainLooper()) : handler;
+        mLockoutResetIntent = lockoutResetIntent;
 
         context.registerReceiver(mLockoutReceiver, new IntentFilter(ACTION_LOCKOUT_RESET),
                 RESET_FINGERPRINT_LOCKOUT, null /* handler */, Context.RECEIVER_EXPORTED);
@@ -85,7 +120,8 @@ public class LockoutFrameworkImpl implements LockoutTracker {
     // Attempt counter should only be cleared when Keyguard goes away or when
     // a biometric is successfully authenticated. Lockout should eventually be done below the HAL.
     // See AuthenticationClient#shouldFrameworkHandleLockout().
-    void resetFailedAttemptsForUser(boolean clearAttemptCounter, int userId) {
+    @Override
+    public void resetFailedAttemptsForUser(boolean clearAttemptCounter, int userId) {
         if (getLockoutModeForUser(userId) != LOCKOUT_NONE) {
             Slog.v(TAG, "Reset biometric lockout for user: " + userId
                     + ", clearAttemptCounter: " + clearAttemptCounter);
@@ -100,26 +136,50 @@ public class LockoutFrameworkImpl implements LockoutTracker {
         mLockoutResetCallback.onLockoutReset(userId);
     }
 
-    void addFailedAttemptForUser(int userId) {}
+    @Override
+    public void addFailedAttemptForUser(int userId) {
+        if (Settings.System.getInt(mContext.getContentResolver(),
+                Settings.System.FINGERPRINT_LOCKOUT, 0) == 1) {
+            return;
+        }
+        mFailedAttempts.put(userId, mFailedAttempts.get(userId, 0) + 1);
+        mTimedLockoutCleared.put(userId, false);
+
+        if (getLockoutModeForUser(userId) != LOCKOUT_NONE) {
+            scheduleLockoutResetForUser(userId);
+        }
+    }
 
     @Override
-    public @LockoutMode int getLockoutModeForUser(int userId) {
+    @LockoutMode
+    public int getLockoutModeForUser(int userId) {
+        if (Settings.System.getInt(mContext.getContentResolver(),
+                Settings.System.FINGERPRINT_LOCKOUT, 0) == 1) {
+            return LOCKOUT_NONE;
+        }
+        final int failedAttempts = mFailedAttempts.get(userId, 0);
+        if (failedAttempts >= MAX_FAILED_ATTEMPTS_LOCKOUT_PERMANENT) {
+            return LOCKOUT_PERMANENT;
+        } else if (failedAttempts > 0
+                && !mTimedLockoutCleared.get(userId, false)
+                && (failedAttempts % MAX_FAILED_ATTEMPTS_LOCKOUT_TIMED == 0)) {
+            return LOCKOUT_TIMED;
+        }
         return LOCKOUT_NONE;
     }
 
+    @Override
+    public void setLockoutModeForUser(int userId, int mode) {}
+
     private void cancelLockoutResetForUser(int userId) {
-        mAlarmManager.cancel(getLockoutResetIntentForUser(userId));
+        mAlarmManager.cancel(mLockoutResetIntent.apply(userId));
     }
 
     private void scheduleLockoutResetForUser(int userId) {
-        mAlarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                SystemClock.elapsedRealtime() + FAIL_LOCKOUT_TIMEOUT_MS,
-                getLockoutResetIntentForUser(userId));
-    }
-
-    private PendingIntent getLockoutResetIntentForUser(int userId) {
-        return PendingIntent.getBroadcast(mContext, userId,
-                new Intent(ACTION_LOCKOUT_RESET).putExtra(KEY_LOCKOUT_RESET_USER, userId),
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        mHandler.post(() -> {
+            mAlarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + FAIL_LOCKOUT_TIMEOUT_MS,
+                    mLockoutResetIntent.apply(userId));
+        });
     }
 }

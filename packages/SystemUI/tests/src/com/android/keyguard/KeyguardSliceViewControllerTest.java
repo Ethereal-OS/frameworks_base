@@ -15,13 +15,17 @@
  */
 package com.android.keyguard;
 
+import static org.junit.Assume.assumeFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.content.pm.PackageManager;
+import android.os.Handler;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.testing.AndroidTestingRunner;
+import android.testing.TestableLooper;
 import android.testing.TestableLooper.RunWithLooper;
 import android.view.View;
 
@@ -55,17 +59,22 @@ public class KeyguardSliceViewControllerTest extends SysuiTestCase {
     private ActivityStarter mActivityStarter;
     private FakeDisplayTracker mDisplayTracker = new FakeDisplayTracker(mContext);
     private DumpManager mDumpManager = new DumpManager();
-
+    private Handler mHandler;
+    private Handler mBgHandler;
     private KeyguardSliceViewController mController;
 
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
+        TestableLooper testableLooper = TestableLooper.get(this);
+        assert testableLooper != null;
+        mHandler = new Handler(testableLooper.getLooper());
+        mBgHandler = new Handler(testableLooper.getLooper());
         when(mView.isAttachedToWindow()).thenReturn(true);
         when(mView.getContext()).thenReturn(mContext);
-        mController = new KeyguardSliceViewController(
-                mView, mActivityStarter, mConfigurationController,
-                mTunerService, mDumpManager, mDisplayTracker);
+        mController = new KeyguardSliceViewController(mHandler, mBgHandler, mView,
+                mActivityStarter, mConfigurationController, mTunerService, mDumpManager,
+                mDisplayTracker);
         mController.setupUri(KeyguardSliceProvider.KEYGUARD_SLICE_URI);
     }
 
@@ -76,12 +85,20 @@ public class KeyguardSliceViewControllerTest extends SysuiTestCase {
 
     @Test
     public void refresh_replacesSliceContentAndNotifiesListener() {
+        // Skips the test if running on a watch because watches don't have a SliceManager system
+        // service.
+        assumeFalse(isWatch());
+
         mController.refresh();
         verify(mView).hideSlice();
     }
 
     @Test
     public void onAttachedToWindow_registersListeners() {
+        // Skips the test if running on a watch because watches don't have a SliceManager system
+        // service.
+        assumeFalse(isWatch());
+
         mController.init();
         verify(mTunerService).addTunable(any(TunerService.Tunable.class), anyString());
         verify(mConfigurationController).addCallback(
@@ -90,6 +107,10 @@ public class KeyguardSliceViewControllerTest extends SysuiTestCase {
 
     @Test
     public void onDetachedFromWindow_unregistersListeners() {
+        // Skips the test if running on a watch because watches don't have a SliceManager system
+        // service.
+        assumeFalse(isWatch());
+
         ArgumentCaptor<View.OnAttachStateChangeListener> attachListenerArgumentCaptor =
                 ArgumentCaptor.forClass(View.OnAttachStateChangeListener.class);
 
@@ -101,5 +122,10 @@ public class KeyguardSliceViewControllerTest extends SysuiTestCase {
         verify(mTunerService).removeTunable(any(TunerService.Tunable.class));
         verify(mConfigurationController).removeCallback(
                 any(ConfigurationController.ConfigurationListener.class));
+    }
+
+    private boolean isWatch() {
+        final PackageManager pm = mContext.getPackageManager();
+        return pm.hasSystemFeature(PackageManager.FEATURE_WATCH);
     }
 }

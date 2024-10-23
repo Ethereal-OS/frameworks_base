@@ -21,6 +21,7 @@ import android.annotation.TestApi;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.os.VibrationEffect;
+import android.os.VibratorInfo;
 
 import com.android.internal.util.Preconditions;
 
@@ -81,15 +82,21 @@ public final class StepSegment extends VibrationEffectSegment {
 
     /** @hide */
     @Override
-    public boolean isHapticFeedbackCandidate() {
-        return true;
+    public boolean areVibrationFeaturesSupported(@NonNull VibratorInfo vibratorInfo) {
+        boolean areFeaturesSupported = true;
+        if (frequencyRequiresFrequencyControl(mFrequencyHz)) {
+            areFeaturesSupported &= vibratorInfo.hasFrequencyControl();
+        }
+        if (amplitudeRequiresAmplitudeControl(mAmplitude)) {
+            areFeaturesSupported &= vibratorInfo.hasAmplitudeControl();
+        }
+        return areFeaturesSupported;
     }
 
     /** @hide */
     @Override
-    public boolean hasNonZeroAmplitude() {
-        // DEFAULT_AMPLITUDE == -1 is still a non-zero amplitude that will be resolved later.
-        return Float.compare(mAmplitude, 0) != 0;
+    public boolean isHapticFeedbackCandidate() {
+        return true;
     }
 
     /** @hide */
@@ -99,6 +106,10 @@ public final class StepSegment extends VibrationEffectSegment {
         VibrationEffectSegment.checkDurationArgument(mDuration, "duration");
         if (Float.compare(mAmplitude, VibrationEffect.DEFAULT_AMPLITUDE) != 0) {
             Preconditions.checkArgumentInRange(mAmplitude, 0f, 1f, "amplitude");
+            VibrationEffectSegment.checkFrequencyArgument(mFrequencyHz, "frequencyHz");
+        } else if (Float.compare(mFrequencyHz, 0) != 0) {
+            throw new IllegalArgumentException(
+                    "frequency must be default when amplitude is set to default");
         }
     }
 
@@ -126,8 +137,25 @@ public final class StepSegment extends VibrationEffectSegment {
         if (Float.compare(mAmplitude, VibrationEffect.DEFAULT_AMPLITUDE) == 0) {
             return this;
         }
-        return new StepSegment(VibrationEffect.scale(mAmplitude, scaleFactor), mFrequencyHz,
-                mDuration);
+        float newAmplitude = VibrationEffect.scale(mAmplitude, scaleFactor);
+        if (Float.compare(newAmplitude, mAmplitude) == 0) {
+            return this;
+        }
+        return new StepSegment(newAmplitude, mFrequencyHz, mDuration);
+    }
+
+    /** @hide */
+    @NonNull
+    @Override
+    public StepSegment scaleLinearly(float scaleFactor) {
+        if (Float.compare(mAmplitude, VibrationEffect.DEFAULT_AMPLITUDE) == 0) {
+            return this;
+        }
+        float newAmplitude = VibrationEffect.scaleLinearly(mAmplitude, scaleFactor);
+        if (Float.compare(newAmplitude, mAmplitude) == 0) {
+            return this;
+        }
+        return new StepSegment(newAmplitude, mFrequencyHz, mDuration);
     }
 
     /** @hide */
@@ -148,6 +176,13 @@ public final class StepSegment extends VibrationEffectSegment {
                 + ", frequencyHz=" + mFrequencyHz
                 + ", duration=" + mDuration
                 + "}";
+    }
+
+    /** @hide */
+    @Override
+    public String toDebugString() {
+        return String.format("Step=%dms(amplitude=%.2f%s)", mDuration, mAmplitude,
+                Float.compare(mFrequencyHz, 0) == 0 ? "" : " @ " + mFrequencyHz + "Hz");
     }
 
     @Override

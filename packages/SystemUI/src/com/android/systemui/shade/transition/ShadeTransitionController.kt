@@ -18,36 +18,45 @@ package com.android.systemui.shade.transition
 
 import android.content.Context
 import android.content.res.Configuration
-import com.android.systemui.R
 import com.android.systemui.dagger.SysUISingleton
+import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.dump.DumpManager
 import com.android.systemui.plugins.qs.QS
-import com.android.systemui.shade.NotificationPanelViewController
+import com.android.systemui.scene.domain.interactor.PanelExpansionInteractor
+import com.android.systemui.scene.shared.flag.SceneContainerFlag
 import com.android.systemui.shade.PanelState
 import com.android.systemui.shade.ShadeExpansionChangeEvent
 import com.android.systemui.shade.ShadeExpansionStateManager
+import com.android.systemui.shade.ShadeViewController
 import com.android.systemui.shade.panelStateToString
 import com.android.systemui.statusbar.StatusBarState
 import com.android.systemui.statusbar.SysuiStatusBarStateController
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayoutController
 import com.android.systemui.statusbar.policy.ConfigurationController
+import com.android.systemui.statusbar.policy.SplitShadeStateController
+import dagger.Lazy
 import java.io.PrintWriter
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /** Controls the shade expansion transition on non-lockscreen. */
 @SysUISingleton
 class ShadeTransitionController
 @Inject
 constructor(
+    @Application private val applicationScope: CoroutineScope,
     configurationController: ConfigurationController,
     shadeExpansionStateManager: ShadeExpansionStateManager,
     dumpManager: DumpManager,
     private val context: Context,
     private val scrimShadeTransitionController: ScrimShadeTransitionController,
     private val statusBarStateController: SysuiStatusBarStateController,
+    private val splitShadeStateController: SplitShadeStateController,
+    private val panelExpansionInteractor: Lazy<PanelExpansionInteractor>,
 ) {
 
-    lateinit var notificationPanelViewController: NotificationPanelViewController
+    lateinit var shadeViewController: ShadeViewController
     lateinit var notificationStackScrollLayoutController: NotificationStackScrollLayoutController
     lateinit var qs: QS
 
@@ -62,16 +71,34 @@ constructor(
                 override fun onConfigChanged(newConfig: Configuration?) {
                     updateResources()
                 }
-            })
-        shadeExpansionStateManager.addExpansionListener(this::onPanelExpansionChanged)
-        shadeExpansionStateManager.addStateListener(this::onPanelStateChanged)
+            }
+        )
+        if (SceneContainerFlag.isEnabled) {
+            applicationScope.launch {
+                panelExpansionInteractor.get().legacyPanelExpansion.collect { panelExpansion ->
+                    onPanelExpansionChanged(
+                        ShadeExpansionChangeEvent(
+                            fraction = panelExpansion,
+                            expanded = panelExpansion > 0f,
+                            tracking = true,
+                            dragDownPxAmount = 0f,
+                        )
+                    )
+                }
+            }
+        } else {
+            val currentState =
+                shadeExpansionStateManager.addExpansionListener(this::onPanelExpansionChanged)
+            onPanelExpansionChanged(currentState)
+            shadeExpansionStateManager.addStateListener(this::onPanelStateChanged)
+        }
         dumpManager.registerCriticalDumpable("ShadeTransitionController") { printWriter, _ ->
             dump(printWriter)
         }
     }
 
     private fun updateResources() {
-        inSplitShade = context.resources.getBoolean(R.bool.config_use_split_notification_shade)
+        inSplitShade = splitShadeStateController.shouldUseSplitNotificationShade(context.resources)
     }
 
     private fun onPanelStateChanged(@PanelState state: Int) {
@@ -93,9 +120,11 @@ constructor(
                 currentPanelState: ${currentPanelState?.panelStateToString()}
                 lastPanelExpansionChangeEvent: $lastShadeExpansionChangeEvent
                 qs.isInitialized: ${this::qs.isInitialized}
-                npvc.isInitialized: ${this::notificationPanelViewController.isInitialized}
+                npvc.isInitialized: ${this::shadeViewController.isInitialized}
                 nssl.isInitialized: ${this::notificationStackScrollLayoutController.isInitialized}
-            """.trimIndent())
+            """
+                .trimIndent()
+        )
     }
 
     private fun isScreenUnlocked() =

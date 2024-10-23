@@ -16,12 +16,9 @@
 
 package com.android.systemui.statusbar;
 
-import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
-import static android.view.InsetsState.ITYPE_STATUS_BAR;
-import static android.view.WindowInsetsController.APPEARANCE_LOW_PROFILE_BARS;
-
 import static com.android.internal.jank.InteractionJankMonitor.CUJ_LOCKSCREEN_TRANSITION_FROM_AOD;
 import static com.android.internal.jank.InteractionJankMonitor.CUJ_LOCKSCREEN_TRANSITION_TO_AOD;
+import static com.android.systemui.util.kotlin.JavaAdapterKt.combineFlows;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
@@ -33,35 +30,41 @@ import android.text.format.DateFormat;
 import android.util.FloatProperty;
 import android.util.Log;
 import android.view.Choreographer;
-import android.view.InsetsFlags;
-import android.view.InsetsVisibilities;
 import android.view.View;
-import android.view.ViewDebug;
-import android.view.WindowInsetsController.Appearance;
-import android.view.WindowInsetsController.Behavior;
 import android.view.animation.Interpolator;
 
 import androidx.annotation.NonNull;
 
+import com.android.app.animation.Interpolators;
+import com.android.compose.animation.scene.SceneKey;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.jank.InteractionJankMonitor;
 import com.android.internal.jank.InteractionJankMonitor.Configuration;
 import com.android.internal.logging.UiEventLogger;
+import com.android.keyguard.KeyguardClockSwitch;
 import com.android.systemui.DejankUtils;
-import com.android.systemui.Dumpable;
-import com.android.systemui.animation.Interpolators;
 import com.android.systemui.dagger.SysUISingleton;
-import com.android.systemui.dump.DumpManager;
+import com.android.systemui.deviceentry.domain.interactor.DeviceUnlockedInteractor;
 import com.android.systemui.plugins.statusbar.StatusBarStateController.StateListener;
-import com.android.systemui.shade.ShadeExpansionStateManager;
+import com.android.systemui.res.R;
+import com.android.systemui.scene.domain.interactor.SceneInteractor;
+import com.android.systemui.scene.shared.flag.SceneContainerFlag;
+import com.android.systemui.scene.shared.model.Scenes;
+import com.android.systemui.shade.domain.interactor.ShadeInteractor;
 import com.android.systemui.statusbar.notification.stack.StackStateAnimator;
 import com.android.systemui.statusbar.policy.CallbackController;
 import com.android.systemui.util.Compile;
+import com.android.systemui.util.kotlin.JavaAdapter;
+
+import com.google.common.base.Preconditions;
+
+import dagger.Lazy;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Map;
 
 import javax.inject.Inject;
 
@@ -71,8 +74,7 @@ import javax.inject.Inject;
 @SysUISingleton
 public class StatusBarStateControllerImpl implements
         SysuiStatusBarStateController,
-        CallbackController<StateListener>,
-        Dumpable {
+        CallbackController<StateListener> {
     private static final String TAG = "SbStateController";
     private static final boolean DEBUG_IMMERSIVE_APPS =
             SystemProperties.getBoolean("persist.debug.immersive_apps", false);
@@ -102,6 +104,10 @@ public class StatusBarStateControllerImpl implements
     private final ArrayList<RankedListener> mListeners = new ArrayList<>();
     private final UiEventLogger mUiEventLogger;
     private final InteractionJankMonitor mInteractionJankMonitor;
+    private final JavaAdapter mJavaAdapter;
+    private final Lazy<ShadeInteractor> mShadeInteractorLazy;
+    private final Lazy<DeviceUnlockedInteractor> mDeviceUnlockedInteractorLazy;
+    private final Lazy<SceneInteractor> mSceneInteractorLazy;
     private int mState;
     private int mLastState;
     private int mUpcomingState;
@@ -111,8 +117,9 @@ public class StatusBarStateControllerImpl implements
     // Record the HISTORY_SIZE most recent states
     private int mHistoryIndex = 0;
     private HistoricalState[] mHistoricalRecords = new HistoricalState[HISTORY_SIZE];
-    // This is used by InteractionJankMonitor to get callback from HWUI.
-    private View mView;
+    // These views are used by InteractionJankMonitor to get callback from HWUI.
+    public View mView;
+    public KeyguardClockSwitch mClockSwitchView;
 
     /**
      * If any of the system bars is hidden.
@@ -122,12 +129,12 @@ public class StatusBarStateControllerImpl implements
     /**
      * If the device is currently pulsing (AOD2).
      */
-    private boolean mPulsing;
+    public boolean mPulsing;
 
     /**
      * If the device is currently dozing or not.
      */
-    private boolean mIsDozing;
+    public boolean mIsDozing;
 
     /**
      * If the device is currently dreaming or not.
@@ -142,38 +149,55 @@ public class StatusBarStateControllerImpl implements
     /**
      * Current {@link #mDozeAmount} animator.
      */
-    private ValueAnimator mDarkAnimator;
+    public ValueAnimator mDarkAnimator;
 
     /**
      * Current doze amount in this frame.
      */
-    private float mDozeAmount;
+    public float mDozeAmount;
 
     /**
      * Where the animator will stop.
      */
-    private float mDozeAmountTarget;
+    public float mDozeAmountTarget;
 
     /**
      * The type of interpolator that should be used to the doze animation.
      */
-    private Interpolator mDozeInterpolator = Interpolators.FAST_OUT_SLOW_IN;
+    public Interpolator mDozeInterpolator = Interpolators.FAST_OUT_SLOW_IN;
 
     @Inject
     public StatusBarStateControllerImpl(
             UiEventLogger uiEventLogger,
-            DumpManager dumpManager,
             InteractionJankMonitor interactionJankMonitor,
-            ShadeExpansionStateManager shadeExpansionStateManager
-    ) {
+            JavaAdapter javaAdapter,
+            Lazy<ShadeInteractor> shadeInteractorLazy,
+            Lazy<DeviceUnlockedInteractor> deviceUnlockedInteractorLazy,
+            Lazy<SceneInteractor> sceneInteractorLazy) {
         mUiEventLogger = uiEventLogger;
         mInteractionJankMonitor = interactionJankMonitor;
+        mJavaAdapter = javaAdapter;
+        mShadeInteractorLazy = shadeInteractorLazy;
+        mDeviceUnlockedInteractorLazy = deviceUnlockedInteractorLazy;
+        mSceneInteractorLazy = sceneInteractorLazy;
         for (int i = 0; i < HISTORY_SIZE; i++) {
             mHistoricalRecords[i] = new HistoricalState();
         }
-        shadeExpansionStateManager.addFullExpansionListener(this::onShadeExpansionFullyChanged);
+    }
 
-        dumpManager.registerDumpable(this);
+    @Override
+    public void start() {
+        mJavaAdapter.alwaysCollectFlow(mShadeInteractorLazy.get().isAnyExpanded(),
+                this::onShadeOrQsExpanded);
+
+        if (SceneContainerFlag.isEnabled()) {
+            mJavaAdapter.alwaysCollectFlow(
+                    combineFlows(
+                        mDeviceUnlockedInteractorLazy.get().isDeviceUnlocked(),
+                        mSceneInteractorLazy.get().getCurrentScene(),
+                        this::calculateStateFromSceneFramework),
+                    this::onStatusBarStateChanged);
+        }
     }
 
     @Override
@@ -183,6 +207,10 @@ public class StatusBarStateControllerImpl implements
 
     @Override
     public boolean setState(int state, boolean force) {
+        if (SceneContainerFlag.isEnabled()) {
+            return false;
+        }
+
         if (state > MAX_STATE || state < MIN_STATE) {
             throw new IllegalArgumentException("Invalid state " + state);
         }
@@ -194,6 +222,14 @@ public class StatusBarStateControllerImpl implements
             return false;
         }
 
+        updateStateAndNotifyListeners(state);
+        return true;
+    }
+
+    /**
+     * Updates the {@link StatusBarState} and notifies registered listeners, if needed.
+     */
+    private void updateStateAndNotifyListeners(int state) {
         if (state != mUpcomingState) {
             Log.d(TAG, "setState: requested state " + StatusBarState.toString(state)
                     + "!= upcomingState: " + StatusBarState.toString(mUpcomingState) + ". "
@@ -229,15 +265,16 @@ public class StatusBarStateControllerImpl implements
             }
             DejankUtils.stopDetectingBlockingIpcs(tag);
         }
-
-        return true;
     }
 
     @Override
     public void setUpcomingState(int nextState) {
+        if (SceneContainerFlag.isEnabled()) {
+            return;
+        }
+
         recordHistoricalState(nextState /* newState */, mState /* lastState */, true);
         updateUpcomingState(nextState);
-
     }
 
     private void updateUpcomingState(int upcomingState) {
@@ -341,6 +378,7 @@ public class StatusBarStateControllerImpl implements
         if ((mView == null || !mView.isAttachedToWindow())
                 && (view != null && view.isAttachedToWindow())) {
             mView = view;
+            mClockSwitchView = view.findViewById(R.id.keyguard_clock_container);
         }
         mDozeAmountTarget = dozeAmount;
         if (animated) {
@@ -350,7 +388,7 @@ public class StatusBarStateControllerImpl implements
         }
     }
 
-    private void onShadeExpansionFullyChanged(Boolean isExpanded) {
+    private void onShadeOrQsExpanded(Boolean isExpanded) {
         if (mIsExpanded != isExpanded) {
             mIsExpanded = isExpanded;
             String tag = getClass().getSimpleName() + "#setIsExpanded";
@@ -380,7 +418,7 @@ public class StatusBarStateControllerImpl implements
     }
 
     @VisibleForTesting
-    protected ObjectAnimator createDarkAnimator() {
+    public ObjectAnimator createDarkAnimator() {
         ObjectAnimator darkAnimator = ObjectAnimator.ofFloat(
                 this, SET_DARK_AMOUNT_PROPERTY, mDozeAmountTarget);
         darkAnimator.setInterpolator(Interpolators.LINEAR);
@@ -405,7 +443,7 @@ public class StatusBarStateControllerImpl implements
         return darkAnimator;
     }
 
-    private void setDozeAmountInternal(float dozeAmount) {
+    public void setDozeAmountInternal(float dozeAmount) {
         if (Float.compare(dozeAmount, mDozeAmount) == 0) {
             return;
         }
@@ -421,6 +459,16 @@ public class StatusBarStateControllerImpl implements
         }
     }
 
+    /** Returns the id of the currently rendering clock */
+    public String getClockId() {
+        if (mClockSwitchView == null) {
+            Log.e(TAG, "Clock container was missing");
+            return KeyguardClockSwitch.MISSING_CLOCK_ID;
+        }
+
+        return mClockSwitchView.getClockId();
+    }
+
     private void beginInteractionJankMonitor() {
         final boolean shouldPost =
                 (mIsDozing && mDozeAmount == 0) || (!mIsDozing && mDozeAmount == 1);
@@ -430,6 +478,7 @@ public class StatusBarStateControllerImpl implements
                         Choreographer.CALLBACK_ANIMATION, this::beginInteractionJankMonitor, null);
             } else {
                 Configuration.Builder builder = Configuration.Builder.withView(getCujType(), mView)
+                        .setTag(getClockId())
                         .setDeferMonitorForAnimationStart(false);
                 mInteractionJankMonitor.begin(builder);
             }
@@ -456,7 +505,7 @@ public class StatusBarStateControllerImpl implements
 
     @Override
     public boolean goingToFullShade() {
-        return mState == StatusBarState.SHADE && mLeaveOpenOnKeyguardHide;
+        return getState() == StatusBarState.SHADE && mLeaveOpenOnKeyguardHide;
     }
 
     @Override
@@ -533,34 +582,6 @@ public class StatusBarStateControllerImpl implements
     }
 
     @Override
-    public void setSystemBarAttributes(@Appearance int appearance, @Behavior int behavior,
-            InsetsVisibilities requestedVisibilities, String packageName) {
-        boolean isFullscreen = !requestedVisibilities.getVisibility(ITYPE_STATUS_BAR)
-                || !requestedVisibilities.getVisibility(ITYPE_NAVIGATION_BAR);
-        if (mIsFullscreen != isFullscreen) {
-            mIsFullscreen = isFullscreen;
-            synchronized (mListeners) {
-                for (RankedListener rl : new ArrayList<>(mListeners)) {
-                    rl.mListener.onFullscreenStateChanged(isFullscreen);
-                }
-            }
-        }
-
-        // TODO (b/190543382): Finish the logging logic.
-        // This section can be removed if we don't need to print it on logcat.
-        if (DEBUG_IMMERSIVE_APPS) {
-            boolean dim = (appearance & APPEARANCE_LOW_PROFILE_BARS) != 0;
-            String behaviorName = ViewDebug.flagsToString(InsetsFlags.class, "behavior", behavior);
-            String requestedVisibilityString = requestedVisibilities.toString();
-            if (requestedVisibilityString.isEmpty()) {
-                requestedVisibilityString = "none";
-            }
-            Log.d(TAG, packageName + " dim=" + dim + " behavior=" + behaviorName
-                    + " requested visibilities: " + requestedVisibilityString);
-        }
-    }
-
-    @Override
     public void setPulsing(boolean pulsing) {
         if (mPulsing != pulsing) {
             mPulsing = pulsing;
@@ -614,6 +635,37 @@ public class StatusBarStateControllerImpl implements
         state.mTimestamp = System.currentTimeMillis();
         state.mUpcoming = upcoming;
     }
+
+    private int calculateStateFromSceneFramework(
+            boolean isDeviceUnlocked,
+            SceneKey currentScene) {
+        SceneContainerFlag.isUnexpectedlyInLegacyMode();
+
+        if (isDeviceUnlocked) {
+            return StatusBarState.SHADE;
+        } else {
+            return Preconditions.checkNotNull(sStatusBarStateByLockedSceneKey.get(currentScene));
+        }
+    }
+
+    /** Notifies that the {@link StatusBarState} has changed to the given new state. */
+    private void onStatusBarStateChanged(int newState) {
+        SceneContainerFlag.isUnexpectedlyInLegacyMode();
+
+        if (newState == mState) {
+            return;
+        }
+
+        updateStateAndNotifyListeners(newState);
+    }
+
+    private static final Map<SceneKey, Integer> sStatusBarStateByLockedSceneKey = Map.of(
+            Scenes.Lockscreen, StatusBarState.KEYGUARD,
+            Scenes.Bouncer, StatusBarState.KEYGUARD,
+            Scenes.Communal, StatusBarState.KEYGUARD,
+            Scenes.Shade, StatusBarState.SHADE_LOCKED,
+            Scenes.QuickSettings, StatusBarState.SHADE_LOCKED
+    );
 
     /**
      * For keeping track of our previous state to help with debugging

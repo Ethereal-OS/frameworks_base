@@ -22,7 +22,6 @@ import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.annotation.TestApi;
 import android.annotation.UserIdInt;
-import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.util.SparseArray;
 
@@ -37,6 +36,7 @@ import java.util.Random;
 /**
  * Representation of a user on the device.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public final class UserHandle implements Parcelable {
     // NOTE: keep logic in sync with system/core/libcutils/multiuser.c
 
@@ -57,6 +57,7 @@ public final class UserHandle implements Parcelable {
 
     /** @hide A user id to indicate the currently active user */
     @UnsupportedAppUsage
+    @TestApi
     public static final @UserIdInt int USER_CURRENT = -2;
 
     /** @hide A user handle to indicate the current user of the device */
@@ -123,6 +124,10 @@ public final class UserHandle implements Parcelable {
     /** @hide */
     @TestApi
     public static final int MIN_SECONDARY_USER_ID = 10;
+
+    /** @hide */
+    public static final int MAX_SECONDARY_USER_ID =
+            Integer.MAX_VALUE / UserHandle.PER_USER_RANGE - 1;
 
     /**
      * (Arbitrary) user handle cache size.
@@ -276,7 +281,6 @@ public final class UserHandle implements Parcelable {
      * Returns the user id for a given uid.
      * @hide
      */
-    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
     @UnsupportedAppUsage
     @TestApi
     public static @UserIdInt int getUserId(int uid) {
@@ -367,11 +371,10 @@ public final class UserHandle implements Parcelable {
      * Returns the uid that is composed from the userId and the appId.
      * @hide
      */
-    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
     @UnsupportedAppUsage
     @TestApi
     public static int getUid(@UserIdInt int userId, @AppIdInt int appId) {
-        if (MU_ENABLED) {
+        if (MU_ENABLED && appId >= 0) {
             return userId * PER_USER_RANGE + (appId % PER_USER_RANGE);
         } else {
             return appId;
@@ -407,7 +410,12 @@ public final class UserHandle implements Parcelable {
         return getUid(userId, Process.SHARED_USER_GID);
     }
 
-    /** @hide */
+    /**
+     * Returns the gid shared between all users with the app that this uid represents, or -1 if the
+     * uid is invalid.
+     * @hide
+     */
+    @SystemApi
     public static int getSharedAppGid(int uid) {
         return getSharedAppGid(getUserId(uid), getAppId(uid));
     }
@@ -566,10 +574,6 @@ public final class UserHandle implements Parcelable {
     @Deprecated
     @SystemApi
     public boolean isOwner() {
-        if (GmsCompat.isEnabled()) {
-            return isSystem();
-        }
-
         return this.equals(OWNER);
     }
 
@@ -579,11 +583,6 @@ public final class UserHandle implements Parcelable {
      */
     @SystemApi
     public boolean isSystem() {
-        if (GmsCompat.isEnabled()) {
-            // "system" user means "primary" ("Owner") user
-            return true;
-        }
-
         return this.equals(SYSTEM);
     }
 
@@ -609,12 +608,9 @@ public final class UserHandle implements Parcelable {
 
     @Override
     public boolean equals(@Nullable Object obj) {
-        try {
-            if (obj != null) {
-                UserHandle other = (UserHandle)obj;
-                return mHandle == other.mHandle;
-            }
-        } catch (ClassCastException ignore) {
+        if (obj instanceof UserHandle) {
+            UserHandle other = (UserHandle) obj;
+            return mHandle == other.mHandle;
         }
         return false;
     }

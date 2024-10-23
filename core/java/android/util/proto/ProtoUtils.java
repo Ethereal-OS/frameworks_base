@@ -27,6 +27,7 @@ import java.util.Arrays;
  * //frameworks/base/core/proto/android/base directory
  * @hide
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class ProtoUtils {
 
     /**
@@ -65,7 +66,7 @@ public class ProtoUtils {
      * Helper function to write bit-wise flags to proto as repeated enums
      */
     public static void writeBitWiseFlagsToProtoEnum(ProtoOutputStream proto, long fieldId,
-            int flags, int[] origEnums, int[] protoEnums) {
+            long flags, int[] origEnums, int[] protoEnums) {
         if (protoEnums.length != origEnums.length) {
             throw new IllegalArgumentException("The length of origEnums must match protoEnums");
         }

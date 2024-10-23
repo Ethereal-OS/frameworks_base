@@ -15,6 +15,8 @@
  */
 package com.android.keyguard;
 
+import static com.android.systemui.bouncer.shared.constants.KeyguardBouncerConstants.ColorId.NUM_PAD_KEY;
+
 import android.content.Context;
 import android.content.res.Configuration;
 import android.content.res.TypedArray;
@@ -22,21 +24,19 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.PowerManager;
 import android.os.SystemClock;
-import android.os.UserHandle;
-import android.provider.Settings;
 import android.util.AttributeSet;
 import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
 import com.android.settingslib.Utils;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 
 /**
  * Viewgroup for the bouncer numpad button, specifically for digits.
@@ -105,8 +105,6 @@ public class NumPadKey extends ViewGroup implements NumPadAnimationListener {
         }
 
         setOnClickListener(mListener);
-        setOnHoverListener(new LiftToActivateListener(
-                (AccessibilityManager) context.getSystemService(Context.ACCESSIBILITY_SERVICE)));
 
         mPM = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
         LayoutInflater inflater = (LayoutInflater) getContext().getSystemService(
@@ -117,7 +115,21 @@ public class NumPadKey extends ViewGroup implements NumPadAnimationListener {
         mDigitText.setText(Integer.toString(mDigit));
         mKlondikeText = (TextView) findViewById(R.id.klondike_text);
 
-        updateText();
+        if (mDigit >= 0) {
+            if (sKlondike == null) {
+                sKlondike = getResources().getStringArray(R.array.lockscreen_num_pad_klondike);
+            }
+            if (sKlondike != null && sKlondike.length > mDigit) {
+                String klondike = sKlondike[mDigit];
+                final int len = klondike.length();
+                if (len > 0) {
+                    mKlondikeText.setText(klondike);
+                } else if (mKlondikeText.getVisibility() != View.GONE) {
+                    mKlondikeText.setVisibility(View.INVISIBLE);
+                }
+            }
+        }
+
         setContentDescription(mDigitText.getText().toString());
 
         Drawable background = getBackground();
@@ -126,32 +138,6 @@ public class NumPadKey extends ViewGroup implements NumPadAnimationListener {
                     R.style.NumPadKey, mDigitText, null);
         } else {
             mAnimator = null;
-        }
-    }
-
-    public void setDigit(int digit) {
-        mDigit = digit;
-        updateText();
-    }
-
-    private void updateText() {
-        boolean scramblePin = Settings.System.getIntForUser(getContext().getContentResolver(),
-                Settings.System.LOCKSCREEN_PIN_SCRAMBLE_LAYOUT, 0,
-                UserHandle.USER_CURRENT) == 1;
-        if (mDigit >= 0) {
-            mDigitText.setText(Integer.toString(mDigit));
-            if (sKlondike == null) {
-                sKlondike = getResources().getStringArray(R.array.lockscreen_num_pad_klondike);
-            }
-            if (sKlondike != null && sKlondike.length > mDigit) {
-                String klondike = sKlondike[mDigit];
-                final int len = klondike.length();
-                if (len > 0  || scramblePin) {
-                    mKlondikeText.setText(klondike);
-                } else if (mKlondikeText.getVisibility() != View.GONE) {
-                    mKlondikeText.setVisibility(View.INVISIBLE);
-                }
-            }
         }
     }
 
@@ -164,7 +150,7 @@ public class NumPadKey extends ViewGroup implements NumPadAnimationListener {
      * Reload colors from resources.
      **/
     public void reloadColors() {
-        int textColor = Utils.getColorAttr(getContext(), android.R.attr.textColorPrimary)
+        int textColor = Utils.getColorAttr(getContext(), NUM_PAD_KEY)
                 .getDefaultColor();
         int klondikeColor = Utils.getColorAttr(getContext(), android.R.attr.textColorSecondary)
                 .getDefaultColor();
@@ -223,7 +209,9 @@ public class NumPadKey extends ViewGroup implements NumPadAnimationListener {
         left = centerX - mKlondikeText.getMeasuredWidth() / 2;
         mKlondikeText.layout(left, top, left + mKlondikeText.getMeasuredWidth(), bottom);
 
-        if (mAnimator != null) mAnimator.onLayout(b - t);
+        int width = r - l;
+        int height = b - t;
+        if (mAnimator != null) mAnimator.onLayout(width, height);
     }
 
     @Override
@@ -249,5 +237,11 @@ public class NumPadKey extends ViewGroup implements NumPadAnimationListener {
      */
     public void setAnimationEnabled(boolean enabled) {
         mAnimationsEnabled = enabled;
+    }
+
+    @Override
+    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfo(info);
+        info.setTextEntryKey(true);
     }
 }

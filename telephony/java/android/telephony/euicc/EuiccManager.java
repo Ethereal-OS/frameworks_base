@@ -16,12 +16,14 @@
 package android.telephony.euicc;
 
 import android.Manifest;
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresFeature;
 import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
+import android.annotation.SuppressAutoDoc;
 import android.annotation.SystemApi;
 import android.app.Activity;
 import android.app.PendingIntent;
@@ -43,11 +45,14 @@ import android.telephony.euicc.EuiccCardManager.ResetOption;
 import android.util.Log;
 
 import com.android.internal.telephony.euicc.IEuiccController;
+import com.android.internal.telephony.flags.Flags;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -80,6 +85,47 @@ public class EuiccManager {
     @SdkConstant(SdkConstant.SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_MANAGE_EMBEDDED_SUBSCRIPTIONS =
             "android.telephony.euicc.action.MANAGE_EMBEDDED_SUBSCRIPTIONS";
+
+
+    /**
+     * Intent action to transfer an embedded subscriptions.
+     *
+     * <p> Action sent by apps (such as the Settings app) to the Telephony framework to transfer an
+     * embedded subscription.
+     *
+     * <p> Requires that the calling app has the
+     * {@code android.Manifest.permission#MODIFY_PHONE_STATE} permission.
+     *
+     * <p>The activity will immediately finish with {@link android.app.Activity#RESULT_CANCELED} if
+     * {@link #isEnabled} is false.
+     *
+     * @hide
+     */
+    @SystemApi
+    @SdkConstant(SdkConstant.SdkConstantType.ACTIVITY_INTENT_ACTION)
+    @RequiresPermission(Manifest.permission.MODIFY_PHONE_STATE)
+    public static final String ACTION_TRANSFER_EMBEDDED_SUBSCRIPTIONS =
+            "android.telephony.euicc.action.TRANSFER_EMBEDDED_SUBSCRIPTIONS";
+
+    /**
+     * Intent action to convert the physical subscription to an embedded subscription.
+     *
+     * <p> Action sent by apps (such as the Settings app) to the Telephony framework to convert
+     * physical sim to embedded sim.
+     *
+     * <p> Requires that the calling app has the
+     * {@code android.Manifest.permission#MODIFY_PHONE_STATE} permission.
+     *
+     * <p>The activity will immediately finish with {@link android.app.Activity#RESULT_CANCELED} if
+     * {@link #isEnabled} is false.
+     *
+     * @hide
+     */
+    @SystemApi
+    @SdkConstant(SdkConstant.SdkConstantType.ACTIVITY_INTENT_ACTION)
+    @RequiresPermission(Manifest.permission.MODIFY_PHONE_STATE)
+    public static final String ACTION_CONVERT_TO_EMBEDDED_SUBSCRIPTION =
+            "android.telephony.euicc.action.CONVERT_TO_EMBEDDED_SUBSCRIPTION";
 
     /**
      * Broadcast Action: The eUICC OTA status is changed.
@@ -207,7 +253,7 @@ public class EuiccManager {
      *
      * <p>{@link #EXTRA_USE_QR_SCANNER} not set or set to false: The LPA should try to get an
      * activation code from the carrier app by binding to the carrier app service implementing
-     * {@link android.service.euicc.EuiccService#ACTION_BIND_CARRIER_PROVISIONING_SERVICE}.
+     * {@code android.service.euicc.EuiccService#ACTION_BIND_CARRIER_PROVISIONING_SERVICE}.
      * <p>{@link #EXTRA_USE_QR_SCANNER} set to true: The LPA should launch a QR scanner for the user
      * to scan an eSIM profile QR code.
      *
@@ -510,9 +556,8 @@ public class EuiccManager {
 
     /**
      * Euicc OTA update status which can be got by {@link #getOtaStatus}
-     * @hide
+     * @removed mistakenly exposed as system-api previously
      */
-    @SystemApi
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(prefix = {"EUICC_OTA_"}, value = {
             EUICC_OTA_IN_PROGRESS,
@@ -819,6 +864,10 @@ public class EuiccManager {
      */
     public static final int ERROR_INVALID_PORT = 10017;
 
+    /** Temporary failure to retrieve available memory because eUICC is not ready. */
+    @FlaggedApi(Flags.FLAG_ESIM_AVAILABLE_MEMORY)
+    public static final long EUICC_MEMORY_FIELD_UNAVAILABLE = -1L;
+
     /**
      * Apps targeting on Android T and beyond will get exception whenever switchToSubscription
      * without portIndex is called for disable subscription.
@@ -840,15 +889,23 @@ public class EuiccManager {
     @EnabledSince(targetSdkVersion = Build.VERSION_CODES.TIRAMISU)
     public static final long SHOULD_RESOLVE_PORT_INDEX_FOR_APPS = 224562872L;
 
+    /**
+     * Starting with Android U, a port is available if it is active without an enabled profile
+     * on it or calling app can activate a new profile on the selected port without any user
+     * interaction.
+     * @hide
+     */
+    @ChangeId
+    @EnabledSince(targetSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public static final long INACTIVE_PORT_AVAILABILITY_CHECK = 240273417L;
+
     private final Context mContext;
     private int mCardId;
 
     /** @hide */
     public EuiccManager(Context context) {
         mContext = context;
-        TelephonyManager tm = (TelephonyManager)
-                context.getSystemService(Context.TELEPHONY_SERVICE);
-        mCardId = tm.getCardIdForDefaultEuicc();
+        mCardId = getCardIdForDefaultEuicc();
     }
 
     /** @hide */
@@ -876,6 +933,9 @@ public class EuiccManager {
      * subscription APIs.
      *
      * @return true if embedded subscriptions are currently enabled.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public boolean isEnabled() {
         // In the future, this may reach out to IEuiccController (if non-null) to check any dynamic
@@ -891,6 +951,9 @@ public class EuiccManager {
      * access to the EID of another eUICC.
      *
      * @return the EID. May be null if the eUICC is not ready.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     @Nullable
     public String getEid() {
@@ -905,6 +968,35 @@ public class EuiccManager {
     }
 
     /**
+     * Returns the available memory in bytes of the eUICC.
+     *
+     * @return the available memory in bytes. May be {@link #EUICC_MEMORY_FIELD_UNAVAILABLE} if the
+     *     eUICC is not ready. Check {@link #isEnabled} for more information.
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC} or
+     *          device doesn't support querying this information from the eUICC.
+     */
+    @SuppressAutoDoc // Blocked by b/72967236 - no support for carrier privileges
+    @FlaggedApi(Flags.FLAG_ESIM_AVAILABLE_MEMORY)
+    @RequiresPermission(
+            anyOf = {
+                Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.READ_PRIVILEGED_PHONE_STATE,
+                "carrier privileges"
+            })
+    public long getAvailableMemoryInBytes() {
+        if (!isEnabled()) {
+            return EUICC_MEMORY_FIELD_UNAVAILABLE;
+        }
+        try {
+            return getIEuiccController()
+                    .getAvailableMemoryInBytes(mCardId, mContext.getOpPackageName());
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Returns the current status of eUICC OTA.
      *
      * <p>Requires the {@link android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS} permission.
@@ -912,6 +1004,8 @@ public class EuiccManager {
      * @return the status of eUICC OTA. If the eUICC is not ready,
      *         {@link OtaStatus#EUICC_OTA_STATUS_UNAVAILABLE} will be returned.
      *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -930,11 +1024,22 @@ public class EuiccManager {
     /**
      * Attempt to download the given {@link DownloadableSubscription}.
      *
-     * <p>Requires the {@code android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS} permission,
-     * or the calling app must be authorized to manage both the currently-active subscription on the
+     * <p>Requires the {@code android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS}
+     * or the calling app must be authorized to manage both the currently-active
+     * subscription on the
      * current eUICC and the subscription to be downloaded according to the subscription metadata.
      * Without the former, an {@link #EMBEDDED_SUBSCRIPTION_RESULT_RESOLVABLE_ERROR} will be
-     * returned in the callback intent to prompt the user to accept the download.
+     * eturned in the callback intent to prompt the user to accept the download.
+     *
+     * <p> Starting from Android {@link android.os.Build.VERSION_CODES#VANILLA_ICE_CREAM},
+     * if the caller has the
+     * {@code android.Manifest.permission#MANAGE_DEVICE_POLICY_MANAGED_SUBSCRIPTIONS} permission or
+     * is a profile owner or device owner, and
+     * {@code switchAfterDownload} is {@code false}, then the downloaded subscription
+     * will be managed by that caller. If {@code switchAfterDownload} is true,
+     * an {@link #EMBEDDED_SUBSCRIPTION_RESULT_RESOLVABLE_ERROR} will be
+     * returned in the callback intent to prompt the user to accept the download and the
+     * subscription will not be managed.
      *
      * <p>On a multi-active SIM device, requires the
      * {@code android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS} permission, or a calling app
@@ -963,8 +1068,13 @@ public class EuiccManager {
      * @param subscription the subscription to download.
      * @param switchAfterDownload if true, the profile will be activated upon successful download.
      * @param callbackIntent a PendingIntent to launch when the operation completes.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
-    @RequiresPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
+    @RequiresPermission(anyOf = {
+            Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS,
+            Manifest.permission.MANAGE_DEVICE_POLICY_MANAGED_SUBSCRIPTIONS})
     public void downloadSubscription(DownloadableSubscription subscription,
             boolean switchAfterDownload, PendingIntent callbackIntent) {
         if (!isEnabled()) {
@@ -1001,7 +1111,7 @@ public class EuiccManager {
     public void startResolutionActivity(Activity activity, int requestCode, Intent resultIntent,
             PendingIntent callbackIntent) throws IntentSender.SendIntentException {
         PendingIntent resolutionIntent =
-                resultIntent.getParcelableExtra(EXTRA_EMBEDDED_SUBSCRIPTION_RESOLUTION_INTENT);
+                resultIntent.getParcelableExtra(EXTRA_EMBEDDED_SUBSCRIPTION_RESOLUTION_INTENT, android.app.PendingIntent.class);
         if (resolutionIntent == null) {
             throw new IllegalArgumentException("Invalid result intent");
         }
@@ -1024,6 +1134,9 @@ public class EuiccManager {
      * @param resolutionExtras Resolution-specific extras depending on the result of the resolution.
      *     For example, this may indicate whether the user has consented or may include the input
      *     they provided.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1032,7 +1145,7 @@ public class EuiccManager {
         if (!isEnabled()) {
             PendingIntent callbackIntent =
                     resolutionIntent.getParcelableExtra(
-                            EuiccManager.EXTRA_EMBEDDED_SUBSCRIPTION_RESOLUTION_CALLBACK_INTENT);
+                            EuiccManager.EXTRA_EMBEDDED_SUBSCRIPTION_RESOLUTION_CALLBACK_INTENT, android.app.PendingIntent.class);
             if (callbackIntent != null) {
                 sendUnavailableError(callbackIntent);
             }
@@ -1060,6 +1173,9 @@ public class EuiccManager {
      *
      * @param subscription the subscription which needs metadata filled in
      * @param callbackIntent a PendingIntent to launch when the operation completes.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1091,6 +1207,9 @@ public class EuiccManager {
      * internal system use only.
      *
      * @param callbackIntent a PendingIntent to launch when the operation completes.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1112,6 +1231,9 @@ public class EuiccManager {
      * Returns information about the eUICC chip/device.
      *
      * @return the {@link EuiccInfo}. May be null if the eUICC is not ready.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     @Nullable
     public EuiccInfo getEuiccInfo() {
@@ -1134,11 +1256,22 @@ public class EuiccManager {
      * <p>Requires that the calling app has carrier privileges according to the metadata of the
      * profile to be deleted, or the
      * {@code android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS} permission.
+     * Starting from Android {@link android.os.Build.VERSION_CODES#VANILLA_ICE_CREAM}, if the
+     * caller is a device owner, profile owner, or holds the
+     * {@code android.Manifest.permission#MANAGE_DEVICE_POLICY_MANAGED_SUBSCRIPTIONS} permission,
+     * then the caller can delete a subscription that was downloaded by that caller.
+     * If such a caller tries to delete any other subscription then the
+     * operation will fail with {@link #EMBEDDED_SUBSCRIPTION_RESULT_ERROR}.
      *
      * @param subscriptionId the ID of the subscription to delete.
      * @param callbackIntent a PendingIntent to launch when the operation completes.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
-    @RequiresPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
+    @RequiresPermission(anyOf = {
+            Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS,
+            Manifest.permission.MANAGE_DEVICE_POLICY_MANAGED_SUBSCRIPTIONS})
     public void deleteSubscription(int subscriptionId, PendingIntent callbackIntent) {
         if (!isEnabled()) {
             sendUnavailableError(callbackIntent);
@@ -1200,6 +1333,9 @@ public class EuiccManager {
      *     {@code android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS} permission, or the
      *     calling app must be authorized to manage the active subscription on the target eUICC.
      * @param callbackIntent a PendingIntent to launch when the operation completes.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     @RequiresPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
     public void switchToSubscription(int subscriptionId, PendingIntent callbackIntent) {
@@ -1261,6 +1397,9 @@ public class EuiccManager {
      *     {@link SubscriptionInfo#getPortIndex()}.
      * @param portIndex the index of the port to target for the enabled subscription
      * @param callbackIntent a PendingIntent to launch when the operation completes.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     @RequiresPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
     public void switchToSubscription(int subscriptionId, int portIndex,
@@ -1298,6 +1437,9 @@ public class EuiccManager {
      * @param subscriptionId the ID of the subscription to update.
      * @param nickname the new nickname to apply.
      * @param callbackIntent a PendingIntent to launch when the operation completes.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     @RequiresPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
     public void updateSubscriptionNickname(
@@ -1325,6 +1467,8 @@ public class EuiccManager {
      * @deprecated From R, callers should specify a flag for specific set of subscriptions to erase
      * and use {@link #eraseSubscriptions(int, PendingIntent)} instead
      *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1351,6 +1495,8 @@ public class EuiccManager {
      * @param options flag indicating specific set of subscriptions to erase
      * @param callbackIntent a PendingIntent to launch when the operation completes.
      *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1408,6 +1554,9 @@ public class EuiccManager {
      * determine whether a country is supported please check {@link #isSupportedCountry}.
      *
      * @param supportedCountries is a list of strings contains country ISO codes in uppercase.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1436,6 +1585,9 @@ public class EuiccManager {
      * determine whether a country is supported please check {@link #isSupportedCountry}.
      *
      * @param unsupportedCountries is a list of strings contains country ISO codes in uppercase.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1461,6 +1613,9 @@ public class EuiccManager {
      * {@code android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS} permission.
      *
      * @return list of strings contains country ISO codes in uppercase.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1484,6 +1639,9 @@ public class EuiccManager {
      * {@code android.Manifest.permission#WRITE_EMBEDDED_SUBSCRIPTIONS} permission.
      *
      * @return list of strings contains country ISO codes in uppercase.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1515,6 +1673,9 @@ public class EuiccManager {
      * @param countryIso should be the ISO-3166 country code is provided in uppercase 2 character
      * format.
      * @return whether the given country supports eUICC or not.
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      * @hide
      */
     @SystemApi
@@ -1524,7 +1685,7 @@ public class EuiccManager {
             return false;
         }
         try {
-            return getIEuiccController().isSupportedCountry(countryIso.toUpperCase());
+            return getIEuiccController().isSupportedCountry(countryIso.toUpperCase(Locale.ROOT));
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -1541,14 +1702,9 @@ public class EuiccManager {
     private boolean refreshCardIdIfUninitialized() {
         // Refresh mCardId if its UNINITIALIZED_CARD_ID
         if (mCardId == TelephonyManager.UNINITIALIZED_CARD_ID) {
-            TelephonyManager tm = (TelephonyManager)
-                    mContext.getSystemService(Context.TELEPHONY_SERVICE);
-            mCardId = tm.getCardIdForDefaultEuicc();
+            mCardId = getCardIdForDefaultEuicc();
         }
-        if (mCardId == TelephonyManager.UNINITIALIZED_CARD_ID) {
-            return false;
-        }
-        return true;
+        return mCardId != TelephonyManager.UNINITIALIZED_CARD_ID;
     }
 
     private static void sendUnavailableError(PendingIntent callbackIntent) {
@@ -1567,14 +1723,38 @@ public class EuiccManager {
                         .get());
     }
 
+    private int getCardIdForDefaultEuicc() {
+        int cardId = TelephonyManager.UNINITIALIZED_CARD_ID;
+
+        if (Flags.enforceTelephonyFeatureMappingForPublicApis()) {
+            PackageManager pm = mContext.getPackageManager();
+            if (pm != null && pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_EUICC)) {
+                TelephonyManager tm = mContext.getSystemService(TelephonyManager.class);
+                cardId = tm.getCardIdForDefaultEuicc();
+            }
+        } else {
+            TelephonyManager tm = mContext.getSystemService(TelephonyManager.class);
+            cardId = tm.getCardIdForDefaultEuicc();
+        }
+
+        return cardId;
+    }
+
     /**
      * Returns whether the passing portIndex is available.
      * A port is available if it is active without enabled profile on it or
      * calling app has carrier privilege over the profile installed on the selected port.
+     *
+     * <p> From Android U, a port is available if it is active without an enabled profile on it or
+     * calling app can activate a new profile on the selected port without any user interaction.
+     *
      * Always returns false if the cardId is a physical card.
      *
      * @param portIndex is an enumeration of the ports available on the UICC.
      * @return {@code true} if port is available
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
      */
     public boolean isSimPortAvailable(int portIndex) {
         try {
@@ -1582,6 +1762,59 @@ public class EuiccManager {
                     mContext.getOpPackageName());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Sets the supported carrier ids for pSIM conversion.
+     *
+     * <p>Any existing pSIM conversion supported carrier list will be replaced
+     * by the {@code carrierIds} set here.
+     *
+     * @param carrierIds is a list of carrierIds that supports pSIM conversion
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
+     * @throws IllegalStateException if this method is called when {@link #isEnabled} is false.
+     * @hide
+     */
+    @FlaggedApi(Flags.FLAG_SUPPORT_PSIM_TO_ESIM_CONVERSION)
+    @SystemApi
+    @RequiresPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
+    public void setPsimConversionSupportedCarriers(@NonNull Set<Integer> carrierIds) {
+        if (!isEnabled()) {
+            throw new IllegalStateException("Euicc is not enabled");
+        }
+        try {
+            int[] arr = carrierIds.stream().mapToInt(Integer::intValue).toArray();
+            getIEuiccController().setPsimConversionSupportedCarriers(arr);
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
+    }
+
+    /**
+     * Returns whether the given carrier id supports pSIM conversion or not.
+     *
+     * @param carrierId to check whether pSIM conversion is supported or not
+     * @return whether the given carrier id supports pSIM conversion or not,
+     *         or false if {@link #isEnabled} is false
+     *
+     * @throws UnsupportedOperationException If the device does not have
+     *          {@link PackageManager#FEATURE_TELEPHONY_EUICC}.
+     * @hide
+     */
+    @FlaggedApi(Flags.FLAG_SUPPORT_PSIM_TO_ESIM_CONVERSION)
+    @SystemApi
+    @RequiresPermission(Manifest.permission.WRITE_EMBEDDED_SUBSCRIPTIONS)
+    public boolean isPsimConversionSupported(int carrierId) {
+        if (!isEnabled()) {
+            return false;
+        }
+        try {
+            return getIEuiccController().isPsimConversionSupported(carrierId);
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
         }
     }
 }

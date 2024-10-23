@@ -22,6 +22,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.Flags;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -32,6 +33,7 @@ import android.os.Environment;
 import android.os.RemoteException;
 import android.os.SystemProperties;
 import android.os.UserHandle;
+import android.os.UserManager;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -163,12 +165,16 @@ public class AppUtils {
 
         try {
             final PackageInfo pkg = pm.getPackageInfo(packageName, 0 /* flags */);
-            // Check if the package is contained in an APEX. There is no public API to properly
-            // check whether a given APK package comes from an APEX registered as module.
-            // Therefore we conservatively assume that any package scanned from an /apex path is
-            // a system package.
-            return pkg.applicationInfo.sourceDir.startsWith(
-                    Environment.getApexDirectory().getAbsolutePath());
+            if (Flags.provideInfoOfApkInApex()) {
+                return pkg.getApexPackageName() != null;
+            } else {
+                // Check if the package is contained in an APEX. There is no public API to properly
+                // check whether a given APK package comes from an APEX registered as module.
+                // Therefore we conservatively assume that any package scanned from an /apex path is
+                // a system package.
+                return pkg.applicationInfo.sourceDir.startsWith(
+                        Environment.getApexDirectory().getAbsolutePath());
+            }
         } catch (PackageManager.NameNotFoundException e) {
             return false;
         }
@@ -280,7 +286,7 @@ public class AppUtils {
 
         for (int i = 0; i < Math.min(appEntries.size(), number); i++) {
             final ApplicationsState.AppEntry entry = appEntries.get(i);
-            ThreadUtils.postOnBackgroundThread(() -> {
+            var unused = ThreadUtils.getBackgroundExecutor().submit(() -> {
                 getIcon(context, entry);
             });
         }
@@ -300,10 +306,23 @@ public class AppUtils {
     }
 
     private static void setAppEntryMounted(ApplicationsState.AppEntry appEntry, boolean mounted) {
-        if (appEntry.mounted != mounted) {
-            synchronized (appEntry) {
+        synchronized (appEntry) {
+            if (appEntry.mounted != mounted) {
                 appEntry.mounted = mounted;
             }
         }
+    }
+
+    /**
+     * Returns clone user profile id if present. Returns -1 if not present.
+     */
+    public static int getCloneUserId(Context context) {
+        UserManager userManager = context.getSystemService(UserManager.class);
+        for (UserHandle userHandle : userManager.getUserProfiles()) {
+            if (userManager.getUserInfo(userHandle.getIdentifier()).isCloneProfile()) {
+                return userHandle.getIdentifier();
+            }
+        }
+        return -1;
     }
 }

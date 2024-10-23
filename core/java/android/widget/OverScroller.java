@@ -527,6 +527,10 @@ public class OverScroller {
                 Math.signum(yvel) == Math.signum(dy);
     }
 
+    double getSplineFlingDistance(int velocity) {
+        return mScrollerY.getSplineFlingDistance(velocity);
+    }
+
     static class SplineOverScroller {
         // Initial position
         private int mStart;
@@ -899,7 +903,7 @@ public class OverScroller {
             final long time = AnimationUtils.currentAnimationTimeMillis();
             final long currentTime = time - mStartTime;
 
-            if (currentTime == 0) {
+            if (currentTime <= 0) {
                 // Skip work but report that we're still going if we have a nonzero duration.
                 return mDuration > 0;
             }

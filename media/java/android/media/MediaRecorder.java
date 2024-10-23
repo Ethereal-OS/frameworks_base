@@ -65,7 +65,8 @@ import java.util.concurrent.Executor;
  *
  * <p>A common case of using MediaRecorder to record audio works as follows:
  *
- * <pre>MediaRecorder recorder = new MediaRecorder();
+ * <pre>
+ * MediaRecorder recorder = new MediaRecorder(context);
  * recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
  * recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
  * recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
@@ -984,13 +985,13 @@ public class MediaRecorder implements AudioRouting,
      * after setVideoSource(). Call this after setOutputFormat() but before
      * prepare().
      *
+     * <p>NOTE: On some devices that have auto-frame rate, this sets the
+     * maximum frame rate, not a constant frame rate. Actual frame rate
+     * will vary according to lighting conditions.</p>
+     *
      * @param rate the number of frames per second of video to capture
      * @throws IllegalStateException if it is called after
      * prepare() or before setOutputFormat().
-     *
-     * NOTE: On some devices that have auto-frame rate, this sets the
-     * maximum frame rate, not a constant frame rate. Actual frame rate
-     * will vary according to lighting conditions.
      */
     public native void setVideoFrameRate(int rate) throws IllegalStateException;
 

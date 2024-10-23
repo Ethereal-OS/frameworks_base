@@ -16,6 +16,8 @@
 
 package android.content.res;
 
+import static android.content.res.Resources.ID_NULL;
+
 import android.annotation.AnyRes;
 import android.annotation.ArrayRes;
 import android.annotation.AttrRes;
@@ -135,6 +137,8 @@ public final class AssetManager implements AutoCloseable {
         private ArrayList<ApkAssets> mUserApkAssets = new ArrayList<>();
         private ArrayList<ResourcesLoader> mLoaders = new ArrayList<>();
 
+        private boolean mNoInit = false;
+
         public Builder addApkAssets(ApkAssets apkAssets) {
             mUserApkAssets.add(apkAssets);
             return this;
@@ -142,6 +146,11 @@ public final class AssetManager implements AutoCloseable {
 
         public Builder addLoader(ResourcesLoader loader) {
             mLoaders.add(loader);
+            return this;
+        }
+
+        public Builder setNoInit() {
+            mNoInit = true;
             return this;
         }
 
@@ -186,7 +195,7 @@ public final class AssetManager implements AutoCloseable {
             final AssetManager assetManager = new AssetManager(false /*sentinel*/);
             assetManager.mApkAssets = apkAssets;
             AssetManager.nativeSetApkAssets(assetManager.mObject, apkAssets,
-                    false /*invalidateCaches*/);
+                    false /*invalidateCaches*/, mNoInit /*preset*/);
             assetManager.mLoaders = mLoaders.isEmpty() ? null
                     : mLoaders.toArray(new ResourcesLoader[0]);
 
@@ -327,7 +336,7 @@ public final class AssetManager implements AutoCloseable {
         synchronized (this) {
             ensureOpenLocked();
             mApkAssets = newApkAssets;
-            nativeSetApkAssets(mObject, mApkAssets, invalidateCaches);
+            nativeSetApkAssets(mObject, mApkAssets, invalidateCaches, false);
             if (invalidateCaches) {
                 // Invalidate all caches.
                 invalidateCachesLocked(-1);
@@ -494,7 +503,7 @@ public final class AssetManager implements AutoCloseable {
 
             mApkAssets = Arrays.copyOf(mApkAssets, count + 1);
             mApkAssets[count] = assets;
-            nativeSetApkAssets(mObject, mApkAssets, true);
+            nativeSetApkAssets(mObject, mApkAssets, true, false);
             invalidateCachesLocked(-1);
             return count + 1;
         }
@@ -527,6 +536,10 @@ public final class AssetManager implements AutoCloseable {
         // If mOpen is true, this implies that mObject != 0.
         if (!mOpen) {
             throw new RuntimeException("AssetManager has been closed");
+        }
+        // Let's still check if the native object exists, given all the memory corruptions.
+        if (mObject == 0) {
+            throw new RuntimeException("AssetManager is open but the native object is gone");
         }
     }
 
@@ -863,8 +876,14 @@ public final class AssetManager implements AutoCloseable {
 
     @Nullable
     CharSequence getPooledStringForCookie(int cookie, int id) {
-        // Cookies map to ApkAssets starting at 1.
-        return getApkAssets()[cookie - 1].getStringFromPool(id);
+        ApkAssets[] apkAssets = getApkAssets();
+
+        if (cookie > 0 && cookie <= apkAssets.length) {
+            // map cookies starting at 1.
+            return apkAssets[cookie - 1].getStringFromPool(id);
+        }
+
+        return null;
     }
 
     /**
@@ -1085,7 +1104,7 @@ public final class AssetManager implements AutoCloseable {
     public @NonNull XmlResourceParser openXmlResourceParser(int cookie, @NonNull String fileName)
             throws IOException {
         try (XmlBlock block = openXmlBlockAsset(cookie, fileName)) {
-            XmlResourceParser parser = block.newParser();
+            XmlResourceParser parser = block.newParser(ID_NULL, new Validator());
             // If openXmlBlockAsset doesn't throw, it will always return an XmlBlock object with
             // a valid native pointer, which makes newParser always return non-null. But let's
             // be careful.
@@ -1153,6 +1172,7 @@ public final class AssetManager implements AutoCloseable {
     int[] getAttributeResolutionStack(long themePtr, @AttrRes int defStyleAttr,
             @StyleRes int defStyleRes, @StyleRes int xmlStyle) {
         synchronized (this) {
+            ensureValidLocked();
             return nativeAttributeResolutionStack(
                     mObject, themePtr, xmlStyle, defStyleAttr, defStyleRes);
         }
@@ -1414,7 +1434,7 @@ public final class AssetManager implements AutoCloseable {
      * <a href="https://tools.ietf.org/html/bcp47">BCP-47</a> language tags and can be
      * parsed using {@link Locale#forLanguageTag(String)}.
      *
-     * <p>On SDK 20 (Android 4.4W: Kitkat for watches) and below, locale strings
+     * <p>On SDK 20 (Android 4.4W: KitKat for watches) and below, locale strings
      * are of the form {@code ll_CC} where {@code ll} is a two letter language code,
      * and {@code CC} is a two letter country code.
      */
@@ -1471,13 +1491,54 @@ public final class AssetManager implements AutoCloseable {
     public void setConfiguration(int mcc, int mnc, @Nullable String locale, int orientation,
             int touchscreen, int density, int keyboard, int keyboardHidden, int navigation,
             int screenWidth, int screenHeight, int smallestScreenWidthDp, int screenWidthDp,
-            int screenHeightDp, int screenLayout, int uiMode, int colorMode, int majorVersion) {
-        synchronized (this) {
-            ensureValidLocked();
-            nativeSetConfiguration(mObject, mcc, mnc, locale, orientation, touchscreen, density,
+            int screenHeightDp, int screenLayout, int uiMode, int colorMode, int grammaticalGender,
+            int majorVersion) {
+        if (locale != null) {
+            setConfiguration(mcc, mnc, null, new String[]{locale}, orientation, touchscreen,
+                    density, keyboard, keyboardHidden, navigation, screenWidth, screenHeight,
+                    smallestScreenWidthDp, screenWidthDp, screenHeightDp, screenLayout, uiMode,
+                    colorMode, grammaticalGender, majorVersion);
+        } else {
+            setConfiguration(mcc, mnc, null, null, orientation, touchscreen, density,
                     keyboard, keyboardHidden, navigation, screenWidth, screenHeight,
                     smallestScreenWidthDp, screenWidthDp, screenHeightDp, screenLayout, uiMode,
-                    colorMode, majorVersion);
+                    colorMode, grammaticalGender, majorVersion);
+        }
+    }
+
+    /**
+     * Change the configuration used when retrieving resources.  Not for use by
+     * applications.
+     * @hide
+     */
+    public void setConfiguration(int mcc, int mnc, String defaultLocale, String[] locales,
+            int orientation, int touchscreen, int density, int keyboard, int keyboardHidden,
+            int navigation, int screenWidth, int screenHeight, int smallestScreenWidthDp,
+            int screenWidthDp, int screenHeightDp, int screenLayout, int uiMode, int colorMode,
+            int grammaticalGender, int majorVersion) {
+        setConfigurationInternal(mcc, mnc, defaultLocale, locales, orientation,
+                touchscreen, density, keyboard, keyboardHidden, navigation, screenWidth,
+                screenHeight, smallestScreenWidthDp, screenWidthDp, screenHeightDp,
+                screenLayout, uiMode, colorMode, grammaticalGender, majorVersion, false);
+    }
+
+    /**
+     * Change the configuration used when retrieving resources, and potentially force a refresh of
+     * the state.  Not for use by applications.
+     * @hide
+     */
+    void setConfigurationInternal(int mcc, int mnc, String defaultLocale, String[] locales,
+            int orientation, int touchscreen, int density, int keyboard, int keyboardHidden,
+            int navigation, int screenWidth, int screenHeight, int smallestScreenWidthDp,
+            int screenWidthDp, int screenHeightDp, int screenLayout, int uiMode, int colorMode,
+            int grammaticalGender, int majorVersion, boolean forceRefresh) {
+        synchronized (this) {
+            ensureValidLocked();
+            nativeSetConfiguration(mObject, mcc, mnc, defaultLocale, locales, orientation,
+                    touchscreen, density, keyboard, keyboardHidden, navigation, screenWidth,
+                    screenHeight, smallestScreenWidthDp, screenWidthDp, screenHeightDp,
+                    screenLayout, uiMode, colorMode, grammaticalGender, majorVersion,
+                    forceRefresh);
         }
     }
 
@@ -1562,12 +1623,13 @@ public final class AssetManager implements AutoCloseable {
     private static native long nativeCreate();
     private static native void nativeDestroy(long ptr);
     private static native void nativeSetApkAssets(long ptr, @NonNull ApkAssets[] apkAssets,
-            boolean invalidateCaches);
+            boolean invalidateCaches, boolean preset);
     private static native void nativeSetConfiguration(long ptr, int mcc, int mnc,
-            @Nullable String locale, int orientation, int touchscreen, int density, int keyboard,
-            int keyboardHidden, int navigation, int screenWidth, int screenHeight,
-            int smallestScreenWidthDp, int screenWidthDp, int screenHeightDp, int screenLayout,
-            int uiMode, int colorMode, int majorVersion);
+            @Nullable String defaultLocale, @NonNull String[] locales, int orientation,
+            int touchscreen, int density, int keyboard, int keyboardHidden, int navigation,
+            int screenWidth, int screenHeight, int smallestScreenWidthDp, int screenWidthDp,
+            int screenHeightDp, int screenLayout, int uiMode, int colorMode, int grammaticalGender,
+            int majorVersion, boolean forceRefresh);
     private static native @NonNull SparseArray<String> nativeGetAssignedPackageIdentifiers(
             long ptr, boolean includeOverlays, boolean includeLoaders);
 

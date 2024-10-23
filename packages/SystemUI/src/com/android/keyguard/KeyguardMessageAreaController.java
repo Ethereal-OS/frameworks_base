@@ -18,9 +18,16 @@ package com.android.keyguard;
 
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.hardware.biometrics.BiometricSourceType;
+import android.os.SystemClock;
+import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.util.Log;
+import android.util.Pair;
 import android.view.View;
 
+import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import com.android.systemui.statusbar.policy.ConfigurationController;
@@ -38,6 +45,16 @@ import javax.inject.Inject;
 public class KeyguardMessageAreaController<T extends KeyguardMessageArea>
         extends ViewController<T> {
     /**
+     * Pair representing:
+     *   first - BiometricSource the currently displayed message is associated with.
+     *   second - Timestamp the biometric message came in uptimeMillis.
+     * This Pair can be null if the message is not associated with a biometric.
+     */
+    @Nullable
+    private Pair<BiometricSourceType, Long> mMessageBiometricSource = null;
+    private static final Long SKIP_SHOWING_FACE_MESSAGE_AFTER_FP_MESSAGE_MS = 3500L;
+
+    /**
      * Delay before speaking an accessibility announcement. Used to prevent
      * lift-to-type from interrupting itself.
      */
@@ -45,6 +62,31 @@ public class KeyguardMessageAreaController<T extends KeyguardMessageArea>
     private final KeyguardUpdateMonitor mKeyguardUpdateMonitor;
     private final ConfigurationController mConfigurationController;
     private final AnnounceRunnable mAnnounceRunnable;
+    private final TextWatcher mTextWatcher = new TextWatcher() {
+        @Override
+        public void afterTextChanged(Editable editable) {
+            CharSequence msg = editable;
+            if (!TextUtils.isEmpty(msg)) {
+                mView.removeCallbacks(mAnnounceRunnable);
+                mAnnounceRunnable.setTextToAnnounce(msg);
+                mView.postDelayed(() -> {
+                    if (msg == mView.getText()) {
+                        mAnnounceRunnable.run();
+                    }
+                }, ANNOUNCEMENT_DELAY);
+            }
+        }
+
+        @Override
+        public void beforeTextChanged(CharSequence charSequence, int i, int i1, int i2) {
+            /* no-op */
+        }
+
+        @Override
+        public void onTextChanged(CharSequence charSequence, int i, int i1, int i2) {
+            /* no-op */
+        }
+    };
 
     private KeyguardUpdateMonitorCallback mInfoCallback = new KeyguardUpdateMonitorCallback() {
         public void onFinishedGoingToSleep(int why) {
@@ -89,12 +131,14 @@ public class KeyguardMessageAreaController<T extends KeyguardMessageArea>
         mKeyguardUpdateMonitor.registerCallback(mInfoCallback);
         mView.setSelected(mKeyguardUpdateMonitor.isDeviceInteractive());
         mView.onThemeChanged();
+        mView.addTextChangedListener(mTextWatcher);
     }
 
     @Override
     protected void onViewDetached() {
         mConfigurationController.removeCallback(mConfigurationListener);
         mKeyguardUpdateMonitor.removeCallback(mInfoCallback);
+        mView.removeTextChangedListener(mTextWatcher);
     }
 
     /**
@@ -102,6 +146,14 @@ public class KeyguardMessageAreaController<T extends KeyguardMessageArea>
      */
     public void setIsVisible(boolean isVisible) {
         mView.setIsVisible(isVisible);
+    }
+
+    /**
+     * Mark this view with {@link View#GONE} visibility to remove this from the layout of the view.
+     * Any calls to {@link #setIsVisible(boolean)} after this will be a no-op.
+     */
+    public void disable() {
+        mView.disable();
     }
 
     public void setMessage(CharSequence s) {
@@ -112,13 +164,40 @@ public class KeyguardMessageAreaController<T extends KeyguardMessageArea>
      * Sets a message to the underlying text view.
      */
     public void setMessage(CharSequence s, boolean animate) {
-        mView.setMessage(s, animate);
-        CharSequence msg = mView.getText();
-        if (!TextUtils.isEmpty(msg)) {
-            mView.removeCallbacks(mAnnounceRunnable);
-            mAnnounceRunnable.setTextToAnnounce(msg);
-            mView.postDelayed(mAnnounceRunnable, ANNOUNCEMENT_DELAY);
+        setMessage(s, animate, null);
+    }
+
+    /**
+     * Sets a message to the underlying text view.
+     */
+    public void setMessage(CharSequence s, BiometricSourceType biometricSourceType) {
+        setMessage(s, true, biometricSourceType);
+    }
+
+    private void setMessage(
+            CharSequence s,
+            boolean animate,
+            BiometricSourceType biometricSourceType) {
+        final long uptimeMillis = SystemClock.uptimeMillis();
+        if (skipShowingFaceMessage(biometricSourceType, uptimeMillis)) {
+            Log.d("KeyguardMessageAreaController", "Skip showing face message \"" + s + "\"");
+            return;
         }
+        mMessageBiometricSource =  new Pair<>(biometricSourceType, uptimeMillis);
+        if (mView.isDisabled()) {
+            return;
+        }
+        mView.setMessage(s, animate);
+    }
+
+    private boolean skipShowingFaceMessage(
+            BiometricSourceType biometricSourceType, Long currentUptimeMillis
+    ) {
+        return mMessageBiometricSource != null
+                && biometricSourceType == BiometricSourceType.FACE
+                && mMessageBiometricSource.first == BiometricSourceType.FINGERPRINT
+                && (currentUptimeMillis - mMessageBiometricSource.second)
+                    < SKIP_SHOWING_FACE_MESSAGE_AFTER_FP_MESSAGE_MS;
     }
 
     public void setMessage(int resId) {
@@ -174,7 +253,7 @@ public class KeyguardMessageAreaController<T extends KeyguardMessageArea>
         @Override
         public void run() {
             final View host = mHost.get();
-            if (host != null) {
+            if (host != null && host.isVisibleToUser()) {
                 host.announceForAccessibility(mTextToAnnounce);
             }
         }

@@ -1,3 +1,0 @@
-files:
-  - source: /**/values/ethereal_strings.xml
-    translation: /%original_path%-%android_code%/%original_file_name%

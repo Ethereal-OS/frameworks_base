@@ -32,7 +32,7 @@ import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 
-import com.android.internal.util.ethereal.EtherealUtils;
+import com.android.internal.util.euclid.EuclidUtils;
 
 /**
  * @hide
@@ -42,7 +42,6 @@ public class GestureNavigationSettingsObserver extends ContentObserver {
     private Runnable mOnChangeRunnable;
     private Handler mMainHandler;
     private IntentFilter mIntentFilter;
-    private boolean mRegistered = false;
 
     public GestureNavigationSettingsObserver(Handler handler, Context context,
             Runnable onChangeRunnable) {
@@ -66,9 +65,6 @@ public class GestureNavigationSettingsObserver extends ContentObserver {
         }
     };
 
-    /**
-     * Registers the observer for all users.
-     */
     private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -77,7 +73,7 @@ public class GestureNavigationSettingsObserver extends ContentObserver {
                 // Get packageName from Uri
                 String packageName = intent.getData().getSchemeSpecificPart();
                 // If the package is still installed
-                if (EtherealUtils.isPackageInstalled(context, packageName)) {
+                if (EuclidUtils.isPackageInstalled(context, packageName)) {
                     // it's an application update, we can skip the rest.
                     return;
                 }
@@ -140,32 +136,12 @@ public class GestureNavigationSettingsObserver extends ContentObserver {
         // the observer will trigger EdgeBackGestureHandler.updateCurrentUserResources and update settings there too
     }
 
+    /**
+     * Registers the observer for all users.
+     */
     public void register() {
         mContext.registerReceiver(mBroadcastReceiver, mIntentFilter);
-        mRegistered = true;
         ContentResolver r = mContext.getContentResolver();
-        r.registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.BACK_GESTURE_INSET_SCALE_LEFT),
-                false, this, UserHandle.USER_ALL);
-        r.registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.BACK_GESTURE_INSET_SCALE_RIGHT),
-                false, this, UserHandle.USER_ALL);
-        r.registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.SHOW_BACK_ARROW_GESTURE),
-                false, this, UserHandle.USER_ALL);
-        r.registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.USER_SETUP_COMPLETE),
-                false, this, UserHandle.USER_ALL);
-        r.registerContentObserver(Settings.System.getUriFor(
-                Settings.System.BACK_GESTURE_HAPTIC),
-                false, this, UserHandle.USER_ALL);
-        DeviceConfig.addOnPropertiesChangedListener(
-                DeviceConfig.NAMESPACE_SYSTEMUI,
-                runnable -> mMainHandler.post(runnable),
-                mOnPropertiesChangedListener);
-        r.registerContentObserver(
-                Settings.System.getUriFor(Settings.System.LOCK_GESTURE_STATUS),
-                false, this, UserHandle.USER_ALL);
         r.registerContentObserver(
                 Settings.System.getUriFor(Settings.System.LONG_BACK_SWIPE_TIMEOUT),
                 false, this, UserHandle.USER_ALL);
@@ -183,6 +159,28 @@ public class GestureNavigationSettingsObserver extends ContentObserver {
                 false, this, UserHandle.USER_ALL);
         r.registerContentObserver(
                 Settings.System.getUriFor(Settings.System.RIGHT_VERTICAL_BACK_SWIPE_ACTION),
+                false, this, UserHandle.USER_ALL);
+        r.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.BACK_GESTURE_INSET_SCALE_LEFT),
+                false, this, UserHandle.USER_ALL);
+        r.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.BACK_GESTURE_INSET_SCALE_RIGHT),
+                false, this, UserHandle.USER_ALL);
+        r.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.USER_SETUP_COMPLETE),
+                false, this, UserHandle.USER_ALL);
+        r.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.BACK_GESTURE_ARROW),
+                false, this, UserHandle.USER_ALL);
+        r.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.BACK_GESTURE_HAPTIC),
+                false, this, UserHandle.USER_ALL);
+        DeviceConfig.addOnPropertiesChangedListener(
+                DeviceConfig.NAMESPACE_SYSTEMUI,
+                runnable -> mMainHandler.post(runnable),
+                mOnPropertiesChangedListener);
+        r.registerContentObserver(
+                Settings.System.getUriFor(Settings.System.LOCK_GESTURE_STATUS),
                 false, this, UserHandle.USER_ALL);
     }
 
@@ -207,9 +205,7 @@ public class GestureNavigationSettingsObserver extends ContentObserver {
     }
 
     public void unregister() {
-        if (mRegistered) {
-            mContext.unregisterReceiver(mBroadcastReceiver);
-        }
+        mContext.unregisterReceiver(mBroadcastReceiver);
         mContext.getContentResolver().unregisterContentObserver(this);
         DeviceConfig.removeOnPropertiesChangedListener(mOnPropertiesChangedListener);
     }
@@ -264,19 +260,14 @@ public class GestureNavigationSettingsObserver extends ContentObserver {
         return (int) (getUnscaledInset(userRes) * scale);
     }
 
-    public boolean getEdgeHaptic() {
-        return (Settings.System.getIntForUser(
-                   mContext.getContentResolver(), Settings.System.BACK_GESTURE_HAPTIC, 0,
-                   UserHandle.USER_CURRENT) == 1 &&
-               Settings.System.getIntForUser(
-                   mContext.getContentResolver(), Settings.System.HAPTIC_FEEDBACK_ENABLED, 0,
-                   UserHandle.USER_CURRENT) == 1);
+    public boolean getBackArrowGesture() {
+        return Settings.Secure.getIntForUser(mContext.getContentResolver(),
+                Settings.Secure.BACK_GESTURE_ARROW, 1, UserHandle.USER_CURRENT) != 0;
     }
 
-    public boolean getBackArrowGesture() {
-        return Settings.Secure.getIntForUser(
-              mContext.getContentResolver(), Settings.Secure.SHOW_BACK_ARROW_GESTURE, 1,
-              UserHandle.USER_CURRENT) == 1;
+    public boolean getEdgeHapticEnabled() {
+        return Settings.Secure.getIntForUser(mContext.getContentResolver(),
+                Settings.Secure.BACK_GESTURE_HAPTIC, 1, UserHandle.USER_CURRENT) != 0;
     }
 
     public boolean areNavigationButtonForcedVisible() {

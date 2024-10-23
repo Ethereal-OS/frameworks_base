@@ -19,6 +19,7 @@ package android.app;
 import android.accounts.AccountManager;
 import android.accounts.IAccountManager;
 import android.adservices.AdServicesFrameworkInitializer;
+import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
@@ -29,9 +30,9 @@ import android.app.ambientcontext.AmbientContextManager;
 import android.app.ambientcontext.IAmbientContextManager;
 import android.app.appsearch.AppSearchManagerFrameworkInitializer;
 import android.app.blob.BlobStoreManagerFrameworkInitializer;
-import android.app.compat.gms.GmsCompat;
 import android.app.contentsuggestions.ContentSuggestionsManager;
 import android.app.contentsuggestions.IContentSuggestionsManager;
+import android.app.ecm.EnhancedConfirmationFrameworkInitializer;
 import android.app.job.JobSchedulerFrameworkInitializer;
 import android.app.people.PeopleManager;
 import android.app.prediction.AppPredictionManager;
@@ -43,7 +44,6 @@ import android.app.smartspace.SmartspaceManager;
 import android.app.time.TimeManager;
 import android.app.timedetector.TimeDetector;
 import android.app.timedetector.TimeDetectorImpl;
-import android.app.timezone.RulesManager;
 import android.app.timezonedetector.TimeZoneDetector;
 import android.app.timezonedetector.TimeZoneDetectorImpl;
 import android.app.trust.TrustManager;
@@ -53,6 +53,8 @@ import android.app.usage.StorageStatsManager;
 import android.app.usage.UsageStatsManager;
 import android.app.wallpapereffectsgeneration.IWallpaperEffectsGenerationManager;
 import android.app.wallpapereffectsgeneration.WallpaperEffectsGenerationManager;
+import android.app.wearable.IWearableSensingManager;
+import android.app.wearable.WearableSensingManager;
 import android.apphibernation.AppHibernationManager;
 import android.appwidget.AppWidgetManager;
 import android.bluetooth.BluetoothFrameworkInitializer;
@@ -60,6 +62,7 @@ import android.companion.CompanionDeviceManager;
 import android.companion.ICompanionDeviceManager;
 import android.companion.virtual.IVirtualDeviceManager;
 import android.companion.virtual.VirtualDeviceManager;
+import android.compat.Compatibility;
 import android.content.ClipboardManager;
 import android.content.ContentCaptureOptions;
 import android.content.Context;
@@ -82,8 +85,11 @@ import android.content.pm.verify.domain.DomainVerificationManager;
 import android.content.pm.verify.domain.IDomainVerificationManager;
 import android.content.res.Resources;
 import android.content.rollback.RollbackManagerFrameworkInitializer;
+import android.credentials.CredentialManager;
+import android.credentials.ICredentialManager;
 import android.debug.AdbManager;
 import android.debug.IAdbManager;
+import android.devicelock.DeviceLockFrameworkInitializer;
 import android.graphics.fonts.FontManager;
 import android.hardware.ConsumerIrManager;
 import android.hardware.ISerialManager;
@@ -96,7 +102,9 @@ import android.hardware.biometrics.IAuthService;
 import android.hardware.camera2.CameraManager;
 import android.hardware.devicestate.DeviceStateManager;
 import android.hardware.display.ColorDisplayManager;
+import android.hardware.display.DcDimmingManager;
 import android.hardware.display.DisplayManager;
+import android.hardware.display.IDcDimmingManager;
 import android.hardware.face.FaceManager;
 import android.hardware.face.IFaceService;
 import android.hardware.fingerprint.FingerprintManager;
@@ -113,11 +121,11 @@ import android.hardware.location.IContextHubService;
 import android.hardware.radio.RadioManager;
 import android.hardware.usb.IUsbManager;
 import android.hardware.usb.UsbManager;
+import android.health.connect.HealthServicesInitializer;
 import android.location.CountryDetector;
 import android.location.ICountryDetector;
 import android.location.ILocationManager;
 import android.location.LocationManager;
-import android.location.HookedLocationManager;
 import android.media.AudioDeviceVolumeManager;
 import android.media.AudioManager;
 import android.media.MediaFrameworkInitializer;
@@ -133,6 +141,8 @@ import android.media.projection.MediaProjectionManager;
 import android.media.soundtrigger.SoundTriggerManager;
 import android.media.tv.ITvInputManager;
 import android.media.tv.TvInputManager;
+import android.media.tv.ad.ITvAdManager;
+import android.media.tv.ad.TvAdManager;
 import android.media.tv.interactive.ITvInteractiveAppManager;
 import android.media.tv.interactive.TvInteractiveAppManager;
 import android.media.tv.tunerresourcemanager.ITunerResourceManager;
@@ -149,13 +159,12 @@ import android.net.NetworkWatchlistManager;
 import android.net.PacProxyManager;
 import android.net.TetheringManager;
 import android.net.VpnManager;
-import android.net.lowpan.ILowpanManager;
-import android.net.lowpan.LowpanManager;
 import android.net.vcn.IVcnManagementService;
 import android.net.vcn.VcnManager;
 import android.net.wifi.WifiFrameworkInitializer;
 import android.net.wifi.nl80211.WifiNl80211Manager;
-import android.nfc.NfcManager;
+import android.net.wifi.sharedconnectivity.app.SharedConnectivityManager;
+import android.nfc.NfcFrameworkInitializer;
 import android.ondevicepersonalization.OnDevicePersonalizationFrameworkInitializer;
 import android.os.BatteryManager;
 import android.os.BatteryStats;
@@ -169,14 +178,19 @@ import android.os.IBinder;
 import android.os.IDumpstate;
 import android.os.IHardwarePropertiesManager;
 import android.os.IPowerManager;
+import android.os.IPowerStatsService;
 import android.os.IRecoverySystem;
+import android.os.ISecurityStateManager;
 import android.os.ISystemUpdateManager;
 import android.os.IThermalService;
 import android.os.IUserManager;
 import android.os.IncidentManager;
 import android.os.PerformanceHintManager;
+import android.os.PermissionEnforcer;
 import android.os.PowerManager;
+import android.os.ProfilingFrameworkInitializer;
 import android.os.RecoverySystem;
+import android.os.SecurityStateManager;
 import android.os.ServiceManager;
 import android.os.ServiceManager.ServiceNotFoundException;
 import android.os.StatsFrameworkInitializer;
@@ -202,6 +216,7 @@ import android.pocket.IPocketService;
 import android.pocket.PocketManager;
 import android.print.IPrintManager;
 import android.print.PrintManager;
+import android.provider.E2eeContactKeysManager;
 import android.safetycenter.SafetyCenterFrameworkInitializer;
 import android.scheduling.SchedulingFrameworkInitializer;
 import android.security.FileIntegrityManager;
@@ -213,6 +228,7 @@ import android.service.oemlock.OemLockManager;
 import android.service.persistentdata.IPersistentDataBlockService;
 import android.service.persistentdata.PersistentDataBlockManager;
 import android.service.vr.IVrManager;
+import android.system.virtualmachine.VirtualizationFrameworkInitializer;
 import android.telecom.TelecomManager;
 import android.telephony.MmsManager;
 import android.telephony.TelephonyFrameworkInitializer;
@@ -239,18 +255,21 @@ import android.view.textservice.TextServicesManager;
 import android.view.translation.ITranslationManager;
 import android.view.translation.TranslationManager;
 import android.view.translation.UiTranslationManager;
+import android.webkit.WebViewBootstrapFrameworkInitializer;
 
+import com.android.internal.R;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.app.ISoundTriggerService;
 import com.android.internal.appwidget.IAppWidgetService;
-import com.android.internal.gmscompat.sysservice.GmcUserManager;
 import com.android.internal.graphics.fonts.IFontManager;
 import com.android.internal.net.INetworkWatchlistManager;
 import com.android.internal.os.IBinaryTransparencyService;
 import com.android.internal.os.IDropBoxManagerService;
 import com.android.internal.policy.PhoneLayoutInflater;
 import com.android.internal.util.Preconditions;
+import com.oplus.os.ILinearmotorVibratorService;
+import com.oplus.os.LinearmotorVibrator;
 
 import java.util.Map;
 import java.util.Objects;
@@ -472,13 +491,6 @@ public final class SystemServiceRegistry {
                 return new BatteryManager(ctx, stats, registrar);
             }});
 
-        registerService(Context.NFC_SERVICE, NfcManager.class,
-                new CachedServiceFetcher<NfcManager>() {
-            @Override
-            public NfcManager createService(ContextImpl ctx) {
-                return new NfcManager(ctx);
-            }});
-
         registerService(Context.DROPBOX_SERVICE, DropBoxManager.class,
                 new CachedServiceFetcher<DropBoxManager>() {
             @Override
@@ -499,11 +511,12 @@ public final class SystemServiceRegistry {
                 return new BinaryTransparencyManager(ctx, service);
             }});
 
+        // InputManager stores its own static instance for historical purposes.
         registerService(Context.INPUT_SERVICE, InputManager.class,
-                new StaticServiceFetcher<InputManager>() {
+                new CachedServiceFetcher<InputManager>() {
             @Override
-            public InputManager createService() {
-                return InputManager.getInstance();
+            public InputManager createService(ContextImpl ctx) {
+                return new InputManager(ctx.getOuterContext());
             }});
 
         registerService(Context.DISPLAY_SERVICE, DisplayManager.class,
@@ -559,11 +572,7 @@ public final class SystemServiceRegistry {
             @Override
             public LocationManager createService(ContextImpl ctx) throws ServiceNotFoundException {
                 IBinder b = ServiceManager.getServiceOrThrow(Context.LOCATION_SERVICE);
-                if (HookedLocationManager.isEnabled()) {
-                    return new HookedLocationManager(ctx, ILocationManager.Stub.asInterface(b));
-                } else {
-                    return new LocationManager(ctx, ILocationManager.Stub.asInterface(b));
-                }
+                return new LocationManager(ctx, ILocationManager.Stub.asInterface(b));
             }});
 
         registerService(Context.NETWORK_POLICY_SERVICE, NetworkPolicyManager.class,
@@ -633,6 +642,17 @@ public final class SystemServiceRegistry {
                 return new SearchManager(ctx.getOuterContext(),
                         ctx.mMainThread.getHandler());
             }});
+
+        registerService(Context.SECURITY_STATE_SERVICE, SecurityStateManager.class,
+                new CachedServiceFetcher<SecurityStateManager>() {
+                    @Override
+                    public SecurityStateManager createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        IBinder b = ServiceManager.getServiceOrThrow(
+                                Context.SECURITY_STATE_SERVICE);
+                        ISecurityStateManager service = ISecurityStateManager.Stub.asInterface(b);
+                        return new SecurityStateManager(service);
+                    }});
 
         registerService(Context.SENSOR_SERVICE, SensorManager.class,
                 new CachedServiceFetcher<SensorManager>() {
@@ -784,15 +804,6 @@ public final class SystemServiceRegistry {
                         ctx.mMainThread.getHandler());
             }});
 
-        registerService(Context.LOWPAN_SERVICE, LowpanManager.class,
-                new CachedServiceFetcher<LowpanManager>() {
-            @Override
-            public LowpanManager createService(ContextImpl ctx) throws ServiceNotFoundException {
-                IBinder b = ServiceManager.getServiceOrThrow(Context.LOWPAN_SERVICE);
-                ILowpanManager service = ILowpanManager.Stub.asInterface(b);
-                return new LowpanManager(ctx.getOuterContext(), service);
-            }});
-
         registerService(Context.WIFI_NL80211_SERVICE, WifiNl80211Manager.class,
                 new CachedServiceFetcher<WifiNl80211Manager>() {
                     @Override
@@ -814,11 +825,6 @@ public final class SystemServiceRegistry {
             public UserManager createService(ContextImpl ctx) throws ServiceNotFoundException {
                 IBinder b = ServiceManager.getServiceOrThrow(Context.USER_SERVICE);
                 IUserManager service = IUserManager.Stub.asInterface(b);
-
-                if (GmsCompat.isEnabled()) {
-                    return new GmcUserManager(ctx, service);
-                }
-
                 return new UserManager(ctx, service);
             }});
 
@@ -889,6 +895,10 @@ public final class SystemServiceRegistry {
             @Override
             public VirtualDeviceManager createService(ContextImpl ctx)
                     throws ServiceNotFoundException {
+                if (!ctx.getResources().getBoolean(R.bool.config_enableVirtualDeviceManager)) {
+                    return null;
+                }
+
                 IVirtualDeviceManager service = IVirtualDeviceManager.Stub.asInterface(
                         ServiceManager.getServiceOrThrow(Context.VIRTUAL_DEVICE_SERVICE));
                 return new VirtualDeviceManager(service, ctx.getOuterContext());
@@ -964,6 +974,32 @@ public final class SystemServiceRegistry {
                     }
                 });
 
+        registerService(Context.POCKET_SERVICE, PocketManager.class,
+                new CachedServiceFetcher<PocketManager>() {
+                    @Override
+                    public PocketManager createService(ContextImpl ctx) {
+                        IBinder binder = ServiceManager.getService(Context.POCKET_SERVICE);
+                        IPocketService service = IPocketService.Stub.asInterface(binder);
+                        return new PocketManager(ctx.getOuterContext(), service);
+                    }});
+
+        boolean mockOplus = Resources.getSystem()
+            .getBoolean(com.android.internal.R.bool.config_mockOplusLinearmotorVibratorService);
+
+        if (mockOplus) {
+            registerService(Context.LINEARMOTOR_VIBRATOR_SERVICE, LinearmotorVibrator.class,
+                    new CachedServiceFetcher<LinearmotorVibrator>() {
+                        @Override
+                        public LinearmotorVibrator createService(ContextImpl ctx) {
+                            IBinder binder =
+                                    ServiceManager.getService(Context.LINEARMOTOR_VIBRATOR_SERVICE);
+                            ILinearmotorVibratorService service =
+                                    ILinearmotorVibratorService.Stub.asInterface(binder);
+                            return new LinearmotorVibrator(ctx.getOuterContext(), service);
+                        }
+                    });
+        }
+
         registerService(Context.TV_INTERACTIVE_APP_SERVICE, TvInteractiveAppManager.class,
                 new CachedServiceFetcher<TvInteractiveAppManager>() {
             @Override
@@ -976,14 +1012,30 @@ public final class SystemServiceRegistry {
                 return new TvInteractiveAppManager(service, ctx.getUserId());
             }});
 
-        registerService(Context.POCKET_SERVICE, PocketManager.class,
-                new CachedServiceFetcher<PocketManager>() {
-            @Override
-            public PocketManager createService(ContextImpl ctx) {
-                IBinder binder = ServiceManager.getService(Context.POCKET_SERVICE);
-                IPocketService service = IPocketService.Stub.asInterface(binder);
-                return new PocketManager(ctx.getOuterContext(), service);
-            }});
+        registerService(Context.TV_AD_SERVICE, TvAdManager.class,
+                new CachedServiceFetcher<TvAdManager>() {
+                    @Override
+                    public TvAdManager createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        IBinder iBinder =
+                                ServiceManager.getServiceOrThrow(Context.TV_AD_SERVICE);
+                        ITvAdManager service =
+                                ITvAdManager.Stub.asInterface(iBinder);
+                        return new TvAdManager(service, ctx.getUserId());
+                    }});
+
+        registerService(Context.DC_DIM_SERVICE, DcDimmingManager.class,
+                new CachedServiceFetcher<DcDimmingManager>() {
+                    @Override
+                    public DcDimmingManager createService(ContextImpl ctx) throws ServiceNotFoundException {
+                        if (Resources.getSystem().getString(
+                                com.android.internal.R.string.config_deviceDcDimmingSysfsNode).isEmpty()) {
+                            return null;
+                        }
+                        IBinder b = ServiceManager.getServiceOrThrow(Context.DC_DIM_SERVICE);
+                        IDcDimmingManager service = IDcDimmingManager.Stub.asInterface(b);
+                        return new DcDimmingManager(service);
+                    }});
 
         registerService(Context.TV_INPUT_SERVICE, TvInputManager.class,
                 new CachedServiceFetcher<TvInputManager>() {
@@ -1112,7 +1164,10 @@ public final class SystemServiceRegistry {
                 new CachedServiceFetcher<OverlayManager>() {
             @Override
             public OverlayManager createService(ContextImpl ctx) throws ServiceNotFoundException {
-                IBinder b = ServiceManager.getServiceOrThrow(Context.OVERLAY_SERVICE);
+                final IBinder b =
+                        (Compatibility.isChangeEnabled(OverlayManager.SELF_TARGETING_OVERLAY))
+                                ? ServiceManager.getService(Context.OVERLAY_SERVICE)
+                                : ServiceManager.getServiceOrThrow(Context.OVERLAY_SERVICE);
                 return new OverlayManager(ctx, IOverlayManager.Stub.asInterface(b));
             }});
 
@@ -1131,8 +1186,10 @@ public final class SystemServiceRegistry {
                 new CachedServiceFetcher<SystemHealthManager>() {
             @Override
             public SystemHealthManager createService(ContextImpl ctx) throws ServiceNotFoundException {
-                IBinder b = ServiceManager.getServiceOrThrow(BatteryStats.SERVICE_NAME);
-                return new SystemHealthManager(IBatteryStats.Stub.asInterface(b));
+                IBinder batteryStats = ServiceManager.getServiceOrThrow(BatteryStats.SERVICE_NAME);
+                IBinder powerStats = ServiceManager.getService(Context.POWER_STATS_SERVICE);
+                return new SystemHealthManager(IBatteryStats.Stub.asInterface(batteryStats),
+                        IPowerStatsService.Stub.asInterface(powerStats));
             }});
 
         registerService(Context.CONTEXTHUB_SERVICE, ContextHubManager.class,
@@ -1173,6 +1230,19 @@ public final class SystemServiceRegistry {
                 IAutoFillManager service = IAutoFillManager.Stub.asInterface(b);
                 return new AutofillManager(ctx.getOuterContext(), service);
             }});
+
+        registerService(Context.CREDENTIAL_SERVICE, CredentialManager.class,
+                new CachedServiceFetcher<CredentialManager>() {
+                    @Override
+                    public CredentialManager createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        IBinder b = ServiceManager.getService(Context.CREDENTIAL_SERVICE);
+                        ICredentialManager service = ICredentialManager.Stub.asInterface(b);
+                        if (service != null) {
+                            return new CredentialManager(ctx.getOuterContext(), service);
+                        }
+                        return null;
+                    }});
 
         registerService(Context.MUSIC_RECOGNITION_SERVICE, MusicRecognitionManager.class,
                 new CachedServiceFetcher<MusicRecognitionManager>() {
@@ -1301,13 +1371,6 @@ public final class SystemServiceRegistry {
             }
         });
 
-        registerService(Context.TIME_ZONE_RULES_MANAGER_SERVICE, RulesManager.class,
-                new CachedServiceFetcher<RulesManager>() {
-            @Override
-            public RulesManager createService(ContextImpl ctx) {
-                return new RulesManager(ctx.getOuterContext());
-            }});
-
         registerService(Context.CROSS_PROFILE_APPS_SERVICE, CrossProfileApps.class,
                 new CachedServiceFetcher<CrossProfileApps>() {
                     @Override
@@ -1346,7 +1409,7 @@ public final class SystemServiceRegistry {
                         return new TimeZoneDetectorImpl();
                     }});
 
-        registerService(Context.TIME_MANAGER, TimeManager.class,
+        registerService(Context.TIME_MANAGER_SERVICE, TimeManager.class,
                 new CachedServiceFetcher<TimeManager>() {
                     @Override
                     public TimeManager createService(ContextImpl ctx)
@@ -1384,6 +1447,14 @@ public final class SystemServiceRegistry {
                     public PermissionCheckerManager createService(ContextImpl ctx)
                             throws ServiceNotFoundException {
                         return new PermissionCheckerManager(ctx.getOuterContext());
+                    }});
+
+        registerService(Context.PERMISSION_ENFORCER_SERVICE, PermissionEnforcer.class,
+                new CachedServiceFetcher<PermissionEnforcer>() {
+                    @Override
+                    public PermissionEnforcer createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        return new PermissionEnforcer(ctx.getOuterContext());
                     }});
 
         registerService(Context.DYNAMIC_SYSTEM_SERVICE, DynamicSystemManager.class,
@@ -1551,6 +1622,63 @@ public final class SystemServiceRegistry {
                         return new AmbientContextManager(ctx.getOuterContext(), manager);
                     }});
 
+        registerService(Context.WEARABLE_SENSING_SERVICE, WearableSensingManager.class,
+                new CachedServiceFetcher<WearableSensingManager>() {
+                    @Override
+                    public WearableSensingManager createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        IBinder iBinder = ServiceManager.getServiceOrThrow(
+                                Context.WEARABLE_SENSING_SERVICE);
+                        IWearableSensingManager manager =
+                                IWearableSensingManager.Stub.asInterface(iBinder);
+                        return new WearableSensingManager(ctx.getOuterContext(), manager);
+                    }});
+
+        registerService(Context.GRAMMATICAL_INFLECTION_SERVICE, GrammaticalInflectionManager.class,
+                new CachedServiceFetcher<GrammaticalInflectionManager>() {
+                    @Override
+                    public GrammaticalInflectionManager createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        return new GrammaticalInflectionManager(ctx,
+                                IGrammaticalInflectionManager.Stub.asInterface(
+                                        ServiceManager.getServiceOrThrow(
+                                                Context.GRAMMATICAL_INFLECTION_SERVICE)));
+                    }});
+
+        registerService(Context.SHARED_CONNECTIVITY_SERVICE, SharedConnectivityManager.class,
+                new CachedServiceFetcher<SharedConnectivityManager>() {
+                    @Override
+                    public SharedConnectivityManager createService(ContextImpl ctx) {
+                        return SharedConnectivityManager.create(ctx);
+                    }
+                });
+
+        registerService(Context.CONTACT_KEYS_SERVICE, E2eeContactKeysManager.class,
+                new CachedServiceFetcher<E2eeContactKeysManager>() {
+                    @Override
+                    public E2eeContactKeysManager createService(ContextImpl ctx)
+                            throws ServiceNotFoundException {
+                        if (!android.provider.Flags.userKeys()) {
+                            throw new ServiceNotFoundException(
+                                    "ContactKeysManager is not supported");
+                        }
+                        return new E2eeContactKeysManager(ctx);
+                    }});
+
+        // DO NOT do a flag check like this unless the flag is read-only.
+        // (because this code is executed during preload in zygote.)
+        // If the flag is mutable, the check should be inside CachedServiceFetcher.
+        if (Flags.bicClient()) {
+            registerService(Context.BACKGROUND_INSTALL_CONTROL_SERVICE,
+                    BackgroundInstallControlManager.class,
+                    new CachedServiceFetcher<BackgroundInstallControlManager>() {
+                        @Override
+                        public BackgroundInstallControlManager createService(ContextImpl ctx) {
+                            return new BackgroundInstallControlManager(ctx);
+                        }
+                    });
+        }
+
         registerService(Context.APP_LOCK_SERVICE, AppLockManager.class,
                 new CachedServiceFetcher<AppLockManager>() {
                     @Override
@@ -1570,8 +1698,10 @@ public final class SystemServiceRegistry {
             JobSchedulerFrameworkInitializer.registerServiceWrappers();
             BlobStoreManagerFrameworkInitializer.initialize();
             BluetoothFrameworkInitializer.registerServiceWrappers();
+            NfcFrameworkInitializer.registerServiceWrappers();
             TelephonyFrameworkInitializer.registerServiceWrappers();
             AppSearchManagerFrameworkInitializer.initialize();
+            HealthServicesInitializer.registerServiceWrappers();
             WifiFrameworkInitializer.registerServiceWrappers();
             StatsFrameworkInitializer.registerServiceWrappers();
             RollbackManagerFrameworkInitializer.initialize();
@@ -1586,6 +1716,19 @@ public final class SystemServiceRegistry {
             ConnectivityFrameworkInitializerTiramisu.registerServiceWrappers();
             NearbyFrameworkInitializer.registerServiceWrappers();
             OnDevicePersonalizationFrameworkInitializer.registerServiceWrappers();
+            DeviceLockFrameworkInitializer.registerServiceWrappers();
+            VirtualizationFrameworkInitializer.registerServiceWrappers();
+            // This code is executed on zygote during preload, where only read-only
+            // flags can be used. Do not use mutable flags.
+            if (android.permission.flags.Flags.enhancedConfirmationModeApisEnabled()) {
+                EnhancedConfirmationFrameworkInitializer.registerServiceWrappers();
+            }
+            if (android.server.Flags.telemetryApisService()) {
+                ProfilingFrameworkInitializer.registerServiceWrappers();
+            }
+            if (android.webkit.Flags.updateServiceIpcWrapper()) {
+                WebViewBootstrapFrameworkInitializer.registerServiceWrappers();
+            }
         } finally {
             // If any of the above code throws, we're in a pretty bad shape and the process
             // will likely crash, but we'll reset it just in case there's an exception handler...
@@ -1606,11 +1749,7 @@ public final class SystemServiceRegistry {
         return new Object[sServiceCacheSize];
     }
 
-    /**
-     * Gets a system service from a given context.
-     * @hide
-     */
-    public static Object getSystemService(ContextImpl ctx, String name) {
+    private static ServiceFetcher<?> getSystemServiceFetcher(String name) {
         if (name == null) {
             return null;
         }
@@ -1619,6 +1758,18 @@ public final class SystemServiceRegistry {
             if (sEnableServiceNotFoundWtf) {
                 Slog.wtf(TAG, "Unknown manager requested: " + name);
             }
+            return null;
+        }
+        return fetcher;
+    }
+
+    /**
+     * Gets a system service from a given context.
+     * @hide
+     */
+    public static Object getSystemService(@NonNull ContextImpl ctx, String name) {
+        final ServiceFetcher<?> fetcher = getSystemServiceFetcher(name);
+        if (fetcher == null) {
             return null;
         }
 
@@ -1630,12 +1781,41 @@ public final class SystemServiceRegistry {
                 case Context.APP_PREDICTION_SERVICE:
                 case Context.INCREMENTAL_SERVICE:
                 case Context.ETHERNET_SERVICE:
+                case Context.CONTEXTHUB_SERVICE:
+                case Context.VIRTUALIZATION_SERVICE:
+                case Context.VIRTUAL_DEVICE_SERVICE:
                     return null;
+                case Context.SEARCH_SERVICE:
+                    // Wear device does not support SEARCH_SERVICE so we do not print WTF here
+                    PackageManager manager = ctx.getPackageManager();
+                    if (manager != null && manager.hasSystemFeature(PackageManager.FEATURE_WATCH)) {
+                        return null;
+                    }
             }
             Slog.wtf(TAG, "Manager wrapper not available: " + name);
             return null;
         }
         return ret;
+    }
+
+    /**
+     * Gets a system service which has opted-in to being fetched without a context.
+     * @hide
+     */
+    @FlaggedApi(android.webkit.Flags.FLAG_UPDATE_SERVICE_IPC_WRAPPER)
+    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+    public static @Nullable Object getSystemServiceWithNoContext(@NonNull String name) {
+        final ServiceFetcher<?> fetcher = getSystemServiceFetcher(name);
+        if (fetcher == null) {
+            return null;
+        }
+
+        if (!fetcher.supportsFetchWithoutContext()) {
+            throw new IllegalArgumentException(
+                    "Manager cannot be fetched without a context: " + name);
+        }
+
+        return fetcher.getService(null);
     }
 
     /**
@@ -1792,6 +1972,50 @@ public final class SystemServiceRegistry {
     }
 
     /**
+     * Used by apex modules to register a "service wrapper" that is not tied to any {@link Context}
+     * and will never require a context in the future.
+     *
+     * Services registered in this way can be fetched via
+     * {@link #getSystemServiceWithNoContext(String)}, so cannot require a context in future without
+     * a breaking change.
+     *
+     * <p>This can only be called from the methods called by the static initializer of
+     * {@link SystemServiceRegistry}. (Otherwise it throws a {@link IllegalStateException}.)
+     *
+     * @param serviceName the name of the binder object, such as
+     *     {@link Context#JOB_SCHEDULER_SERVICE}.
+     * @param serviceWrapperClass the wrapper class, such as the class of
+     *     {@link android.app.job.JobScheduler}.
+     * @param serviceProducer Callback that takes the service binder object with the name
+     *     {@code serviceName} and returns an actual service wrapper instance.
+     *
+     * @hide
+     */
+    @FlaggedApi(android.webkit.Flags.FLAG_UPDATE_SERVICE_IPC_WRAPPER)
+    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+    public static <TServiceClass> void registerForeverStaticService(
+            @NonNull String serviceName, @NonNull Class<TServiceClass> serviceWrapperClass,
+            @NonNull StaticServiceProducerWithBinder<TServiceClass> serviceProducer) {
+        ensureInitializing("registerStaticService");
+        Preconditions.checkStringNotEmpty(serviceName);
+        Objects.requireNonNull(serviceWrapperClass);
+        Objects.requireNonNull(serviceProducer);
+
+        registerService(serviceName, serviceWrapperClass,
+                new StaticServiceFetcher<TServiceClass>() {
+                    @Override
+                    public TServiceClass createService() throws ServiceNotFoundException {
+                        return serviceProducer.createService(
+                                ServiceManager.getServiceOrThrow(serviceName));
+                    }
+
+                    @Override
+                    public boolean supportsFetchWithoutContext() {
+                        return true;
+                    }});
+    }
+
+    /**
      * Similar to {@link #registerStaticService(String, Class, StaticServiceProducerWithBinder)},
      * but used for a "service wrapper" that doesn't take a service binder in its constructor.
      *
@@ -1881,6 +2105,18 @@ public final class SystemServiceRegistry {
      */
     static abstract interface ServiceFetcher<T> {
         T getService(ContextImpl ctx);
+
+        /**
+         * Should this service fetcher support being fetched via {@link #getSystemService(String)},
+         * without a Context?
+         *
+         * This means that the service cannot depend on a Context in future!
+         *
+         * @return true if this is supported for this service.
+         */
+        default boolean supportsFetchWithoutContext() {
+            return false;
+        }
     }
 
     /**
@@ -1988,6 +2224,11 @@ public final class SystemServiceRegistry {
         }
 
         public abstract T createService(ContextImpl ctx) throws ServiceNotFoundException;
+
+        // Services that explicitly use a Context can never be fetched without one.
+        public final boolean supportsFetchWithoutContext() {
+            return false;
+        }
     }
 
     /**
@@ -2012,6 +2253,13 @@ public final class SystemServiceRegistry {
         }
 
         public abstract T createService() throws ServiceNotFoundException;
+
+        // Services that do not need a Context can potentially be fetched without one, but the
+        // default is false, so that the service can require one in future without this being a
+        // breaking change.
+        public boolean supportsFetchWithoutContext() {
+            return false;
+        }
     }
 
     /** @hide */

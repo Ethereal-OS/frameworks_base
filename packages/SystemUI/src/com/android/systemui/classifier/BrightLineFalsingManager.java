@@ -93,11 +93,13 @@ public class BrightLineFalsingManager implements FalsingManager {
         @Override
         public void onSessionEnded() {
             mLastProximityEvent = null;
+            mHistoryTracker.removeBeliefListener(mBeliefListener);
             mClassifiers.forEach(FalsingClassifier::onSessionEnded);
         }
 
         @Override
         public void onSessionStarted() {
+            mHistoryTracker.addBeliefListener(mBeliefListener);
             mClassifiers.forEach(FalsingClassifier::onSessionStarted);
         }
     };
@@ -200,7 +202,6 @@ public class BrightLineFalsingManager implements FalsingManager {
 
         mDataProvider.addSessionListener(mSessionListener);
         mDataProvider.addGestureCompleteListener(mGestureFinalizedListener);
-        mHistoryTracker.addBeliefListener(mBeliefListener);
     }
 
     @Override
@@ -232,8 +233,7 @@ public class BrightLineFalsingManager implements FalsingManager {
 
         // check for false tap if it is a seekbar interaction
         if (interactionType == MEDIA_SEEKBAR) {
-            localResult[0] &= isFalseTap(mFeatureFlags.isEnabled(Flags.MEDIA_FALSING_PENALTY)
-                    ? FalsingManager.MODERATE_PENALTY : FalsingManager.LOW_PENALTY);
+            localResult[0] &= isFalseTap(FalsingManager.MODERATE_PENALTY);
         }
 
         logDebug("False Gesture (type: " + interactionType + "): " + localResult[0]);
@@ -324,10 +324,6 @@ public class BrightLineFalsingManager implements FalsingManager {
 
     @Override
     public boolean isFalseLongTap(@Penalty int penalty) {
-        if (!mFeatureFlags.isEnabled(Flags.FALSING_FOR_LONG_TAPS)) {
-            return false;
-        }
-
         checkDestroyed();
 
         if (skipFalsing(GENERIC)) {
@@ -401,6 +397,7 @@ public class BrightLineFalsingManager implements FalsingManager {
                 || mDataProvider.isDocked()
                 || mAccessibilityManager.isTouchExplorationEnabled()
                 || mDataProvider.isA11yAction()
+                || mDataProvider.isFromTrackpad()
                 || (mFeatureFlags.isEnabled(Flags.FALSING_OFF_FOR_UNFOLDED)
                     && mDataProvider.isUnfolded());
     }

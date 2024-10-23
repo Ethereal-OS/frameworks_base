@@ -48,6 +48,7 @@ import android.telephony.TelephonyManager;
 import android.util.ArraySet;
 import android.util.Log;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -207,6 +208,8 @@ class LegacyGlobalActions implements DialogInterface.OnDismissListener, DialogIn
                 mDialog.show();
                 mDialog.getWindow().getDecorView().setSystemUiVisibility(
                         View.STATUS_BAR_DISABLE_EXPAND);
+
+                rescheduleBurninTimeout();
             }
         }
     }
@@ -282,8 +285,9 @@ class LegacyGlobalActions implements DialogInterface.OnDismissListener, DialogIn
             } else if (GLOBAL_ACTION_KEY_AIRPLANE.equals(actionKey)) {
                 mItems.add(mAirplaneModeOn);
             } else if (GLOBAL_ACTION_KEY_BUGREPORT.equals(actionKey)) {
-                if (Settings.Global.getInt(mContext.getContentResolver(),
-                        Settings.Global.BUGREPORT_IN_POWER_MENU, 0) != 0 && isCurrentUserOwner()) {
+                if (Settings.Secure.getIntForUser(mContext.getContentResolver(),
+                        Settings.Secure.BUGREPORT_IN_POWER_MENU, 0, mContext.getUserId()) != 0
+                        && isCurrentUserAdmin()) {
                     mItems.add(new BugReportAction());
                 }
             } else if (GLOBAL_ACTION_KEY_SILENT.equals(actionKey)) {
@@ -323,7 +327,14 @@ class LegacyGlobalActions implements DialogInterface.OnDismissListener, DialogIn
         params.mOnClickListener = this;
         params.mForceInverseBackground = true;
 
-        ActionsDialog dialog = new ActionsDialog(mContext, params);
+        ActionsDialog dialog = new ActionsDialog(mContext, params) {
+            @Override
+            public boolean dispatchTouchEvent(MotionEvent event) {
+                rescheduleBurninTimeout();
+                return super.dispatchTouchEvent(event);
+            }
+        };
+
         dialog.setCanceledOnTouchOutside(false); // Handled by the custom class.
 
         dialog.getListView().setItemsCanFocus(true);
@@ -347,6 +358,11 @@ class LegacyGlobalActions implements DialogInterface.OnDismissListener, DialogIn
         dialog.setOnDismissListener(this);
 
         return dialog;
+    }
+
+    private void rescheduleBurninTimeout() {
+        mHandler.removeMessages(MESSAGE_DISMISS);
+        mHandler.sendEmptyMessageDelayed(MESSAGE_DISMISS, BURNIN_DISMISS_DELAY);
     }
 
     private class BugReportAction extends SinglePressAction implements LongPressAction {
@@ -535,9 +551,9 @@ class LegacyGlobalActions implements DialogInterface.OnDismissListener, DialogIn
         }
     }
 
-    private boolean isCurrentUserOwner() {
+    private boolean isCurrentUserAdmin() {
         UserInfo currentUser = getCurrentUser();
-        return currentUser == null || currentUser.isPrimary();
+        return currentUser != null && currentUser.isAdmin();
     }
 
     private void addUsersToMenu(ArrayList<Action> items) {
@@ -790,6 +806,7 @@ class LegacyGlobalActions implements DialogInterface.OnDismissListener, DialogIn
     private static final int MESSAGE_REFRESH = 1;
     private static final int MESSAGE_SHOW = 2;
     private static final int DIALOG_DISMISS_DELAY = 300; // ms
+    private static final int BURNIN_DISMISS_DELAY = 60000; // ms
 
     private Handler mHandler = new Handler() {
         @Override

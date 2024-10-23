@@ -15,6 +15,7 @@
  */
 package com.android.server.pm;
 
+import static android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_DENIED;
 import static android.provider.DeviceConfig.NAMESPACE_SYSTEMUI;
 
 import android.Manifest.permission;
@@ -24,9 +25,11 @@ import android.annotation.Nullable;
 import android.annotation.UserIdInt;
 import android.app.ActivityManager;
 import android.app.ActivityManagerInternal;
+import android.app.ActivityOptions;
 import android.app.AppGlobals;
 import android.app.IUidObserver;
 import android.app.IUriGrantsManager;
+import android.app.UidObserver;
 import android.app.UriGrantsManager;
 import android.app.role.OnRoleHoldersChangedListener;
 import android.app.role.RoleManager;
@@ -58,6 +61,7 @@ import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.content.pm.ShortcutServiceInternal;
 import android.content.pm.ShortcutServiceInternal.ShortcutChangeListener;
+import android.content.pm.UserPackage;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.graphics.Bitmap;
@@ -66,6 +70,7 @@ import android.graphics.Canvas;
 import android.graphics.RectF;
 import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.Icon;
+import android.multiuser.Flags;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
@@ -73,6 +78,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.FileUtils;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.LocaleList;
 import android.os.Looper;
@@ -92,7 +98,6 @@ import android.provider.DeviceConfig;
 import android.text.TextUtils;
 import android.text.format.TimeMigrationUtils;
 import android.util.ArraySet;
-import android.util.AtomicFile;
 import android.util.KeyValueListParser;
 import android.util.Log;
 import android.util.Slog;
@@ -101,8 +106,6 @@ import android.util.SparseBooleanArray;
 import android.util.SparseIntArray;
 import android.util.SparseLongArray;
 import android.util.TypedValue;
-import android.util.TypedXmlPullParser;
-import android.util.TypedXmlSerializer;
 import android.util.Xml;
 import android.view.IWindowManager;
 
@@ -112,17 +115,15 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
 import com.android.internal.infra.AndroidFuture;
 import com.android.internal.logging.MetricsLogger;
-import com.android.internal.os.BackgroundThread;
 import com.android.internal.util.CollectionUtils;
 import com.android.internal.util.DumpUtils;
 import com.android.internal.util.Preconditions;
 import com.android.internal.util.StatLogger;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
-import com.android.server.pm.ShortcutUser.PackageWithUser;
 import com.android.server.uri.UriGrantsManagerInternal;
-
-import libcore.io.IoUtils;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -151,6 +152,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
@@ -210,6 +212,10 @@ public class ShortcutService extends IShortcutService.Stub {
 
     @VisibleForTesting
     static final String FILENAME_USER_PACKAGES = "shortcuts.xml";
+
+    @VisibleForTesting
+    static final String FILENAME_USER_PACKAGES_RESERVE_COPY =
+            FILENAME_USER_PACKAGES + ".reservecopy";
 
     static final String DIRECTORY_BITMAPS = "bitmaps";
 
@@ -291,24 +297,26 @@ public class ShortcutService extends IShortcutService.Stub {
     private final Object mNonPersistentUsersLock = new Object();
     private final Object mWtfLock = new Object();
 
-    private static List<ResolveInfo> EMPTY_RESOLVE_INFO = new ArrayList<>(0);
+    private static final List<ResolveInfo> EMPTY_RESOLVE_INFO = new ArrayList<>(0);
 
     // Temporarily reverted to anonymous inner class form due to: b/32554459
-    private static Predicate<ResolveInfo> ACTIVITY_NOT_EXPORTED = new Predicate<ResolveInfo>() {
-        public boolean test(ResolveInfo ri) {
-            return !ri.activityInfo.exported;
-        }
-    };
+    private static final Predicate<ResolveInfo> ACTIVITY_NOT_EXPORTED =
+            new Predicate<ResolveInfo>() {
+                public boolean test(ResolveInfo ri) {
+                    return !ri.activityInfo.exported;
+                }
+            };
 
-    private static Predicate<ResolveInfo> ACTIVITY_NOT_INSTALLED = (ri) ->
+    private static final Predicate<ResolveInfo> ACTIVITY_NOT_INSTALLED = (ri) ->
             !isInstalled(ri.activityInfo);
 
     // Temporarily reverted to anonymous inner class form due to: b/32554459
-    private static Predicate<PackageInfo> PACKAGE_NOT_INSTALLED = new Predicate<PackageInfo>() {
-        public boolean test(PackageInfo pi) {
-            return !isInstalled(pi);
-        }
-    };
+    private static final Predicate<PackageInfo> PACKAGE_NOT_INSTALLED =
+            new Predicate<PackageInfo>() {
+                public boolean test(PackageInfo pi) {
+                    return !isInstalled(pi);
+                }
+            };
 
     private final Handler mHandler;
 
@@ -319,8 +327,7 @@ public class ShortcutService extends IShortcutService.Stub {
     private final ArrayList<LauncherApps.ShortcutChangeCallback> mShortcutChangeCallbacks =
             new ArrayList<>(1);
 
-    @GuardedBy("mLock")
-    private long mRawLastResetTime;
+    private final AtomicLong mRawLastResetTime = new AtomicLong(0);
 
     /**
      * User ID -> UserShortcuts
@@ -365,7 +372,7 @@ public class ShortcutService extends IShortcutService.Stub {
     private CompressFormat mIconPersistFormat;
     private int mIconPersistQuality;
 
-    private int mSaveDelayMillis;
+    int mSaveDelayMillis;
 
     private final IPackageManager mIPackageManager;
     private final PackageManagerInternal mPackageManagerInternal;
@@ -479,7 +486,14 @@ public class ShortcutService extends IShortcutService.Stub {
     }
 
     public ShortcutService(Context context) {
-        this(context, BackgroundThread.get().getLooper(), /*onyForPackgeManagerApis*/ false);
+        this(context, getBgLooper(), /*onyForPackgeManagerApis*/ false);
+    }
+
+    private static Looper getBgLooper() {
+        final HandlerThread handlerThread = new HandlerThread("shortcut",
+                android.os.Process.THREAD_PRIORITY_BACKGROUND);
+        handlerThread.start();
+        return handlerThread.getLooper();
     }
 
     @VisibleForTesting
@@ -506,7 +520,7 @@ public class ShortcutService extends IShortcutService.Stub {
         mShortcutRequestPinProcessor = new ShortcutRequestPinProcessor(this, mLock);
         mShortcutDumpFiles = new ShortcutDumpFiles(this);
         mIsAppSearchEnabled = DeviceConfig.getBoolean(NAMESPACE_SYSTEMUI,
-                SystemUiDeviceConfigFlags.SHORTCUT_APPSEARCH_INTEGRATION, true)
+                SystemUiDeviceConfigFlags.SHORTCUT_APPSEARCH_INTEGRATION, false)
                 && !injectIsLowRamDevice();
 
         if (onlyForPackageManagerApis) {
@@ -589,7 +603,7 @@ public class ShortcutService extends IShortcutService.Stub {
         }
     }
 
-    final private IUidObserver mUidObserver = new IUidObserver.Stub() {
+    final private IUidObserver mUidObserver = new UidObserver() {
         @Override
         public void onUidStateChanged(int uid, int procState, long procStateSeq, int capability) {
             injectPostToHandler(() -> handleOnUidStateChanged(uid, procState));
@@ -599,20 +613,6 @@ public class ShortcutService extends IShortcutService.Stub {
         public void onUidGone(int uid, boolean disabled) {
             injectPostToHandler(() ->
                     handleOnUidStateChanged(uid, ActivityManager.PROCESS_STATE_NONEXISTENT));
-        }
-
-        @Override
-        public void onUidActive(int uid) {
-        }
-
-        @Override
-        public void onUidIdle(int uid, boolean disabled) {
-        }
-
-        @Override public void onUidCachedChanged(int uid, boolean cached) {
-        }
-
-        @Override public void onUidProcAdjChanged(int uid) {
         }
     };
 
@@ -768,10 +768,15 @@ public class ShortcutService extends IShortcutService.Stub {
     }
 
     /** Return the base state file name */
-    private AtomicFile getBaseStateFile() {
-        final File path = new File(injectSystemDataPath(), FILENAME_BASE_STATE);
-        path.mkdirs();
-        return new AtomicFile(path);
+    final ResilientAtomicFile getBaseStateFile() {
+        File mainFile = new File(injectSystemDataPath(), FILENAME_BASE_STATE);
+        File temporaryBackup = new File(injectSystemDataPath(),
+                FILENAME_BASE_STATE + ".backup");
+        File reserveCopy = new File(injectSystemDataPath(),
+                FILENAME_BASE_STATE + ".reservecopy");
+        int fileMode = FileUtils.S_IRWXU | FileUtils.S_IRWXG | FileUtils.S_IXOTH;
+        return new ResilientAtomicFile(mainFile, temporaryBackup, reserveCopy, fileMode,
+                "base shortcut", null);
     }
 
     /**
@@ -988,112 +993,129 @@ public class ShortcutService extends IShortcutService.Stub {
         writeAttr(out, name, intent.toUri(/* flags =*/ 0));
     }
 
-    @GuardedBy("mLock")
     @VisibleForTesting
-    void saveBaseStateLocked() {
-        final AtomicFile file = getBaseStateFile();
-        if (DEBUG || DEBUG_REBOOT) {
-            Slog.d(TAG, "Saving to " + file.getBaseFile());
-        }
+    void saveBaseState() {
+        try (ResilientAtomicFile file = getBaseStateFile()) {
+            if (DEBUG || DEBUG_REBOOT) {
+                Slog.d(TAG, "Saving to " + file.getBaseFile());
+            }
 
-        FileOutputStream outs = null;
-        try {
-            outs = file.startWrite();
+            FileOutputStream outs = null;
+            try {
+                synchronized (mLock) {
+                    outs = file.startWrite();
+                }
 
-            // Write to XML
-            TypedXmlSerializer out = Xml.resolveSerializer(outs);
-            out.startDocument(null, true);
-            out.startTag(null, TAG_ROOT);
+                // Write to XML
+                TypedXmlSerializer out = Xml.resolveSerializer(outs);
+                out.startDocument(null, true);
+                out.startTag(null, TAG_ROOT);
 
-            // Body.
-            writeTagValue(out, TAG_LAST_RESET_TIME, mRawLastResetTime);
+                // Body.
+                // No locking required. Ok to add lock later if we save more data.
+                writeTagValue(out, TAG_LAST_RESET_TIME, mRawLastResetTime.get());
 
-            // Epilogue.
-            out.endTag(null, TAG_ROOT);
-            out.endDocument();
+                // Epilogue.
+                out.endTag(null, TAG_ROOT);
+                out.endDocument();
 
-            // Close.
-            file.finishWrite(outs);
-        } catch (IOException e) {
-            Slog.e(TAG, "Failed to write to file " + file.getBaseFile(), e);
-            file.failWrite(outs);
+                // Close.
+                file.finishWrite(outs);
+            } catch (IOException e) {
+                Slog.e(TAG, "Failed to write to file " + file.getBaseFile(), e);
+                file.failWrite(outs);
+            }
         }
     }
 
     @GuardedBy("mLock")
     private void loadBaseStateLocked() {
-        mRawLastResetTime = 0;
+        mRawLastResetTime.set(0);
 
-        final AtomicFile file = getBaseStateFile();
-        if (DEBUG || DEBUG_REBOOT) {
-            Slog.d(TAG, "Loading from " + file.getBaseFile());
-        }
-        try (FileInputStream in = file.openRead()) {
-            TypedXmlPullParser parser = Xml.resolvePullParser(in);
-
-            int type;
-            while ((type = parser.next()) != XmlPullParser.END_DOCUMENT) {
-                if (type != XmlPullParser.START_TAG) {
-                    continue;
-                }
-                final int depth = parser.getDepth();
-                // Check the root tag
-                final String tag = parser.getName();
-                if (depth == 1) {
-                    if (!TAG_ROOT.equals(tag)) {
-                        Slog.e(TAG, "Invalid root tag: " + tag);
-                        return;
-                    }
-                    continue;
-                }
-                // Assume depth == 2
-                switch (tag) {
-                    case TAG_LAST_RESET_TIME:
-                        mRawLastResetTime = parseLongAttribute(parser, ATTR_VALUE);
-                        break;
-                    default:
-                        Slog.e(TAG, "Invalid tag: " + tag);
-                        break;
-                }
+        try (ResilientAtomicFile file = getBaseStateFile()) {
+            if (DEBUG || DEBUG_REBOOT) {
+                Slog.d(TAG, "Loading from " + file.getBaseFile());
             }
-        } catch (FileNotFoundException e) {
-            // Use the default
-        } catch (IOException | XmlPullParserException e) {
-            Slog.e(TAG, "Failed to read file " + file.getBaseFile(), e);
+            FileInputStream in = null;
+            try {
+                in = file.openRead();
+                if (in == null) {
+                    throw new FileNotFoundException(file.getBaseFile().getAbsolutePath());
+                }
 
-            mRawLastResetTime = 0;
+                TypedXmlPullParser parser = Xml.resolvePullParser(in);
+
+                int type;
+                while ((type = parser.next()) != XmlPullParser.END_DOCUMENT) {
+                    if (type != XmlPullParser.START_TAG) {
+                        continue;
+                    }
+                    final int depth = parser.getDepth();
+                    // Check the root tag
+                    final String tag = parser.getName();
+                    if (depth == 1) {
+                        if (!TAG_ROOT.equals(tag)) {
+                            Slog.e(TAG, "Invalid root tag: " + tag);
+                            return;
+                        }
+                        continue;
+                    }
+                    // Assume depth == 2
+                    switch (tag) {
+                        case TAG_LAST_RESET_TIME:
+                            mRawLastResetTime.set(parseLongAttribute(parser, ATTR_VALUE));
+                            break;
+                        default:
+                            Slog.e(TAG, "Invalid tag: " + tag);
+                            break;
+                    }
+                }
+            } catch (FileNotFoundException e) {
+                // Use the default
+            } catch (IOException | XmlPullParserException e) {
+                // Remove corrupted file and retry.
+                file.failRead(in, e);
+                loadBaseStateLocked();
+                return;
+            }
         }
         // Adjust the last reset time.
         getLastResetTimeLocked();
     }
 
     @VisibleForTesting
-    final File getUserFile(@UserIdInt int userId) {
-        return new File(injectUserDataPath(userId), FILENAME_USER_PACKAGES);
+    final ResilientAtomicFile getUserFile(@UserIdInt int userId) {
+        File mainFile = new File(injectUserDataPath(userId), FILENAME_USER_PACKAGES);
+        File temporaryBackup = new File(injectUserDataPath(userId),
+                FILENAME_USER_PACKAGES + ".backup");
+        File reserveCopy = new File(injectUserDataPath(userId),
+                FILENAME_USER_PACKAGES_RESERVE_COPY);
+        int fileMode = FileUtils.S_IRWXU | FileUtils.S_IRWXG | FileUtils.S_IXOTH;
+        return new ResilientAtomicFile(mainFile, temporaryBackup, reserveCopy, fileMode,
+                "user shortcut", null);
     }
 
-    @GuardedBy("mLock")
-    private void saveUserLocked(@UserIdInt int userId) {
-        final File path = getUserFile(userId);
-        if (DEBUG || DEBUG_REBOOT) {
-            Slog.d(TAG, "Saving to " + path);
-        }
+    private void saveUser(@UserIdInt int userId) {
+        try (ResilientAtomicFile file = getUserFile(userId)) {
+            FileOutputStream os = null;
+            try {
+                if (DEBUG || DEBUG_REBOOT) {
+                    Slog.d(TAG, "Saving to " + file);
+                }
 
-        path.getParentFile().mkdirs();
-        final AtomicFile file = new AtomicFile(path);
-        FileOutputStream os = null;
-        try {
-            os = file.startWrite();
+                synchronized (mLock) {
+                    os = file.startWrite();
+                    saveUserInternalLocked(userId, os, /* forBackup= */ false);
+                }
 
-            saveUserInternalLocked(userId, os, /* forBackup= */ false);
+                file.finishWrite(os);
 
-            file.finishWrite(os);
-
-            // Remove all dangling bitmap files.
-            cleanupDanglingBitmapDirectoriesLocked(userId);
-        } catch (XmlPullParserException | IOException e) {
-            Slog.e(TAG, "Failed to write to file " + file.getBaseFile(), e);
-            file.failWrite(os);
+                // Remove all dangling bitmap files.
+                cleanupDanglingBitmapDirectoriesLocked(userId);
+            } catch (XmlPullParserException | IOException e) {
+                Slog.e(TAG, "Failed to write to file " + file, e);
+                file.failWrite(os);
+            }
         }
 
         getUserShortcutsLocked(userId).logSharingShortcutStats(mMetricsLogger);
@@ -1130,29 +1152,25 @@ public class ShortcutService extends IShortcutService.Stub {
 
     @Nullable
     private ShortcutUser loadUserLocked(@UserIdInt int userId) {
-        final File path = getUserFile(userId);
-        if (DEBUG || DEBUG_REBOOT) {
-            Slog.d(TAG, "Loading from " + path);
-        }
-        final AtomicFile file = new AtomicFile(path);
-
-        final FileInputStream in;
-        try {
-            in = file.openRead();
-        } catch (FileNotFoundException e) {
-            if (DEBUG || DEBUG_REBOOT) {
-                Slog.d(TAG, "Not found " + path);
+        try (ResilientAtomicFile file = getUserFile(userId)) {
+            FileInputStream in = null;
+            try {
+                if (DEBUG || DEBUG_REBOOT) {
+                    Slog.d(TAG, "Loading from " + file);
+                }
+                in = file.openRead();
+                if (in == null) {
+                    if (DEBUG || DEBUG_REBOOT) {
+                        Slog.d(TAG, "Not found " + file);
+                    }
+                    return null;
+                }
+                return loadUserInternal(userId, in, /* forBackup= */ false);
+            } catch (Exception e) {
+                // Remove corrupted file and retry.
+                file.failRead(in, e);
+                return loadUserLocked(userId);
             }
-            return null;
-        }
-        try {
-            final ShortcutUser ret = loadUserInternal(userId, in, /* forBackup= */ false);
-            return ret;
-        } catch (IOException | XmlPullParserException | InvalidFileFormatException e) {
-            Slog.e(TAG, "Failed to read file " + file.getBaseFile(), e);
-            return null;
-        } finally {
-            IoUtils.closeQuietly(in);
         }
     }
 
@@ -1225,16 +1243,19 @@ public class ShortcutService extends IShortcutService.Stub {
         }
         try {
             Trace.traceBegin(Trace.TRACE_TAG_SYSTEM_SERVER, "shortcutSaveDirtyInfo");
+            List<Integer> dirtyUserIds = new ArrayList<>();
             synchronized (mLock) {
-                for (int i = mDirtyUserIds.size() - 1; i >= 0; i--) {
-                    final int userId = mDirtyUserIds.get(i);
-                    if (userId == UserHandle.USER_NULL) { // USER_NULL for base state.
-                        saveBaseStateLocked();
-                    } else {
-                        saveUserLocked(userId);
-                    }
+                List<Integer> tmp = mDirtyUserIds;
+                mDirtyUserIds = dirtyUserIds;
+                dirtyUserIds = tmp;
+            }
+            for (int i = dirtyUserIds.size() - 1; i >= 0; i--) {
+                final int userId = dirtyUserIds.get(i);
+                if (userId == UserHandle.USER_NULL) { // USER_NULL for base state.
+                    saveBaseState();
+                } else {
+                    saveUser(userId);
                 }
-                mDirtyUserIds.clear();
             }
         } catch (Exception e) {
             wtf("Exception in saveDirtyInfo", e);
@@ -1247,14 +1268,14 @@ public class ShortcutService extends IShortcutService.Stub {
     @GuardedBy("mLock")
     long getLastResetTimeLocked() {
         updateTimesLocked();
-        return mRawLastResetTime;
+        return mRawLastResetTime.get();
     }
 
     /** Return the next reset time. */
     @GuardedBy("mLock")
     long getNextResetTimeLocked() {
         updateTimesLocked();
-        return mRawLastResetTime + mResetInterval;
+        return mRawLastResetTime.get() + mResetInterval;
     }
 
     static boolean isClockValid(long time) {
@@ -1269,25 +1290,26 @@ public class ShortcutService extends IShortcutService.Stub {
 
         final long now = injectCurrentTimeMillis();
 
-        final long prevLastResetTime = mRawLastResetTime;
+        final long prevLastResetTime = mRawLastResetTime.get();
+        long newLastResetTime = prevLastResetTime;
 
-        if (mRawLastResetTime == 0) { // first launch.
+        if (newLastResetTime == 0) { // first launch.
             // TODO Randomize??
-            mRawLastResetTime = now;
-        } else if (now < mRawLastResetTime) {
+            newLastResetTime = now;
+        } else if (now < newLastResetTime) {
             // Clock rewound.
             if (isClockValid(now)) {
                 Slog.w(TAG, "Clock rewound");
                 // TODO Randomize??
-                mRawLastResetTime = now;
+                newLastResetTime = now;
             }
-        } else {
-            if ((mRawLastResetTime + mResetInterval) <= now) {
-                final long offset = mRawLastResetTime % mResetInterval;
-                mRawLastResetTime = ((now / mResetInterval) * mResetInterval) + offset;
-            }
+        } else if ((newLastResetTime + mResetInterval) <= now) {
+            final long offset = newLastResetTime % mResetInterval;
+            newLastResetTime = ((now / mResetInterval) * mResetInterval) + offset;
         }
-        if (prevLastResetTime != mRawLastResetTime) {
+
+        mRawLastResetTime.set(newLastResetTime);
+        if (prevLastResetTime != newLastResetTime) {
             scheduleSaveBaseState();
         }
     }
@@ -1357,7 +1379,7 @@ public class ShortcutService extends IShortcutService.Stub {
     ShortcutNonPersistentUser getNonPersistentUserLocked(@UserIdInt int userId) {
         ShortcutNonPersistentUser ret = mShortcutNonPersistentUsers.get(userId);
         if (ret == null) {
-            ret = new ShortcutNonPersistentUser(this, userId);
+            ret = new ShortcutNonPersistentUser(userId);
             mShortcutNonPersistentUsers.put(userId, ret);
         }
         return ret;
@@ -1726,6 +1748,7 @@ public class ShortcutService extends IShortcutService.Stub {
         if (si == null) {
             return;
         }
+
         if (!Objects.equals(callerPackage, si.getPackage())) {
             android.util.EventLog.writeEvent(0x534e4554, "109824443", -1, "");
             throw new SecurityException("Shortcut package name mismatch");
@@ -2269,7 +2292,7 @@ public class ShortcutService extends IShortcutService.Stub {
 
         packageShortcutsChanged(ps, changedShortcuts, removedShortcuts);
 
-        reportShortcutUsedInternal(packageName, shortcut.getId(), userId);
+        ps.reportShortcutUsed(mUsageStatsManagerInternal, shortcut.getId());
 
         verifyStates();
     }
@@ -2562,10 +2585,7 @@ public class ShortcutService extends IShortcutService.Stub {
         enforceCallingOrSelfPermission(android.Manifest.permission.MANAGE_APP_PREDICTIONS,
                 "getShareTargets");
         final ComponentName chooser = injectChooserActivity();
-        final String pkg = (chooser != null
-                && mPackageManagerInternal.getComponentEnabledSetting(chooser,
-                injectBinderCallingUid(), userId) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED)
-                ? chooser.getPackageName() : mContext.getPackageName();
+        final String pkg = chooser != null ? chooser.getPackageName() : mContext.getPackageName();
         synchronized (mLock) {
             throwIfUserLockedL(userId);
             final List<ShortcutManager.ShareShortcutInfo> shortcutInfoList = new ArrayList<>();
@@ -2676,25 +2696,17 @@ public class ShortcutService extends IShortcutService.Stub {
             Slog.d(TAG, String.format("reportShortcutUsed: Shortcut %s package %s used on user %d",
                     shortcutId, packageName, userId));
         }
+        final ShortcutPackage ps;
         synchronized (mLock) {
             throwIfUserLockedL(userId);
-            final ShortcutPackage ps = getPackageShortcutsForPublisherLocked(packageName, userId);
+            ps = getPackageShortcutsForPublisherLocked(packageName, userId);
             if (ps.findShortcutById(shortcutId) == null) {
                 Log.w(TAG, String.format("reportShortcutUsed: package %s doesn't have shortcut %s",
                         packageName, shortcutId));
                 return;
             }
         }
-        reportShortcutUsedInternal(packageName, shortcutId, userId);
-    }
-
-    private void reportShortcutUsedInternal(String packageName, String shortcutId, int userId) {
-        final long token = injectClearCallingIdentity();
-        try {
-            mUsageStatsManagerInternal.reportShortcutUsage(packageName, shortcutId, userId);
-        } finally {
-            injectRestoreCallingIdentity(token);
-        }
+        ps.reportShortcutUsed(mUsageStatsManagerInternal, shortcutId);
     }
 
     @Override
@@ -2735,9 +2747,7 @@ public class ShortcutService extends IShortcutService.Stub {
     }
 
     void resetAllThrottlingInner() {
-        synchronized (mLock) {
-            mRawLastResetTime = injectCurrentTimeMillis();
-        }
+        mRawLastResetTime.set(injectCurrentTimeMillis());
         scheduleSaveBaseState();
         Slog.i(TAG, "ShortcutManager: throttling counter reset for all users");
     }
@@ -2755,8 +2765,8 @@ public class ShortcutService extends IShortcutService.Stub {
             }
             getPackageShortcutsLocked(packageName, userId)
                     .resetRateLimitingForCommandLineNoSaving();
-            saveUserLocked(userId);
         }
+        saveUser(userId);
     }
 
     // We override this method in unit tests to do a simpler check.
@@ -2819,6 +2829,26 @@ public class ShortcutService extends IShortcutService.Stub {
                 return false;
             }
         }
+    }
+
+    @VisibleForTesting
+    boolean areShortcutsSupportedOnHomeScreen(@UserIdInt int userId) {
+        if (!android.os.Flags.allowPrivateProfile() || !Flags.disablePrivateSpaceItemsOnHome()) {
+            return true;
+        }
+        final long start = getStatStartTime();
+        final long token = injectClearCallingIdentity();
+        boolean isSupported;
+        try {
+            synchronized (mLock) {
+                isSupported = !mUserManagerInternal.getUserProperties(userId)
+                        .areItemsRestrictedOnHomeScreen();
+            }
+        } finally {
+            injectRestoreCallingIdentity(token);
+            logDurationStat(Stats.GET_DEFAULT_LAUNCHER, start);
+        }
+        return isSupported;
     }
 
     @Nullable
@@ -3607,8 +3637,8 @@ public class ShortcutService extends IShortcutService.Stub {
 
             // Otherwise check persisted shortcuts
             getShortcutInfoAsync(launcherUserId, packageName, shortcutId, userId, si -> {
-                cb.complete(getShortcutIconUriInternal(launcherUserId, launcherPackage,
-                        packageName, si, userId));
+                cb.complete(si == null ? null : getShortcutIconUriInternal(launcherUserId,
+                        launcherPackage, packageName, si, userId));
             });
         }
 
@@ -3649,6 +3679,10 @@ public class ShortcutService extends IShortcutService.Stub {
                 @NonNull String callingPackage, int callingPid, int callingUid) {
             return ShortcutService.this.hasShortcutHostPermission(callingPackage, launcherUserId,
                     callingPid, callingUid);
+        }
+
+        public boolean areShortcutsSupportedOnHomeScreen(@UserIdInt int userId) {
+            return ShortcutService.this.areShortcutsSupportedOnHomeScreen(userId);
         }
 
         @Override
@@ -3829,7 +3863,7 @@ public class ShortcutService extends IShortcutService.Stub {
 
         final long start = getStatStartTime();
         try {
-            final ArrayList<PackageWithUser> gonePackages = new ArrayList<>();
+            final ArrayList<UserPackage> gonePackages = new ArrayList<>();
 
             synchronized (mLock) {
                 final ShortcutUser user = getUserShortcutsLocked(ownerUserId);
@@ -3844,13 +3878,14 @@ public class ShortcutService extends IShortcutService.Stub {
                             Slog.d(TAG, "Uninstalled: " + spi.getPackageName()
                                     + " user " + spi.getPackageUserId());
                         }
-                        gonePackages.add(PackageWithUser.of(spi));
+                        gonePackages.add(
+                                UserPackage.of(spi.getPackageUserId(), spi.getPackageName()));
                     }
                 });
                 if (gonePackages.size() > 0) {
                     for (int i = gonePackages.size() - 1; i >= 0; i--) {
-                        final PackageWithUser pu = gonePackages.get(i);
-                        cleanUpPackageLocked(pu.packageName, ownerUserId, pu.userId,
+                        final UserPackage up = gonePackages.get(i);
+                        cleanUpPackageLocked(up.packageName, ownerUserId, up.userId,
                                 /* appStillExists = */ false);
                     }
                 }
@@ -4426,8 +4461,11 @@ public class ShortcutService extends IShortcutService.Stub {
             return;
         }
         try {
+            ActivityOptions options = ActivityOptions.makeBasic()
+                    .setPendingIntentBackgroundActivityStartMode(
+                            MODE_BACKGROUND_ACTIVITY_START_DENIED);
             intentSender.sendIntent(mContext, /* code= */ 0, extras,
-                    /* onFinished=*/ null, /* handler= */ null);
+                    /* onFinished=*/ null, /* handler= */ null, null, options.toBundle());
         } catch (SendIntentException e) {
             Slog.w(TAG, "sendIntent failed().", e);
         }
@@ -4534,8 +4572,8 @@ public class ShortcutService extends IShortcutService.Stub {
                 dumpCurrentTime(pw);
                 pw.println();
             });
-            saveUserLocked(userId);
         }
+        saveUser(userId);
     }
 
     // === Dump ===
@@ -4644,8 +4682,8 @@ public class ShortcutService extends IShortcutService.Stub {
         private boolean mDumpFiles = false;
 
         private boolean mDumpDetails = true;
-        private List<Pattern> mPackagePatterns = new ArrayList<>();
-        private List<Integer> mUsers = new ArrayList<>();
+        private final List<Pattern> mPackagePatterns = new ArrayList<>();
+        private final List<Integer> mUsers = new ArrayList<>();
 
         void addPackageRegex(String regex) {
             mPackagePatterns.add(Pattern.compile(regex));
@@ -4746,9 +4784,9 @@ public class ShortcutService extends IShortcutService.Stub {
                 pw.print(formatTime(now));
 
                 pw.print("  Raw last reset: [");
-                pw.print(mRawLastResetTime);
+                pw.print(mRawLastResetTime.get());
                 pw.print("] ");
-                pw.print(formatTime(mRawLastResetTime));
+                pw.print(formatTime(mRawLastResetTime.get()));
 
                 final long last = getLastResetTimeLocked();
                 pw.print("  Last reset: [");
@@ -5181,20 +5219,18 @@ public class ShortcutService extends IShortcutService.Stub {
     }
 
     // Injection point.
-    @VisibleForTesting
     long injectClearCallingIdentity() {
         return Binder.clearCallingIdentity();
     }
 
     // Injection point.
-    @VisibleForTesting
     void injectRestoreCallingIdentity(long token) {
         Binder.restoreCallingIdentity(token);
     }
 
     // Injection point.
     String injectBuildFingerprint() {
-        return Build.VERSION.INCREMENTAL;
+        return Build.FINGERPRINT;
     }
 
     final void wtf(String message) {
@@ -5329,7 +5365,7 @@ public class ShortcutService extends IShortcutService.Stub {
             final ShortcutUser user = mUsers.get(userId);
             if (user == null) return null;
 
-            return user.getAllLaunchersForTest().get(PackageWithUser.of(userId, packageName));
+            return user.getAllLaunchersForTest().get(UserPackage.of(userId, packageName));
         }
     }
 

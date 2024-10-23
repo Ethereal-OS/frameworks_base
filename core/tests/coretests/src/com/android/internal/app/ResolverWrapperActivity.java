@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import android.annotation.Nullable;
 import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
@@ -28,9 +29,9 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
 import android.os.UserHandle;
+import android.util.Pair;
 
 import com.android.internal.app.AbstractMultiProfilePagerAdapter.CrossProfileIntentsChecker;
-import com.android.internal.app.AbstractMultiProfilePagerAdapter.MyUserIdProvider;
 import com.android.internal.app.AbstractMultiProfilePagerAdapter.QuietModeManager;
 import com.android.internal.app.chooser.TargetInfo;
 
@@ -53,15 +54,7 @@ public class ResolverWrapperActivity extends ResolverActivity {
             List<Intent> payloadIntents, Intent[] initialIntents, List<ResolveInfo> rList,
             boolean filterLastUsed, UserHandle userHandle) {
         return new ResolverWrapperAdapter(context, payloadIntents, initialIntents, rList,
-                filterLastUsed, createListController(userHandle), this);
-    }
-
-    @Override
-    protected MyUserIdProvider createMyUserIdProvider() {
-        if (sOverrides.mMyUserIdProvider != null) {
-            return sOverrides.mMyUserIdProvider;
-        }
-        return super.createMyUserIdProvider();
+                filterLastUsed, createListController(userHandle), this, userHandle);
     }
 
     @Override
@@ -95,6 +88,10 @@ public class ResolverWrapperActivity extends ResolverActivity {
         return ((ResolverListAdapter) mMultiProfilePagerAdapter.getAdapterForIndex(1));
     }
 
+    int getMultiProfilePagerAdapterCount(){
+        return mMultiProfilePagerAdapter.getCount();
+    }
+
     @Override
     public boolean isVoiceInteraction() {
         if (sOverrides.isVoiceInteraction != null) {
@@ -104,12 +101,13 @@ public class ResolverWrapperActivity extends ResolverActivity {
     }
 
     @Override
-    public void safelyStartActivity(TargetInfo cti) {
-        if (sOverrides.onSafelyStartCallback != null &&
-                sOverrides.onSafelyStartCallback.apply(cti)) {
+    public void safelyStartActivityInternal(TargetInfo cti, UserHandle user,
+            @Nullable Bundle options) {
+        if (sOverrides.onSafelyStartInternalCallback != null
+                && sOverrides.onSafelyStartInternalCallback.apply(new Pair<>(cti, user))) {
             return;
         }
-        super.safelyStartActivity(cti);
+        super.safelyStartActivityInternal(cti, user, options);
     }
 
     @Override
@@ -135,13 +133,42 @@ public class ResolverWrapperActivity extends ResolverActivity {
     }
 
     @Override
+    protected UserHandle getPersonalProfileUserHandle() {
+        return super.getPersonalProfileUserHandle();
+    }
+
+    @Override
     protected UserHandle getWorkProfileUserHandle() {
         return sOverrides.workProfileUserHandle;
     }
 
     @Override
+    protected UserHandle getCloneProfileUserHandle() {
+        return sOverrides.cloneProfileUserHandle;
+    }
+
+    @Override
+    protected UserHandle getPrivateProfileUserHandle() {
+        return sOverrides.privateProfileUserHandle;
+    }
+
+    @Override
+    protected UserHandle getTabOwnerUserHandleForLaunch() {
+        if (sOverrides.tabOwnerUserHandleForLaunch == null) {
+            return super.getTabOwnerUserHandleForLaunch();
+        }
+        return sOverrides.tabOwnerUserHandleForLaunch;
+    }
+
+    @Override
     public void startActivityAsUser(Intent intent, Bundle options, UserHandle user) {
         super.startActivityAsUser(intent, options, user);
+    }
+
+    @Override
+    protected List<UserHandle> getResolverRankerServiceUserHandleListInternal(UserHandle
+            userHandle) {
+        return super.getResolverRankerServiceUserHandleListInternal(userHandle);
     }
 
     /**
@@ -152,25 +179,30 @@ public class ResolverWrapperActivity extends ResolverActivity {
     static class OverrideData {
         @SuppressWarnings("Since15")
         public Function<PackageManager, PackageManager> createPackageManager;
-        public Function<TargetInfo, Boolean> onSafelyStartCallback;
+        public Function<Pair<TargetInfo, UserHandle>, Boolean> onSafelyStartInternalCallback;
         public ResolverListController resolverListController;
         public ResolverListController workResolverListController;
         public Boolean isVoiceInteraction;
         public UserHandle workProfileUserHandle;
+        public UserHandle cloneProfileUserHandle;
+        public UserHandle privateProfileUserHandle;
+        public UserHandle tabOwnerUserHandleForLaunch;
         public Integer myUserId;
         public boolean hasCrossProfileIntents;
         public boolean isQuietModeEnabled;
         public QuietModeManager mQuietModeManager;
-        public MyUserIdProvider mMyUserIdProvider;
         public CrossProfileIntentsChecker mCrossProfileIntentsChecker;
 
         public void reset() {
-            onSafelyStartCallback = null;
+            onSafelyStartInternalCallback = null;
             isVoiceInteraction = null;
             createPackageManager = null;
             resolverListController = mock(ResolverListController.class);
             workResolverListController = mock(ResolverListController.class);
             workProfileUserHandle = null;
+            cloneProfileUserHandle = null;
+            privateProfileUserHandle = null;
+            tabOwnerUserHandleForLaunch = null;
             myUserId = null;
             hasCrossProfileIntents = true;
             isQuietModeEnabled = false;
@@ -194,13 +226,6 @@ public class ResolverWrapperActivity extends ResolverActivity {
                 @Override
                 public boolean isWaitingToEnableWorkProfile() {
                     return false;
-                }
-            };
-
-            mMyUserIdProvider = new MyUserIdProvider() {
-                @Override
-                public int getMyUserId() {
-                    return myUserId != null ? myUserId : UserHandle.myUserId();
                 }
             };
 

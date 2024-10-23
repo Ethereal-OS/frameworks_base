@@ -46,6 +46,7 @@ import android.os.Bundle;
 import android.os.Message;
 import android.os.Process;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.util.ArrayMap;
@@ -534,6 +535,8 @@ class AppErrors {
             }
         }
 
+        mService.mOomAdjuster.mCachedAppOptimizer.unfreezeProcess(initialPid,
+                CachedAppOptimizer.UNFREEZE_REASON_PROCESS_END);
         proc.scheduleCrashLocked(message, exceptionTypeId, extras);
         if (force) {
             // If the app is responsive, the scheduled crash will happen as expected
@@ -550,6 +553,15 @@ class AppErrors {
                         }
                     },
                     5000L);
+        }
+    }
+
+    void sendRecoverableCrashToAppExitInfo(
+            ProcessRecord r, ApplicationErrorReport.CrashInfo crashInfo) {
+        if (r == null || crashInfo == null
+                || !"Native crash".equals(crashInfo.exceptionClassName)) return;
+        synchronized (mService) {
+            mService.mProcessList.noteAppRecoverableCrash(r);
         }
     }
 
@@ -642,6 +654,17 @@ class AppErrors {
                 return;
             }
 
+            // Add paste content for Memochō option
+            String devFP = SystemProperties.get("ro.vendor.build.fingerprint", "");
+            String euclidVers = SystemProperties.get("ro.euclid.version", "");
+            String boardName = SystemProperties.get("ro.product.board", "");
+            data.paste = "time: " + timeMillis + "\n" +
+            "device fp:" + devFP + "\n" +
+            "product board:" + boardName + "\n" +
+            "euclid vers:" + euclidVers + "\n" +
+            "msg: " + longMsg + "\n" +
+            "stacktrace: " + stackTrace;
+
             final Message msg = Message.obtain();
             msg.what = ActivityManagerService.SHOW_ERROR_UI_MSG;
 
@@ -728,7 +751,7 @@ class AppErrors {
 
         return mService.mAtmInternal.handleAppCrashInActivityController(
                 name, pid, shortMsg, longMsg, timeMillis, crashInfo.stackTrace, () -> {
-                if (Build.IS_ENG
+                if (Build.IS_DEBUGGABLE
                         && "Native crash".equals(crashInfo.exceptionClassName)) {
                     Slog.w(TAG, "Skip killing native crashed app " + name
                             + "(" + pid + ") during testing");
@@ -827,7 +850,6 @@ class AppErrors {
 
         ApplicationErrorReport report = new ApplicationErrorReport();
         report.packageName = r.info.packageName;
-        report.packageVersion = r.info.longVersionCode;
         report.installerPackageName = errState.getErrorReportReceiver().getPackageName();
         report.processName = r.processName;
         report.time = timeMillis;
@@ -1096,7 +1118,10 @@ class AppErrors {
             boolean showBackground = Settings.Secure.getIntForUser(mContext.getContentResolver(),
                     Settings.Secure.ANR_SHOW_BACKGROUND, 0,
                     mService.mUserController.getCurrentUserId()) != 0;
-            if (mService.mAtmInternal.canShowErrorDialogs() || showBackground) {
+            final boolean anrSilenced = mAppsNotReportingCrashes != null
+                    && mAppsNotReportingCrashes.contains(proc.info.packageName);
+            if (!anrSilenced &&
+                    (mService.mAtmInternal.canShowErrorDialogs() || showBackground)) {
                 AnrController anrController = errState.getDialogController().getAnrController();
                 if (anrController == null) {
                     errState.getDialogController().showAnrDialogs(data);
@@ -1121,7 +1146,7 @@ class AppErrors {
                 MetricsLogger.action(mContext, MetricsProto.MetricsEvent.ACTION_APP_ANR,
                         AppNotRespondingDialog.CANT_SHOW);
                 // Just kill the app if there is no dialog to be shown.
-                doKill = true;
+                doKill = !anrSilenced;
             }
         }
         if (doKill) {

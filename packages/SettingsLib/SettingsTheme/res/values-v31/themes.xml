@@ -25,6 +25,7 @@
         <item name="android:listPreferredItemPaddingRight">16dp</item>
         <item name="preferenceTheme">@style/PreferenceTheme.SettingsLib</item>
         <item name="android:switchStyle">@style/Switch.SettingsLib</item>
+        <item name="switchStyle">@style/SwitchCompat.SettingsLib</item>
         <item name="android:progressBarStyleHorizontal">@style/HorizontalProgressBar.SettingsLib</item>
     </style>
 
@@ -36,7 +37,6 @@
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
         <!-- Set up edge-to-edge configuration for top app bar -->
-        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="colorControlNormal">?android:attr/colorControlNormal</item>
         <!-- For AndroidX AlertDialog -->

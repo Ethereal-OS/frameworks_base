@@ -16,13 +16,13 @@
 
 package android.content.pm;
 
+import android.annotation.FlaggedApi;
 import android.annotation.FloatRange;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.TestApi;
 import android.app.Activity;
-import android.app.compat.CompatChanges;
 import android.compat.annotation.ChangeId;
 import android.compat.annotation.Disabled;
 import android.compat.annotation.EnabledSince;
@@ -36,11 +36,12 @@ import android.content.res.TypedArray;
 import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.os.UserHandle;
 import android.util.ArraySet;
 import android.util.Printer;
+import android.window.OnBackInvokedCallback;
 
 import com.android.internal.util.Parcelling;
+import com.android.window.flags.Flags;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -54,6 +55,7 @@ import java.util.Set;
  * from the AndroidManifest.xml's &lt;activity&gt; and
  * &lt;receiver&gt; tags.
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 public class ActivityInfo extends ComponentInfo implements Parcelable {
 
     private static final Parcelling.BuiltIn.ForStringSet sForStringSet =
@@ -221,6 +223,126 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     public String launchToken;
 
     /**
+     * Specifies the required display category of the activity. Set from the
+     * {@link android.R.attr#requiredDisplayCategory} attribute. Upon creation, a display can
+     * specify which display categories it supports and one of the category must be present
+     * in the {@code <activity>} element to allow this activity to run. The default value is
+     * {@code null}, which indicates the activity does not have a required display category and
+     * thus can only run on a display that didn't specify any display categories. Each activity
+     * can only specify one required category but a display can support multiple display categories.
+     * <p>
+     * This field should be formatted as a Java-language-style free form string(for example,
+     * com.google.automotive_entertainment), which may contain uppercase or lowercase letters ('A'
+     * through 'Z'), numbers, and underscores ('_') but may only start with letters.
+     */
+    @Nullable
+    public String requiredDisplayCategory;
+
+    /**
+     * Constant corresponding to {@code none} in the
+     * {@link android.R.attr#requireContentUriPermissionFromCaller} attribute.
+     * @hide
+     */
+    public static final int CONTENT_URI_PERMISSION_NONE = 0;
+
+    /**
+     * Constant corresponding to {@code read} in the
+     * {@link android.R.attr#requireContentUriPermissionFromCaller} attribute.
+     * @hide
+     */
+    public static final int CONTENT_URI_PERMISSION_READ = 1;
+
+    /**
+     * Constant corresponding to {@code write} in the
+     * {@link android.R.attr#requireContentUriPermissionFromCaller} attribute.
+     * @hide
+     */
+    public static final int CONTENT_URI_PERMISSION_WRITE = 2;
+
+    /**
+     * Constant corresponding to {@code readOrWrite} in the
+     * {@link android.R.attr#requireContentUriPermissionFromCaller} attribute.
+     * @hide
+     */
+    public static final int CONTENT_URI_PERMISSION_READ_OR_WRITE = 3;
+
+    /**
+     * Constant corresponding to {@code readAndWrite} in the
+     * {@link android.R.attr#requireContentUriPermissionFromCaller} attribute.
+     * @hide
+     */
+    public static final int CONTENT_URI_PERMISSION_READ_AND_WRITE = 4;
+
+    /** @hide */
+    @SuppressWarnings("SwitchIntDef")
+    public static boolean isRequiredContentUriPermissionRead(
+            @RequiredContentUriPermission int permission) {
+        return switch (permission) {
+            case CONTENT_URI_PERMISSION_READ_AND_WRITE, CONTENT_URI_PERMISSION_READ_OR_WRITE,
+                    CONTENT_URI_PERMISSION_READ -> true;
+            default -> false;
+        };
+    }
+
+    /** @hide */
+    @SuppressWarnings("SwitchIntDef")
+    public static boolean isRequiredContentUriPermissionWrite(
+            @RequiredContentUriPermission int permission) {
+        return switch (permission) {
+            case CONTENT_URI_PERMISSION_READ_AND_WRITE, CONTENT_URI_PERMISSION_READ_OR_WRITE,
+                    CONTENT_URI_PERMISSION_WRITE -> true;
+            default -> false;
+        };
+    }
+
+    /** @hide */
+    @IntDef(prefix = "CONTENT_URI_PERMISSION_", value = {
+            CONTENT_URI_PERMISSION_NONE,
+            CONTENT_URI_PERMISSION_READ,
+            CONTENT_URI_PERMISSION_WRITE,
+            CONTENT_URI_PERMISSION_READ_OR_WRITE,
+            CONTENT_URI_PERMISSION_READ_AND_WRITE
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface RequiredContentUriPermission {
+    }
+
+    private String requiredContentUriPermissionToFullString(
+            @RequiredContentUriPermission int permission) {
+        return switch (permission) {
+            case CONTENT_URI_PERMISSION_NONE -> "CONTENT_URI_PERMISSION_NONE";
+            case CONTENT_URI_PERMISSION_READ -> "CONTENT_URI_PERMISSION_READ";
+            case CONTENT_URI_PERMISSION_WRITE -> "CONTENT_URI_PERMISSION_WRITE";
+            case CONTENT_URI_PERMISSION_READ_OR_WRITE -> "CONTENT_URI_PERMISSION_READ_OR_WRITE";
+            case CONTENT_URI_PERMISSION_READ_AND_WRITE -> "CONTENT_URI_PERMISSION_READ_AND_WRITE";
+            default -> "unknown=" + permission;
+        };
+    }
+
+    /** @hide */
+    public static String requiredContentUriPermissionToShortString(
+            @RequiredContentUriPermission int permission) {
+        return switch (permission) {
+            case CONTENT_URI_PERMISSION_NONE -> "none";
+            case CONTENT_URI_PERMISSION_READ -> "read";
+            case CONTENT_URI_PERMISSION_WRITE -> "write";
+            case CONTENT_URI_PERMISSION_READ_OR_WRITE -> "read or write";
+            case CONTENT_URI_PERMISSION_READ_AND_WRITE -> "read and write";
+            default -> "unknown=" + permission;
+        };
+    }
+
+    /**
+     * Specifies permissions necessary to launch this activity via
+     * {@link android.content.Context#startActivity} when passing content URIs. The default value is
+     * {@code none}, meaning no specific permissions are required. Setting this attribute restricts
+     * activity invocation based on the invoker's permissions.
+     * @hide
+     */
+    @RequiredContentUriPermission
+    public int requireContentUriPermissionFromCaller;
+
+    /**
      * Activity can not be resized and always occupies the fullscreen area with all windows fully
      * visible.
      * @hide
@@ -333,7 +455,14 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * @see android.R.attr#colorMode
      */
     public static final int COLOR_MODE_HDR = 2;
-    // 3 Corresponds to android::uirenderer::ColorMode::Hdr10.
+
+    /**
+     * Comparison point against COLOR_MODE_HDR that uses 1010102
+     * Only for internal test usages
+     * @hide
+     */
+    public static final int COLOR_MODE_HDR10 = 3;
+
     /**
      * Value of {@link #colorMode} indicating that the activity should use an
      * 8 bit alpha buffer if the presentation display supports it.
@@ -608,7 +737,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * See {@link android.R.attr#inheritShowWhenLocked}.
      * @hide
      */
-    public static final int FLAG_INHERIT_SHOW_WHEN_LOCKED = 0x1;
+    public static final int FLAG_INHERIT_SHOW_WHEN_LOCKED = 1 << 0;
 
     /**
      * Bit in {@link #privateFlags} indicating whether a home sound effect should be played if the
@@ -616,13 +745,34 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * Set from the {@link android.R.attr#playHomeTransitionSound} attribute.
      * @hide
      */
-    public static final int PRIVATE_FLAG_HOME_TRANSITION_SOUND = 0x2;
+    public static final int PRIVATE_FLAG_HOME_TRANSITION_SOUND = 1 << 1;
+
+    /**
+     * Bit in {@link #privateFlags} indicating {@link android.view.KeyEvent#KEYCODE_BACK} related
+     * events will be replaced by a call to {@link OnBackInvokedCallback#onBackInvoked()} on the
+     * focused window.
+     * @hide
+     * @see android.R.styleable.AndroidManifestActivity_enableOnBackInvokedCallback
+     */
+    public static final int PRIVATE_FLAG_ENABLE_ON_BACK_INVOKED_CALLBACK = 1 << 2;
+
+    /**
+     * Bit in {@link #privateFlags} indicating {@link android.view.KeyEvent#KEYCODE_BACK} related
+     * events will be forwarded to the Activity and its dialogs and views and
+     * the {@link android.app.Activity#onBackPressed()}, {@link android.app.Dialog#onBackPressed}
+     * will be called.
+     * @hide
+     * @see android.R.styleable.AndroidManifestActivity_enableOnBackInvokedCallback
+     */
+    public static final int PRIVATE_FLAG_DISABLE_ON_BACK_INVOKED_CALLBACK = 1 << 3;
 
     /**
      * Options that have been set in the activity declaration in the manifest.
      * These include:
      * {@link #FLAG_INHERIT_SHOW_WHEN_LOCKED},
      * {@link #PRIVATE_FLAG_HOME_TRANSITION_SOUND}.
+     * {@link #PRIVATE_FLAG_ENABLE_ON_BACK_INVOKED_CALLBACK}
+     * {@link #PRIVATE_FLAG_DISABLE_ON_BACK_INVOKED_CALLBACK}
      * @hide
      */
     public int privateFlags;
@@ -791,6 +941,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
             CONFIG_LAYOUT_DIRECTION,
             CONFIG_COLOR_MODE,
             CONFIG_FONT_SCALE,
+            CONFIG_GRAMMATICAL_GENDER,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface Config {}
@@ -901,6 +1052,12 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     public static final int CONFIG_COLOR_MODE = 0x4000;
     /**
      * Bit in {@link #configChanges} that indicates that the activity
+     * can itself handle the change to gender. Set from the
+     * {@link android.R.attr#configChanges} attribute.
+     */
+    public static final int CONFIG_GRAMMATICAL_GENDER = 0x8000;
+    /**
+     * Bit in {@link #configChanges} that indicates that the activity
      * can itself handle asset path changes.  Set from the {@link android.R.attr#configChanges}
      * attribute. This is not a core resource configuration, but a higher-level value, so its
      * constant starts at the high bits.
@@ -930,7 +1087,6 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * not a core resource configuration, but a higher-level value, so its
      * constant starts at the high bits.
      */
-
     public static final int CONFIG_FONT_WEIGHT_ADJUSTMENT = 0x10000000;
 
     /** @hide
@@ -954,6 +1110,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
         Configuration.NATIVE_CONFIG_DENSITY,                // DENSITY
         Configuration.NATIVE_CONFIG_LAYOUTDIR,              // LAYOUT DIRECTION
         Configuration.NATIVE_CONFIG_COLOR_MODE,             // COLOR_MODE
+        Configuration.NATIVE_CONFIG_GRAMMATICAL_GENDER,
     };
 
     /**
@@ -1031,6 +1188,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Overridable
     @Disabled
+    @TestApi
     public static final long OVERRIDE_ENABLE_COMPAT_IGNORE_REQUESTED_ORIENTATION =
             254631730L; // buganizer id
 
@@ -1045,6 +1203,8 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Overridable
     @Disabled
+    @TestApi
+    @FlaggedApi(Flags.FLAG_APP_COMPAT_PROPERTIES_API)
     public static final long OVERRIDE_ENABLE_COMPAT_IGNORE_ORIENTATION_REQUEST_WHEN_LOOP_DETECTED =
             273509367L; // buganizer id
 
@@ -1090,6 +1250,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Overridable
     @Disabled
+    @TestApi
     public static final long OVERRIDE_CAMERA_COMPAT_DISABLE_FORCE_ROTATION =
             263959004L; // buganizer id
 
@@ -1102,6 +1263,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Overridable
     @Disabled
+    @TestApi
     public static final long OVERRIDE_CAMERA_COMPAT_DISABLE_REFRESH = 264304459L; // buganizer id
 
     /**
@@ -1114,6 +1276,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Overridable
     @Disabled
+    @TestApi
     public static final long OVERRIDE_CAMERA_COMPAT_ENABLE_REFRESH_VIA_PAUSE =
             264301586L; // buganizer id
 
@@ -1129,8 +1292,8 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * <p>For {@link android.view.View#getWindowVisibleDisplayFrame} and
      * {@link android.view.View}#getWindowDisplayFrame this sandboxing is happening indirectly
      * through
-     * {@link android.view.ViewRootImpl}#getWindowVisibleDisplayFrame,
-     * {@link android.view.ViewRootImpl}#getDisplayFrame respectively.
+     * {@code android.view.ViewRootImpl#getWindowVisibleDisplayFrame},
+     * {@code android.view.ViewRootImpl#getDisplayFrame} respectively.
      *
      * <p>Some applications assume that they occupy the whole screen and therefore use the display
      * coordinates in their calculations as if an activity is  positioned in the top-left corner of
@@ -1148,12 +1311,15 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     /**
      * This change id is the gatekeeper for all treatments that force a given min aspect ratio.
      * Enabling this change will allow the following min aspect ratio treatments to be applied:
-     * OVERRIDE_MIN_ASPECT_RATIO_MEDIUM
-     * OVERRIDE_MIN_ASPECT_RATIO_LARGE
+     * <ul>
+     *  <li>OVERRIDE_MIN_ASPECT_RATIO_MEDIUM
+     *  <li>OVERRIDE_MIN_ASPECT_RATIO_LARGE
+     * </ul>
      *
      * If OVERRIDE_MIN_ASPECT_RATIO is applied, the min aspect ratio given in the app's manifest
      * will be overridden to the largest enabled aspect ratio treatment unless the app's manifest
-     * value is higher.
+     * value is higher. By default, this will only apply to activities with fixed portrait
+     * orientation if OVERRIDE_MIN_ASPECT_RATIO_PORTRAIT_ONLY is not explicitly disabled.
      * @hide
      */
     @ChangeId
@@ -1217,6 +1383,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Disabled
     @Overridable
+    @TestApi
     public static final long OVERRIDE_MIN_ASPECT_RATIO_TO_ALIGN_WITH_SPLIT_SCREEN = 208648326L;
 
     /**
@@ -1227,6 +1394,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Disabled
     @Overridable
+    @TestApi
     public static final long OVERRIDE_MIN_ASPECT_RATIO_EXCLUDE_PORTRAIT_FULLSCREEN = 218959984L;
 
     /**
@@ -1238,6 +1406,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Disabled
     @Overridable
+    @TestApi
     public static final long OVERRIDE_ENABLE_COMPAT_FAKE_FOCUS = 263259275L;
 
     // Compat framework that per-app overrides rely on only supports booleans. That's why we have
@@ -1253,6 +1422,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Disabled
     @Overridable
+    @TestApi
     public static final long OVERRIDE_UNDEFINED_ORIENTATION_TO_PORTRAIT = 265452344L;
 
     /**
@@ -1264,6 +1434,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Disabled
     @Overridable
+    @TestApi
     public static final long OVERRIDE_UNDEFINED_ORIENTATION_TO_NOSENSOR = 265451093L;
 
     /**
@@ -1277,6 +1448,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Disabled
     @Overridable
+    @TestApi
     public static final long OVERRIDE_LANDSCAPE_ORIENTATION_TO_REVERSE_LANDSCAPE = 266124927L;
 
     /**
@@ -1323,7 +1495,20 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     @ChangeId
     @Disabled
     @Overridable
+    @TestApi
     public static final long OVERRIDE_USE_DISPLAY_LANDSCAPE_NATURAL_ORIENTATION = 255940284L;
+
+    /**
+     * Enables {@link #SCREEN_ORIENTATION_USER} which overrides any orientation requested
+     * by the activity. Fixed orientation apps can be overridden to fullscreen on large
+     * screen devices with ignoreOrientationRequest enabled with this override.
+     *
+     * @hide
+     */
+    @ChangeId
+    @Overridable
+    @Disabled
+    public static final long OVERRIDE_ANY_ORIENTATION_TO_USER = 310816437L;
 
     /**
      * Compares activity window layout min width/height with require space for multi window to
@@ -1394,8 +1579,8 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * {@link #CONFIG_LOCALE}, {@link #CONFIG_TOUCHSCREEN},
      * {@link #CONFIG_KEYBOARD}, {@link #CONFIG_NAVIGATION},
      * {@link #CONFIG_ORIENTATION}, {@link #CONFIG_SCREEN_LAYOUT},
-     * {@link #CONFIG_DENSITY}, {@link #CONFIG_LAYOUT_DIRECTION} and
-     * {@link #CONFIG_COLOR_MODE}.
+     * {@link #CONFIG_DENSITY}, {@link #CONFIG_LAYOUT_DIRECTION},
+     * {@link #CONFIG_COLOR_MODE}, and {link #CONFIG_GRAMMATICAL_GENDER}.
      * Set from the {@link android.R.attr#configChanges} attribute.
      */
     public int configChanges;
@@ -1508,6 +1693,8 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
         mMaxAspectRatio = orig.mMaxAspectRatio;
         mMinAspectRatio = orig.mMinAspectRatio;
         supportsSizeChanges = orig.supportsSizeChanges;
+        requiredDisplayCategory = orig.requiredDisplayCategory;
+        requireContentUriPermissionFromCaller = orig.requireContentUriPermissionFromCaller;
     }
 
     /**
@@ -1634,27 +1821,6 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
     }
 
     /**
-     * Returns whether the activity supports size changes.
-     * @hide
-     */
-    @SizeChangesSupportMode
-    public int supportsSizeChanges() {
-        if (isChangeEnabled(FORCE_NON_RESIZE_APP)) {
-            return SIZE_CHANGES_UNSUPPORTED_OVERRIDE;
-        }
-
-        if (supportsSizeChanges) {
-            return SIZE_CHANGES_SUPPORTED_METADATA;
-        }
-
-        if (isChangeEnabled(FORCE_RESIZE_APP)) {
-            return SIZE_CHANGES_SUPPORTED_OVERRIDE;
-        }
-
-        return SIZE_CHANGES_UNSUPPORTED_METADATA;
-    }
-
-    /**
      * Returns if the activity should never be sandboxed to the activity window bounds.
      * @hide
      */
@@ -1727,8 +1893,7 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
      * @hide
      */
     public boolean isChangeEnabled(long changeId) {
-        return CompatChanges.isChangeEnabled(changeId, applicationInfo.packageName,
-                UserHandle.getUserHandleForUid(applicationInfo.uid));
+        return applicationInfo.isChangeEnabled(changeId);
     }
 
     /** @hide */
@@ -1801,6 +1966,32 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
         return isChangeEnabled(CHECK_MIN_WIDTH_HEIGHT_FOR_MULTI_WINDOW);
     }
 
+    /**
+     * Returns whether the activity will set the
+     * {@link R.styleable.AndroidManifestActivity_enableOnBackInvokedCallback} attribute.
+     *
+     * @hide
+     */
+    public boolean hasOnBackInvokedCallbackEnabled() {
+        return (privateFlags & (PRIVATE_FLAG_ENABLE_ON_BACK_INVOKED_CALLBACK
+                | PRIVATE_FLAG_DISABLE_ON_BACK_INVOKED_CALLBACK)) != 0;
+    }
+
+    /**
+     * Returns whether the activity will use the {@link android.window.OnBackInvokedCallback}
+     * navigation system instead of the {@link android.view.KeyEvent#KEYCODE_BACK} and related
+     * callbacks.
+     *
+     * Valid when the {@link R.styleable.AndroidManifestActivity_enableOnBackInvokedCallback}
+     * attribute has been set, or it won't indicate if the activity should use the
+     * navigation system and the {@link hasOnBackInvokedCallbackEnabled} will return false.
+     * @hide
+     */
+    public boolean isOnBackInvokedCallbackEnabled() {
+        return hasOnBackInvokedCallbackEnabled()
+                && (privateFlags & PRIVATE_FLAG_ENABLE_ON_BACK_INVOKED_CALLBACK) != 0;
+    }
+
     public void dump(Printer pw, String prefix) {
         dump(pw, prefix, DUMP_FLAG_ALL);
     }
@@ -1857,6 +2048,14 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
         if (mKnownActivityEmbeddingCerts != null) {
             pw.println(prefix + "knownActivityEmbeddingCerts=" + mKnownActivityEmbeddingCerts);
         }
+        if (requiredDisplayCategory != null) {
+            pw.println(prefix + "requiredDisplayCategory=" + requiredDisplayCategory);
+        }
+        if ((dumpFlags & DUMP_FLAG_DETAILS) != 0) {
+            pw.println(prefix + "requireContentUriPermissionFromCaller="
+                    + requiredContentUriPermissionToFullString(
+                            requireContentUriPermissionFromCaller));
+        }
         super.dumpBack(pw, prefix, dumpFlags);
     }
 
@@ -1903,6 +2102,8 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
         dest.writeFloat(mMinAspectRatio);
         dest.writeBoolean(supportsSizeChanges);
         sForStringSet.parcel(mKnownActivityEmbeddingCerts, dest, flags);
+        dest.writeString8(requiredDisplayCategory);
+        dest.writeInt(requireContentUriPermissionFromCaller);
     }
 
     /**
@@ -2028,6 +2229,8 @@ public class ActivityInfo extends ComponentInfo implements Parcelable {
         if (mKnownActivityEmbeddingCerts.isEmpty()) {
             mKnownActivityEmbeddingCerts = null;
         }
+        requiredDisplayCategory = source.readString8();
+        requireContentUriPermissionFromCaller = source.readInt();
     }
 
     /**

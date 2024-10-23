@@ -44,7 +44,6 @@ import android.view.SurfaceControl.Transaction;
 import android.view.WindowManager;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.internal.protolog.ProtoLogImpl;
 import com.android.internal.protolog.common.ProtoLog;
 import com.android.internal.util.FastPrintWriter;
 import com.android.server.wm.SurfaceAnimator.AnimationType;
@@ -73,6 +72,7 @@ class RemoteAnimationController implements DeathRecipient {
     final ArrayList<NonAppWindowAnimationAdapter> mPendingNonAppAnimations = new ArrayList<>();
     private final Handler mHandler;
     private final Runnable mTimeoutRunnable = () -> cancelAnimation("timeoutRunnable");
+    private boolean mIsFinishing;
 
     private FinishedCallback mFinishedCallback;
     private final boolean mIsActivityEmbedding;
@@ -209,7 +209,7 @@ class RemoteAnimationController implements DeathRecipient {
                 Slog.e(TAG, "Failed to start remote animation", e);
                 onAnimationFinished();
             }
-            if (ProtoLogImpl.isEnabled(WM_DEBUG_REMOTE_ANIMATIONS)) {
+            if (ProtoLog.isEnabled(WM_DEBUG_REMOTE_ANIMATIONS)) {
                 ProtoLog.d(WM_DEBUG_REMOTE_ANIMATIONS, "startAnimation(): Notify animation start:");
                 writeStartDebugStatement();
             }
@@ -303,9 +303,9 @@ class RemoteAnimationController implements DeathRecipient {
                 mPendingAnimations.size());
         mHandler.removeCallbacks(mTimeoutRunnable);
         synchronized (mService.mGlobalLock) {
+            mIsFinishing = true;
             unlinkToDeathOfRunner();
             releaseFinishedCallback();
-            mService.openSurfaceTransaction();
             try {
                 ProtoLog.d(WM_DEBUG_REMOTE_ANIMATIONS,
                         "onAnimationFinished(): Notify animation finished:");
@@ -346,7 +346,7 @@ class RemoteAnimationController implements DeathRecipient {
                 Slog.e(TAG, "Failed to finish remote animation", e);
                 throw e;
             } finally {
-                mService.closeSurfaceTransaction("RemoteAnimationController#finished");
+                mIsFinishing = false;
             }
             // Reset input for all activities when the remote animation is finished.
             final Consumer<ActivityRecord> updateActivities =
@@ -359,15 +359,8 @@ class RemoteAnimationController implements DeathRecipient {
 
     private void invokeAnimationCancelled(String reason) {
         ProtoLog.d(WM_DEBUG_REMOTE_ANIMATIONS, "cancelAnimation(): reason=%s", reason);
-        final boolean isKeyguardOccluded = mDisplayContent.isKeyguardOccluded();
-
         try {
-            EventLogTags.writeWmSetKeyguardOccluded(
-                    isKeyguardOccluded ? 1 : 0,
-                    0 /* animate */,
-                    0 /* transit */,
-                    "onAnimationCancelled");
-            mRemoteAnimationAdapter.getRunner().onAnimationCancelled(isKeyguardOccluded);
+            mRemoteAnimationAdapter.getRunner().onAnimationCancelled();
         } catch (RemoteException e) {
             Slog.e(TAG, "Failed to notify cancel", e);
         }
@@ -592,6 +585,9 @@ class RemoteAnimationController implements DeathRecipient {
 
         @Override
         public void onAnimationCancelled(SurfaceControl animationLeash) {
+            if (mIsFinishing) {
+                return;
+            }
             if (mRecord.mAdapter == this) {
                 mRecord.mAdapter = null;
             } else {

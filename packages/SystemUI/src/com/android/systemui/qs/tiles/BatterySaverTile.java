@@ -28,7 +28,6 @@ import androidx.annotation.Nullable;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
-import com.android.systemui.R;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
@@ -36,9 +35,11 @@ import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.QSHost;
-import com.android.systemui.qs.SettingObserver;
+import com.android.systemui.qs.QsEventLogger;
+import com.android.systemui.qs.UserSettingObserver;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
+import com.android.systemui.res.R;
 import com.android.systemui.statusbar.policy.BatteryController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.util.settings.SecureSettings;
@@ -52,7 +53,7 @@ public class BatterySaverTile extends SecureQSTile<BooleanState> implements
 
     private final BatteryController mBatteryController;
     @VisibleForTesting
-    protected final SettingObserver mSetting;
+    protected final UserSettingObserver mSetting;
 
     private int mLevel;
     private boolean mPowerSave;
@@ -62,6 +63,7 @@ public class BatterySaverTile extends SecureQSTile<BooleanState> implements
     @Inject
     public BatterySaverTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -73,12 +75,12 @@ public class BatterySaverTile extends SecureQSTile<BooleanState> implements
             SecureSettings secureSettings,
             KeyguardStateController keyguardStateController
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger, keyguardStateController);
         mBatteryController = batteryController;
         mBatteryController.observe(getLifecycle(), this);
         int currentUser = host.getUserContext().getUserId();
-        mSetting = new SettingObserver(
+        mSetting = new UserSettingObserver(
                 secureSettings,
                 mHandler,
                 Secure.LOW_POWER_WARNING_ACKNOWLEDGED,
@@ -158,7 +160,6 @@ public class BatterySaverTile extends SecureQSTile<BooleanState> implements
         state.contentDescription = state.label;
         state.value = mPowerSave;
         state.expandedAccessibilityClassName = Switch.class.getName();
-        state.showRippleEffect = mSetting.getValue() == 0;
     }
 
     @Override

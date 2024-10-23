@@ -17,7 +17,6 @@
 package com.android.server.wm;
 
 import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
-import static android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR;
 
 import static com.android.internal.protolog.ProtoLogGroup.WM_DEBUG_ADD_REMOVE;
 import static com.android.internal.protolog.ProtoLogGroup.WM_DEBUG_APP_TRANSITIONS;
@@ -29,7 +28,6 @@ import static com.android.server.wm.WindowManagerDebugConfig.TAG_WM;
 import static com.android.server.wm.WindowManagerService.UPDATE_FOCUS_NORMAL;
 import static com.android.server.wm.WindowTokenProto.HASH_CODE;
 import static com.android.server.wm.WindowTokenProto.PAUSED;
-import static com.android.server.wm.WindowTokenProto.WAITING_TO_SHOW;
 import static com.android.server.wm.WindowTokenProto.WINDOW_CONTAINER;
 
 import android.annotation.CallSuper;
@@ -92,10 +90,6 @@ class WindowToken extends WindowContainer<WindowState> {
     // Is key dispatching paused for this token?
     boolean paused = false;
 
-    // Set to true when this token is in a pending transaction where it
-    // will be shown.
-    boolean waitingToShow;
-
     /** The owner has {@link android.Manifest.permission#MANAGE_APP_TOKENS} */
     final boolean mOwnerCanManageAppTokens;
 
@@ -119,24 +113,20 @@ class WindowToken extends WindowContainer<WindowState> {
         final DisplayInfo mDisplayInfo;
         final DisplayFrames mDisplayFrames;
         final Configuration mRotatedOverrideConfiguration;
-        final SeamlessRotator mRotator;
+
         /**
          * The tokens that share the same transform. Their end time of transform are the same. The
          * list should at least contain the token who creates this state.
          */
         final ArrayList<WindowToken> mAssociatedTokens = new ArrayList<>(3);
-        final ArrayList<WindowContainer<?>> mRotatedContainers = new ArrayList<>(3);
+
         boolean mIsTransforming = true;
 
         FixedRotationTransformState(DisplayInfo rotatedDisplayInfo,
-                DisplayFrames rotatedDisplayFrames, Configuration rotatedConfig,
-                int currentRotation) {
+                DisplayFrames rotatedDisplayFrames, Configuration rotatedConfig) {
             mDisplayInfo = rotatedDisplayInfo;
             mDisplayFrames = rotatedDisplayFrames;
             mRotatedOverrideConfiguration = rotatedConfig;
-            // This will use unrotate as rotate, so the new and old rotation are inverted.
-            mRotator = new SeamlessRotator(rotatedDisplayInfo.rotation, currentRotation,
-                    rotatedDisplayInfo, true /* applyFixedTransformationHint */);
         }
 
         /**
@@ -144,16 +134,48 @@ class WindowToken extends WindowContainer<WindowState> {
          * showing the window in a display with different rotation.
          */
         void transform(WindowContainer<?> container) {
-            mRotator.unrotate(container.getPendingTransaction(), container);
-            if (!mRotatedContainers.contains(container)) {
-                mRotatedContainers.add(container);
-            }
+            // The default implementation assumes shell transition is enabled, so the transform
+            // is done by getOrCreateFixedRotationLeash().
         }
 
         /**
          * Resets the transformation of the window containers which have been rotated. This should
          * be called when the window has the same rotation as display.
          */
+        void resetTransform() {
+            for (int i = mAssociatedTokens.size() - 1; i >= 0; --i) {
+                mAssociatedTokens.get(i).removeFixedRotationLeash();
+            }
+        }
+
+        /** The state may not only be used by self. Make sure to leave the influence by others. */
+        void disassociate(WindowToken token) {
+            mAssociatedTokens.remove(token);
+        }
+    }
+
+    private static class FixedRotationTransformStateLegacy extends FixedRotationTransformState {
+        final SeamlessRotator mRotator;
+        final ArrayList<WindowContainer<?>> mRotatedContainers = new ArrayList<>(3);
+
+        FixedRotationTransformStateLegacy(DisplayInfo rotatedDisplayInfo,
+                DisplayFrames rotatedDisplayFrames, Configuration rotatedConfig,
+                int currentRotation) {
+            super(rotatedDisplayInfo, rotatedDisplayFrames, rotatedConfig);
+            // This will use unrotate as rotate, so the new and old rotation are inverted.
+            mRotator = new SeamlessRotator(rotatedDisplayInfo.rotation, currentRotation,
+                    rotatedDisplayInfo, true /* applyFixedTransformationHint */);
+        }
+
+        @Override
+        void transform(WindowContainer<?> container) {
+            mRotator.unrotate(container.getPendingTransaction(), container);
+            if (!mRotatedContainers.contains(container)) {
+                mRotatedContainers.add(container);
+            }
+        }
+
+        @Override
         void resetTransform() {
             for (int i = mRotatedContainers.size() - 1; i >= 0; i--) {
                 final WindowContainer<?> c = mRotatedContainers.get(i);
@@ -164,9 +186,9 @@ class WindowToken extends WindowContainer<WindowState> {
             }
         }
 
-        /** The state may not only be used by self. Make sure to leave the influence by others. */
+        @Override
         void disassociate(WindowToken token) {
-            mAssociatedTokens.remove(token);
+            super.disassociate(token);
             mRotatedContainers.remove(token);
         }
     }
@@ -315,17 +337,6 @@ class WindowToken extends WindowContainer<WindowState> {
         return mChildren.isEmpty();
     }
 
-    WindowState getReplacingWindow() {
-        for (int i = mChildren.size() - 1; i >= 0; i--) {
-            final WindowState win = mChildren.get(i);
-            final WindowState replacing = win.getReplacingWindow();
-            if (replacing != null) {
-                return replacing;
-            }
-        }
-        return null;
-    }
-
     /** Return true if this token has a window that wants the wallpaper displayed behind it. */
     boolean windowsCanBeWallpaperTarget() {
         for (int j = mChildren.size() - 1; j >= 0; j--) {
@@ -448,14 +459,11 @@ class WindowToken extends WindowContainer<WindowState> {
         if (mFixedRotationTransformState != null) {
             mFixedRotationTransformState.disassociate(this);
         }
-        // TODO(b/233855302): Remove TaskFragment override if the DisplayContent uses the same
-        //  bounds for screenLayout calculation.
-        final Configuration overrideConfig = new Configuration(config);
-        overrideConfig.screenLayout = TaskFragment.computeScreenLayoutOverride(
-                overrideConfig.screenLayout, overrideConfig.screenWidthDp,
-                overrideConfig.screenHeightDp);
-        mFixedRotationTransformState = new FixedRotationTransformState(info, displayFrames,
-                overrideConfig, mDisplayContent.getRotation());
+        config = new Configuration(config);
+        mFixedRotationTransformState = mTransitionController.isShellTransitionsEnabled()
+                ? new FixedRotationTransformState(info, displayFrames, config)
+                : new FixedRotationTransformStateLegacy(info, displayFrames, config,
+                        mDisplayContent.getRotation());
         mFixedRotationTransformState.mAssociatedTokens.add(this);
         mDisplayContent.getDisplayPolicy().simulateLayoutDisplay(displayFrames);
         onFixedRotationStatePrepared();
@@ -505,7 +513,8 @@ class WindowToken extends WindowContainer<WindowState> {
         for (int i = mFixedRotationTransformState.mAssociatedTokens.size() - 1; i >= 0; i--) {
             final ActivityRecord r =
                     mFixedRotationTransformState.mAssociatedTokens.get(i).asActivityRecord();
-            if (r != null && r.isInTransition()) {
+            // Only care about the transition at Activity/Task level.
+            if (r != null && r.inTransitionSelfOrParent() && !r.mDisplayContent.inTransition()) {
                 return true;
             }
         }
@@ -525,14 +534,7 @@ class WindowToken extends WindowContainer<WindowState> {
         if (state == null) {
             return;
         }
-        if (!mTransitionController.isShellTransitionsEnabled()) {
-            state.resetTransform();
-        } else {
-            // Remove all the leashes
-            for (int i = state.mAssociatedTokens.size() - 1; i >= 0; --i) {
-                state.mAssociatedTokens.get(i).removeFixedRotationLeash();
-            }
-        }
+        state.resetTransform();
         // Clear the flag so if the display will be updated to the same orientation, the transform
         // won't take effect.
         state.mIsTransforming = false;
@@ -562,6 +564,7 @@ class WindowToken extends WindowContainer<WindowState> {
                 && asActivityRecord() != null && isVisible()) {
             // Trigger an activity level rotation transition.
             mTransitionController.requestTransitionIfNeeded(WindowManager.TRANSIT_CHANGE, this);
+            mTransitionController.collectVisibleChange(this);
             mTransitionController.setReady(this);
         }
         final int originalRotation = getWindowConfiguration().getRotation();
@@ -589,6 +592,8 @@ class WindowToken extends WindowContainer<WindowState> {
                 .build();
         t.setPosition(leash, mLastSurfacePosition.x, mLastSurfacePosition.y);
         t.reparent(getSurfaceControl(), leash);
+        getPendingTransaction().setFixedTransformHint(leash,
+                getWindowConfiguration().getDisplayRotation());
         mFixedRotationTransformLeash = leash;
         updateSurfaceRotation(t, rotation, mFixedRotationTransformLeash);
         return mFixedRotationTransformLeash;
@@ -606,7 +611,9 @@ class WindowToken extends WindowContainer<WindowState> {
     void removeFixedRotationLeash() {
         if (mFixedRotationTransformLeash == null) return;
         final SurfaceControl.Transaction t = getSyncTransaction();
-        t.reparent(getSurfaceControl(), getParentSurfaceControl());
+        if (mSurfaceControl != null) {
+            t.reparent(mSurfaceControl, getParentSurfaceControl());
+        }
         t.remove(mFixedRotationTransformLeash);
         mFixedRotationTransformLeash = null;
     }
@@ -632,9 +639,12 @@ class WindowToken extends WindowContainer<WindowState> {
 
     @Override
     void updateSurfacePosition(SurfaceControl.Transaction t) {
+        final ActivityRecord r = asActivityRecord();
+        if (r != null && r.isConfigurationDispatchPaused()) {
+            return;
+        }
         super.updateSurfacePosition(t);
         if (!mTransitionController.isShellTransitionsEnabled() && isFixedRotationTransforming()) {
-            final ActivityRecord r = asActivityRecord();
             final Task rootTask = r != null ? r.getRootTask() : null;
             // Don't transform the activity in PiP because the PiP task organizer will handle it.
             if (rootTask == null || !rootTask.inPinnedWindowingMode()) {
@@ -690,7 +700,6 @@ class WindowToken extends WindowContainer<WindowState> {
         final long token = proto.start(fieldId);
         super.dumpDebug(proto, WINDOW_CONTAINER, logLevel);
         proto.write(HASH_CODE, System.identityHashCode(this));
-        proto.write(WAITING_TO_SHOW, waitingToShow);
         proto.write(PAUSED, paused);
         proto.end(token);
     }
@@ -704,9 +713,6 @@ class WindowToken extends WindowContainer<WindowState> {
         super.dump(pw, prefix, dumpAll);
         pw.print(prefix); pw.print("windows="); pw.println(mChildren);
         pw.print(prefix); pw.print("windowType="); pw.print(windowType);
-        if (waitingToShow) {
-            pw.print(" waitingToShow=true");
-        }
         pw.println();
         if (hasFixedRotationTransform()) {
             pw.print(prefix);
@@ -732,17 +738,6 @@ class WindowToken extends WindowContainer<WindowState> {
     @Override
     WindowToken asWindowToken() {
         return this;
-    }
-
-    /**
-     * Return whether windows from this token can layer above the
-     * system bars, or in other words extend outside of the "Decor Frame"
-     */
-    boolean canLayerAboveSystemBars() {
-        int layer = getWindowLayerFromType();
-        int navLayer = mWmService.mPolicy.getWindowLayerFromTypeLw(TYPE_NAVIGATION_BAR,
-                mOwnerCanManageAppTokens);
-        return mOwnerCanManageAppTokens && (layer > navLayer);
     }
 
     int getWindowLayerFromType() {

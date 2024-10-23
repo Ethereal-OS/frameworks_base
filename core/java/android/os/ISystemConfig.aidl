@@ -17,6 +17,8 @@
 package android.os;
 
 import android.content.ComponentName;
+import android.os.Bundle;
+import android.content.pm.SignedPackageParcel;
 
 /**
   * Binder interface to query SystemConfig in the system server.
@@ -47,4 +49,24 @@ interface ISystemConfig {
      * @see SystemConfigManager#getEnabledComponentOverrides
      */
     List<ComponentName> getEnabledComponentOverrides(String packageName);
+
+    /**
+     * @see SystemConfigManager#getDefaultVrComponents
+     */
+    List<ComponentName> getDefaultVrComponents();
+
+    /**
+     * @see SystemConfigManager#getPreventUserDisablePackages
+     */
+    List<String> getPreventUserDisablePackages();
+
+    /**
+     * @see SystemConfigManager#getEnhancedConfirmationTrustedPackages
+     */
+    List<SignedPackageParcel> getEnhancedConfirmationTrustedPackages();
+
+    /**
+     * @see SystemConfigManager#getEnhancedConfirmationTrustedInstallers
+     */
+    List<SignedPackageParcel> getEnhancedConfirmationTrustedInstallers();
 }

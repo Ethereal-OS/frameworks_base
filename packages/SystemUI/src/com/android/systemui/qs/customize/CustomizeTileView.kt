@@ -22,17 +22,11 @@ import android.text.TextUtils
 import android.os.UserHandle
 import android.provider.Settings
 
-import com.android.systemui.plugins.qs.QSIconView
 import com.android.systemui.plugins.qs.QSTile
 import com.android.systemui.qs.tileimpl.QSTileViewImpl
 
-/**
- * Class for displaying tiles in [QSCustomizer] with the new design (labels on the side).
- */
-class CustomizeTileView(
-    context: Context,
-    icon: QSIconView
-) : QSTileViewImpl(context, icon, collapsed = false) {
+/** Class for displaying tiles in [QSCustomizer] with the new design (labels on the side). */
+class CustomizeTileView(context: Context) : QSTileViewImpl(context, collapsed = false) {
 
     var showAppLabel = false
         set(value) {

@@ -20,6 +20,7 @@ import static android.app.admin.DevicePolicyManager.DEVICE_OWNER_TYPE_DEFAULT;
 import android.annotation.Nullable;
 import android.app.admin.SystemUpdateInfo;
 import android.app.admin.SystemUpdatePolicy;
+import android.app.admin.flags.Flags;
 import android.content.ComponentName;
 import android.os.UserHandle;
 import android.util.ArrayMap;
@@ -27,11 +28,11 @@ import android.util.AtomicFile;
 import android.util.IndentingPrintWriter;
 import android.util.Log;
 import android.util.Slog;
-import android.util.TypedXmlPullParser;
-import android.util.TypedXmlSerializer;
 import android.util.Xml;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 
 import libcore.io.IoUtils;
 
@@ -66,6 +67,7 @@ class OwnersData {
     private static final String TAG_DEVICE_OWNER_TYPE = "device-owner-type";
     private static final String TAG_DEVICE_OWNER_PROTECTED_PACKAGES =
             "device-owner-protected-packages";
+    private static final String TAG_POLICY_ENGINE_MIGRATION = "policy-engine-migration";
 
     private static final String ATTR_NAME = "name";
     private static final String ATTR_PACKAGE = "package";
@@ -83,6 +85,11 @@ class OwnersData {
     private static final String ATTR_PROFILE_OWNER_OF_ORG_OWNED_DEVICE =
             "isPoOrganizationOwnedDevice";
     private static final String ATTR_DEVICE_OWNER_TYPE_VALUE = "value";
+
+    private static final String ATTR_MIGRATED_TO_POLICY_ENGINE = "migratedToPolicyEngine";
+    private static final String ATTR_SECURITY_LOG_MIGRATED = "securityLogMigrated";
+
+    private static final String ATTR_MIGRATED_POST_UPGRADE = "migratedPostUpgrade";
 
     // Internal state for the device owner package.
     OwnerInfo mDeviceOwner;
@@ -108,6 +115,11 @@ class OwnersData {
     @Nullable
     SystemUpdateInfo mSystemUpdateInfo;
     private final PolicyPathProvider mPathProvider;
+
+    boolean mMigratedToPolicyEngine = false;
+    boolean mSecurityLoggingMigrated = false;
+
+    boolean mPoliciesMigratedPostUpdate = false;
 
     OwnersData(PolicyPathProvider pathProvider) {
         mPathProvider = pathProvider;
@@ -345,8 +357,7 @@ class OwnersData {
 
         @Override
         boolean shouldWrite() {
-            return (mDeviceOwner != null) || (mSystemUpdatePolicy != null)
-                    || (mSystemUpdateInfo != null);
+            return true;
         }
 
         @Override
@@ -389,6 +400,15 @@ class OwnersData {
                 }
                 out.endTag(null, TAG_FREEZE_PERIOD_RECORD);
             }
+
+            out.startTag(null, TAG_POLICY_ENGINE_MIGRATION);
+            out.attributeBoolean(null, ATTR_MIGRATED_TO_POLICY_ENGINE, mMigratedToPolicyEngine);
+            out.attributeBoolean(null, ATTR_MIGRATED_POST_UPGRADE, mPoliciesMigratedPostUpdate);
+            if (Flags.securityLogV2Enabled()) {
+                out.attributeBoolean(null, ATTR_SECURITY_LOG_MIGRATED, mSecurityLoggingMigrated);
+            }
+            out.endTag(null, TAG_POLICY_ENGINE_MIGRATION);
+
         }
 
         @Override
@@ -444,6 +464,15 @@ class OwnersData {
                     }
                     mDeviceOwnerProtectedPackages.put(packageName, protectedPackages);
                     break;
+                case TAG_POLICY_ENGINE_MIGRATION:
+                    mMigratedToPolicyEngine = parser.getAttributeBoolean(
+                            null, ATTR_MIGRATED_TO_POLICY_ENGINE, false);
+                    mPoliciesMigratedPostUpdate = parser.getAttributeBoolean(
+                            null, ATTR_MIGRATED_POST_UPGRADE, false);
+                    mSecurityLoggingMigrated = Flags.securityLogV2Enabled()
+                            && parser.getAttributeBoolean(null, ATTR_SECURITY_LOG_MIGRATED, false);
+
+                    break;
                 default:
                     Slog.e(TAG, "Unexpected tag: " + tag);
                     return false;
@@ -493,16 +522,14 @@ class OwnersData {
     }
 
     static class OwnerInfo {
-        public final String name;
         public final String packageName;
         public final ComponentName admin;
         public String remoteBugreportUri;
         public String remoteBugreportHash;
         public boolean isOrganizationOwnedDevice;
 
-        OwnerInfo(String name, ComponentName admin, String remoteBugreportUri,
+        OwnerInfo(ComponentName admin, String remoteBugreportUri,
                 String remoteBugreportHash, boolean isOrganizationOwnedDevice) {
-            this.name = name;
             this.admin = admin;
             this.packageName = admin.getPackageName();
             this.remoteBugreportUri = remoteBugreportUri;
@@ -512,9 +539,6 @@ class OwnersData {
 
         public void writeToXml(TypedXmlSerializer out, String tag) throws IOException {
             out.startTag(null, tag);
-            if (name != null) {
-                out.attribute(null, ATTR_NAME, name);
-            }
             if (admin != null) {
                 out.attribute(null, ATTR_COMPONENT_NAME, admin.flattenToString());
             }
@@ -532,7 +556,6 @@ class OwnersData {
         }
 
         public static OwnerInfo readFromXml(TypedXmlPullParser parser) {
-            final String name = parser.getAttributeValue(null, ATTR_NAME);
             final String componentName = parser.getAttributeValue(null, ATTR_COMPONENT_NAME);
             final String remoteBugreportUri =
                     parser.getAttributeValue(null, ATTR_REMOTE_BUGREPORT_URI);
@@ -556,13 +579,11 @@ class OwnersData {
                 return null;
             }
 
-            return new OwnerInfo(
-                    name, admin, remoteBugreportUri, remoteBugreportHash, isOrgOwnedDevice);
+            return new OwnerInfo(admin, remoteBugreportUri, remoteBugreportHash, isOrgOwnedDevice);
         }
 
         public void dump(IndentingPrintWriter pw) {
             pw.println("admin=" + admin);
-            pw.println("name=" + name);
             pw.println("package=" + packageName);
             pw.println("isOrganizationOwnedDevice=" + isOrganizationOwnedDevice);
         }

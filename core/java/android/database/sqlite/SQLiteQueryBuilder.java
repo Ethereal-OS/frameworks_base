@@ -48,6 +48,15 @@ import java.util.regex.Pattern;
 /**
  * This is a convenience class that helps build SQL queries to be sent to
  * {@link SQLiteDatabase} objects.
+ * <p>
+ * This class is often used to compose a SQL query from client-supplied fragments.  Best practice
+ * to protect against invalid or illegal SQL is to set the following:
+ * <ul>
+ * <li>{@link #setStrict} true.
+ * <li>{@link #setProjectionMap} with the list of queryable columns.
+ * <li>{@link #setStrictColumns} true.
+ * <li>{@link #setStrictGrammar} true.
+ * </ul>
  */
 public class SQLiteQueryBuilder {
     private static final String TAG = "SQLiteQueryBuilder";
@@ -583,7 +592,7 @@ public class SQLiteQueryBuilder {
 
         final String[] sqlArgs = selectionArgs;
         if (Log.isLoggable(TAG, Log.DEBUG)) {
-            if (Build.IS_ENG) {
+            if (Build.IS_DEBUGGABLE) {
                 Log.d(TAG, sql + " with args " + Arrays.toString(sqlArgs));
             } else {
                 Log.d(TAG, sql);
@@ -620,7 +629,7 @@ public class SQLiteQueryBuilder {
             sqlArgs[i] = rawValues.valueAt(i);
         }
         if (Log.isLoggable(TAG, Log.DEBUG)) {
-            if (Build.IS_ENG) {
+            if (Build.IS_DEBUGGABLE) {
                 Log.d(TAG, sql + " with args " + Arrays.toString(sqlArgs));
             } else {
                 Log.d(TAG, sql);
@@ -696,7 +705,7 @@ public class SQLiteQueryBuilder {
             }
         }
         if (Log.isLoggable(TAG, Log.DEBUG)) {
-            if (Build.IS_ENG) {
+            if (Build.IS_DEBUGGABLE) {
                 Log.d(TAG, sql + " with args " + Arrays.toString(sqlArgs));
             } else {
                 Log.d(TAG, sql);
@@ -756,7 +765,7 @@ public class SQLiteQueryBuilder {
 
         final String[] sqlArgs = selectionArgs;
         if (Log.isLoggable(TAG, Log.DEBUG)) {
-            if (Build.IS_ENG) {
+            if (Build.IS_DEBUGGABLE) {
                 Log.d(TAG, sql + " with args " + Arrays.toString(sqlArgs));
             } else {
                 Log.d(TAG, sql);

@@ -60,7 +60,10 @@ void Gnss_class_init_once(JNIEnv* env, jclass& clazz);
  */
 class GnssCallbackAidl : public hardware::gnss::BnGnssCallback {
 public:
+    GnssCallbackAidl(int version) : interfaceVersion(version){};
     binder::Status gnssSetCapabilitiesCb(const int capabilities) override;
+    binder::Status gnssSetSignalTypeCapabilitiesCb(
+            const std::vector<android::hardware::gnss::GnssSignalType>& signalTypes) override;
     binder::Status gnssStatusCb(const GnssStatusValue status) override;
     binder::Status gnssSvStatusCb(const std::vector<GnssSvInfo>& svInfoList) override;
     binder::Status gnssLocationCb(const hardware::gnss::GnssLocation& location) override;
@@ -71,6 +74,9 @@ public:
     binder::Status gnssRequestTimeCb() override;
     binder::Status gnssRequestLocationCb(const bool independentFromGnss,
                                          const bool isUserEmergency) override;
+
+private:
+    const int interfaceVersion;
 };
 
 /*

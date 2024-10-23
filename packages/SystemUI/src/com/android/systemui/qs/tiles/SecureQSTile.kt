@@ -17,7 +17,6 @@ package com.android.systemui.qs.tiles
 
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.view.View
 import com.android.systemui.plugins.qs.QSTile
 import com.android.systemui.qs.QSHost
@@ -26,16 +25,17 @@ import com.android.internal.logging.MetricsLogger
 import com.android.systemui.plugins.ActivityStarter
 import com.android.systemui.plugins.statusbar.StatusBarStateController
 import com.android.systemui.qs.logging.QSLogger
-import com.android.systemui.statusbar.policy.KeyguardStateController
 import com.android.systemui.qs.tileimpl.QSTileImpl
+import com.android.systemui.qs.QsEventLogger;
+import com.android.systemui.statusbar.policy.KeyguardStateController
 
-internal abstract class SecureQSTile<TState : QSTile.State> protected constructor(
-    host: QSHost, backgroundLooper: Looper, mainHandler: Handler, falsingManager: FalsingManager,
-    metricsLogger: MetricsLogger, statusBarStateController: StatusBarStateController,
+abstract class SecureQSTile<TState : QSTile.State> protected constructor(
+    host: QSHost, uiEventLogger: QsEventLogger, backgroundLooper: Looper, mainHandler: Handler,
+    falsingManager: FalsingManager, metricsLogger: MetricsLogger, statusBarStateController: StatusBarStateController,
     activityStarter: ActivityStarter, qsLogger: QSLogger,
-    private val mKeyguard: KeyguardStateController,
+    private val keyguardController: KeyguardStateController,
 ) : QSTileImpl<TState>(
-    host, backgroundLooper, mainHandler, falsingManager, metricsLogger, statusBarStateController,
+    host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger, statusBarStateController,
     activityStarter, qsLogger,
 ) {
     abstract override fun newTileState(): TState
@@ -43,9 +43,7 @@ internal abstract class SecureQSTile<TState : QSTile.State> protected constructo
     protected abstract fun handleClick(view: View?, keyguardShowing: Boolean)
 
     override fun handleClick(view: View?) {
-        val enabled: Boolean = Settings.Secure.getInt(mContext.getContentResolver(),
-            Settings.Secure.QSTILE_REQUIRES_UNLOCKING, 1) == 1
-        handleClick(view, mKeyguard.isMethodSecure && mKeyguard.isShowing && enabled)
+        handleClick(view, keyguardController.isMethodSecure && keyguardController.isShowing)
     }
 
     protected fun checkKeyguard(view: View?, keyguardShowing: Boolean): Boolean {

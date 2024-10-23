@@ -53,6 +53,7 @@ import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.phone.DozeParameters;
 import com.android.systemui.statusbar.policy.DevicePostureController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
+import com.android.systemui.user.domain.interactor.SelectedUserInteractor;
 import com.android.systemui.util.concurrency.FakeExecutor;
 import com.android.systemui.util.concurrency.FakeThreadFactory;
 import com.android.systemui.util.sensors.AsyncSensorManager;
@@ -101,6 +102,8 @@ public class DozeTriggersTest extends SysuiTestCase {
     @Mock
     private UserTracker mUserTracker;
     @Mock
+    private SelectedUserInteractor mSelectedUserInteractor;
+    @Mock
     private SessionTracker mSessionTracker;
 
     private DozeTriggers mTriggers;
@@ -134,7 +137,7 @@ public class DozeTriggersTest extends SysuiTestCase {
                 asyncSensorManager, wakeLock, mDockManager, mProximitySensor,
                 mProximityCheck, mDozeLog, mBroadcastDispatcher, new FakeSettings(),
                 mAuthController, mUiEventLogger, mSessionTracker, mKeyguardStateController,
-                mDevicePostureController, mUserTracker);
+                mDevicePostureController, mUserTracker, mSelectedUserInteractor);
         mTriggers.setDozeMachine(mMachine);
         waitForSensorManager();
     }
@@ -298,6 +301,22 @@ public class DozeTriggersTest extends SysuiTestCase {
 
         // THEN wakeup
         verify(mMachine).wakeUp(DozeLog.REASON_SENSOR_PICKUP);
+    }
+
+    @Test
+    public void test_onSensor_tap() {
+        mTriggers.onSensor(DozeLog.REASON_SENSOR_TAP, 100, 200, null);
+
+        verify(mHost).onSlpiTap(100, 200);
+        verify(mMachine).wakeUp(DozeLog.REASON_SENSOR_TAP);
+    }
+
+    @Test
+    public void test_onSensor_double_tap() {
+        mTriggers.onSensor(DozeLog.REASON_SENSOR_DOUBLE_TAP, 100, 200, null);
+
+        verify(mHost).onSlpiTap(100, 200);
+        verify(mMachine).wakeUp(DozeLog.REASON_SENSOR_DOUBLE_TAP);
     }
 
     @Test

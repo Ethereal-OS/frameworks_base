@@ -37,6 +37,9 @@
 // Android-specific addition that is used to show when frames began in systrace
 EGLAPI void EGLAPIENTRY eglBeginFrame(EGLDisplay dpy, EGLSurface surface);
 
+static constexpr auto P3_XRB = static_cast<android_dataspace>(
+        ADATASPACE_STANDARD_DCI_P3 | ADATASPACE_TRANSFER_SRGB | ADATASPACE_RANGE_EXTENDED);
+
 namespace android {
 namespace uirenderer {
 namespace renderthread {
@@ -423,6 +426,7 @@ Result<EGLSurface, EGLint> EglManager::createSurface(EGLNativeWindowType window,
     EGLint attribs[] = {EGL_NONE, EGL_NONE, EGL_NONE};
 
     EGLConfig config = mEglConfig;
+    bool overrideWindowDataSpaceForHdr = false;
     if (colorMode == ColorMode::A8) {
         // A8 doesn't use a color space
         if (!mEglConfigA8) {
@@ -437,18 +441,35 @@ Result<EGLSurface, EGLint> EglManager::createSurface(EGLNativeWindowType window,
             colorMode = ColorMode::Default;
         }
 
-        if (DeviceInfo::get()->getWideColorType() == kRGBA_F16_SkColorType) {
+        // TODO: maybe we want to get rid of the WCG check if overlay properties just works?
+        const bool canUseFp16 = DeviceInfo::get()->isSupportFp16ForHdr() ||
+                                DeviceInfo::get()->getWideColorType() == kRGBA_F16_SkColorType;
+
+        if (canUseFp16) {
             if (mEglConfigF16 == EGL_NO_CONFIG_KHR) {
                 colorMode = ColorMode::Default;
             } else {
                 config = mEglConfigF16;
             }
         }
+
         if (EglExtensions.glColorSpace) {
             attribs[0] = EGL_GL_COLORSPACE_KHR;
             switch (colorMode) {
                 case ColorMode::Default:
                     attribs[1] = EGL_GL_COLORSPACE_LINEAR_KHR;
+                    break;
+                case ColorMode::Hdr:
+                    if (canUseFp16) {
+                        attribs[1] = EGL_GL_COLORSPACE_SCRGB_EXT;
+                        break;
+                        // No fp16 support so fallthrough to HDR10
+                    }
+                // We don't have an EGL colorspace for extended range P3 that's used for HDR
+                // So override it after configuring the EGL context
+                case ColorMode::Hdr10:
+                    overrideWindowDataSpaceForHdr = true;
+                    attribs[1] = EGL_GL_COLORSPACE_DISPLAY_P3_PASSTHROUGH_EXT;
                     break;
                 case ColorMode::WideColorGamut: {
                     skcms_Matrix3x3 colorGamut;
@@ -466,14 +487,6 @@ Result<EGLSurface, EGLint> EglManager::createSurface(EGLNativeWindowType window,
                     }
                     break;
                 }
-                case ColorMode::Hdr:
-                    config = mEglConfigF16;
-                    attribs[1] = EGL_GL_COLORSPACE_BT2020_PQ_EXT;
-                    break;
-                case ColorMode::Hdr10:
-                    config = mEglConfig1010102;
-                    attribs[1] = EGL_GL_COLORSPACE_BT2020_PQ_EXT;
-                    break;
                 case ColorMode::A8:
                     LOG_ALWAYS_FATAL("Unreachable: A8 doesn't use a color space");
                     break;
@@ -491,6 +504,14 @@ Result<EGLSurface, EGLint> EglManager::createSurface(EGLNativeWindowType window,
                                              EGL_BUFFER_DESTROYED) == EGL_FALSE,
                             "Failed to set swap behavior to destroyed for window %p, eglErr = %s",
                             (void*)window, eglErrorString());
+    }
+
+    if (overrideWindowDataSpaceForHdr) {
+        // This relies on knowing that EGL will not re-set the dataspace after the call to
+        // eglCreateWindowSurface. Since the handling of the colorspace extension is largely
+        // implemented in libEGL in the platform, we can safely assume this is the case
+        int32_t err = ANativeWindow_setBuffersDataSpace(window, P3_XRB);
+        LOG_ALWAYS_FATAL_IF(err, "Failed to ANativeWindow_setBuffersDataSpace %d", err);
     }
 
     return surface;

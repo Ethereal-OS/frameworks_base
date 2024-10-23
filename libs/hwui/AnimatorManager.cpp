@@ -70,12 +70,14 @@ void AnimatorManager::setAnimationHandle(AnimationHandle* handle) {
 void AnimatorManager::pushStaging() {
     if (mNewAnimators.size()) {
         if (CC_UNLIKELY(!mAnimationHandle)) {
+            ALOGW("Trying to start new animators on %p (%s) without an animation handle!", &mParent,
+                  mParent.getName());
             return;
         }
 
         // Only add new animators that are not already in the mAnimators list
         for (auto& anim : mNewAnimators) {
-            if (anim && anim->target() != &mParent) {
+            if (anim->target() != &mParent) {
                 mAnimators.push_back(std::move(anim));
             }
         }
@@ -84,14 +86,12 @@ void AnimatorManager::pushStaging() {
 
     if (mCancelAllAnimators) {
         for (auto& animator : mAnimators) {
-            if (animator)
-                animator->forceEndNow(mAnimationHandle->context());
+            animator->forceEndNow(mAnimationHandle->context());
         }
         mCancelAllAnimators = false;
     } else {
         for (auto& animator : mAnimators) {
-            if (animator)
-                animator->pushStaging(mAnimationHandle->context());
+            animator->pushStaging(mAnimationHandle->context());
         }
     }
 }

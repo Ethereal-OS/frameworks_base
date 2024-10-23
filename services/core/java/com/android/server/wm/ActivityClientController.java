@@ -17,16 +17,28 @@
 package com.android.server.wm;
 
 import static android.Manifest.permission.CONTROL_REMOTE_APP_TRANSITION_ANIMATIONS;
+import static android.app.Activity.FULLSCREEN_MODE_REQUEST_ENTER;
+import static android.app.Activity.FULLSCREEN_MODE_REQUEST_EXIT;
+import static android.app.ActivityOptions.ANIM_SCENE_TRANSITION;
 import static android.app.ActivityTaskManager.INVALID_TASK_ID;
+import static android.app.ActivityTaskManager.INVALID_WINDOWING_MODE;
+import static android.app.FullscreenRequestHandler.REMOTE_CALLBACK_RESULT_KEY;
+import static android.app.FullscreenRequestHandler.RESULT_APPROVED;
+import static android.app.FullscreenRequestHandler.RESULT_FAILED_NOT_IN_FULLSCREEN_WITH_HISTORY;
+import static android.app.FullscreenRequestHandler.RESULT_FAILED_NOT_TOP_FOCUSED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FREEFORM;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
+import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
 import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
+import static android.content.pm.PackageManager.PERMISSION_DENIED;
+import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 import static android.os.Process.INVALID_UID;
 import static android.os.Process.SYSTEM_UID;
 import static android.os.Trace.TRACE_TAG_WINDOW_MANAGER;
 import static android.service.voice.VoiceInteractionSession.SHOW_SOURCE_APPLICATION;
 import static android.view.Display.DEFAULT_DISPLAY;
 import static android.view.Display.INVALID_DISPLAY;
+import static android.view.WindowManager.TRANSIT_CHANGE;
 import static android.view.WindowManager.TRANSIT_TO_BACK;
 import static android.view.WindowManager.TRANSIT_TO_FRONT;
 
@@ -37,6 +49,7 @@ import static com.android.server.wm.ActivityRecord.State.DESTROYING;
 import static com.android.server.wm.ActivityRecord.State.PAUSING;
 import static com.android.server.wm.ActivityRecord.State.RESTARTING_PROCESS;
 import static com.android.server.wm.ActivityRecord.State.RESUMED;
+import static com.android.server.wm.ActivityRecord.State.STOPPING;
 import static com.android.server.wm.ActivityTaskManagerDebugConfig.DEBUG_ALL;
 import static com.android.server.wm.ActivityTaskManagerDebugConfig.DEBUG_SWITCH;
 import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_ATM;
@@ -44,6 +57,7 @@ import static com.android.server.wm.ActivityTaskManagerDebugConfig.TAG_WITH_CLAS
 import static com.android.server.wm.ActivityTaskManagerService.RELAUNCH_REASON_NONE;
 import static com.android.server.wm.ActivityTaskManagerService.TAG_SWITCH;
 import static com.android.server.wm.ActivityTaskManagerService.enforceNotIsolatedCaller;
+import static com.android.window.flags.Flags.allowDisableActivityRecordInputSink;
 
 import android.Manifest;
 import android.annotation.ColorInt;
@@ -52,25 +66,27 @@ import android.annotation.Nullable;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
+import android.app.FullscreenRequestHandler;
 import android.app.IActivityClientController;
 import android.app.ICompatCameraControlCallback;
 import android.app.IRequestFinishCallback;
 import android.app.PictureInPictureParams;
 import android.app.PictureInPictureUiState;
-import android.app.servertransaction.ClientTransaction;
+import android.app.compat.CompatChanges;
 import android.app.servertransaction.EnterPipRequestedItem;
 import android.app.servertransaction.PipStateTransactionItem;
+import android.compat.annotation.ChangeId;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManagerInternal;
-import android.content.pm.ParceledListSlice;
-import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.IRemoteCallback;
 import android.os.Parcel;
 import android.os.PersistableBundle;
 import android.os.RemoteException;
@@ -90,7 +106,8 @@ import com.android.internal.protolog.common.ProtoLog;
 import com.android.server.LocalServices;
 import com.android.server.Watchdog;
 import com.android.server.pm.KnownPackages;
-import com.android.server.pm.parsing.pkg.AndroidPackage;
+import com.android.server.pm.pkg.AndroidPackage;
+import com.android.server.uri.GrantUri;
 import com.android.server.uri.NeededUriGrants;
 import com.android.server.utils.quota.Categorizer;
 import com.android.server.utils.quota.Category;
@@ -119,6 +136,19 @@ class ActivityClientController extends IActivityClientController.Stub {
 
     /** Wrapper around VoiceInteractionServiceManager. */
     private AssistUtils mAssistUtils;
+
+    /**
+     * Grants access to the launching app's identity if the app opted-in to sharing its identity
+     * by launching this activity with an instance of {@link android.app.ActivityOptions} on which
+     * {@link android.app.ActivityOptions#setShareIdentityEnabled(boolean)} was invoked with a
+     * value of {@code true}, or if the launched activity's uid is the same as the launching
+     * app's. When this change is enabled and one of these requirements is met, the activity
+     * can access the launching app's uid and package name with {@link
+     * android.app.Activity#getLaunchedFromUid()} and {@link
+     * android.app.Activity#getLaunchedFromPackage()}, respectively.
+     */
+    @ChangeId
+    public static final long ACCESS_SHARED_IDENTITY = 259743961L;
 
     ActivityClientController(ActivityTaskManagerService service) {
         mService = service;
@@ -224,6 +254,11 @@ class ActivityClientController extends IActivityClientController.Stub {
             Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, "activityStopped");
             r = ActivityRecord.isInRootTaskLocked(token);
             if (r != null) {
+                if (!r.isState(STOPPING, RESTARTING_PROCESS)
+                        && mTaskSupervisor.hasScheduledRestartTimeouts(r)) {
+                    // Recover the restarting state which was replaced by other lifecycle changes.
+                    r.setState(RESTARTING_PROCESS, "continue-restart");
+                }
                 if (r.attachedToProcess() && r.isState(RESTARTING_PROCESS)) {
                     // The activity was requested to restart from
                     // {@link #restartActivityProcessIfVisible}.
@@ -332,8 +367,9 @@ class ActivityClientController extends IActivityClientController.Stub {
             synchronized (mGlobalLock) {
                 final int taskId = ActivityRecord.getTaskForActivityLocked(token, !nonRoot);
                 final Task task = mService.mRootWindowContainer.anyTaskForId(taskId);
-                if (task != null) {
-                    return ActivityRecord.getRootTask(token).moveTaskToBack(task);
+                final Task rootTask = ActivityRecord.getRootTask(token);
+                if (task != null && rootTask != null) {
+                    return rootTask.moveTaskToBack(task);
                 }
             }
         } finally {
@@ -472,6 +508,8 @@ class ActivityClientController extends IActivityClientController.Stub {
                 final boolean res;
                 final boolean finishWithRootActivity =
                         finishTask == Activity.FINISH_TASK_WITH_ROOT_ACTIVITY;
+                mTaskSupervisor.getBackgroundActivityLaunchController()
+                        .onActivityRequestedFinishing(r);
                 if (finishTask == Activity.FINISH_TASK_WITH_ACTIVITY
                         || (finishWithRootActivity && r == rootR)) {
                     // If requested, remove the task that is associated to this activity only if it
@@ -480,7 +518,8 @@ class ActivityClientController extends IActivityClientController.Stub {
                     // keep backwards compatibility we remove the task from recents when finishing
                     // task with root activity.
                     mTaskSupervisor.removeTask(tr, false /*killProcess*/,
-                            finishWithRootActivity, "finish-activity");
+                            finishWithRootActivity, "finish-activity", r.getUid(), r.getPid(),
+                            r.info.name);
                     res = true;
                     // Explicitly dismissing the activity so reset its relaunch flag.
                     r.mRelaunchReason = RELAUNCH_REASON_NONE;
@@ -595,7 +634,15 @@ class ActivityClientController extends IActivityClientController.Stub {
     @Override
     public int getTaskForActivity(IBinder token, boolean onlyRoot) {
         synchronized (mGlobalLock) {
-            return ActivityRecord.getTaskForActivityLocked(token, onlyRoot);
+            final ActivityRecord r = ActivityRecord.forTokenLocked(token);
+            if (r == null) {
+                return INVALID_TASK_ID;
+            }
+            final Task task = r.getTask();
+            if (onlyRoot) {
+                return task.getRootActivity() == r ? task.mTaskId : INVALID_TASK_ID;
+            }
+            return task.mTaskId;
         }
     }
 
@@ -661,29 +708,85 @@ class ActivityClientController extends IActivityClientController.Stub {
 
     @Override
     public int getLaunchedFromUid(IBinder token) {
-        if (!canGetLaunchedFrom()) {
-            return INVALID_UID;
-        }
-        synchronized (mGlobalLock) {
-            final ActivityRecord r = ActivityRecord.forTokenLocked(token);
-            return r != null ? r.launchedFromUid : INVALID_UID;
-        }
+        return getUid(token, /* callerToken */ null, /* isActivityCallerCall */ false);
     }
 
     @Override
     public String getLaunchedFromPackage(IBinder token) {
-        if (!canGetLaunchedFrom()) {
-            return null;
-        }
-        synchronized (mGlobalLock) {
-            final ActivityRecord r = ActivityRecord.forTokenLocked(token);
-            return r != null ? r.launchedFromPackage : null;
-        }
+        return getPackage(token, /* callerToken */ null, /* isActivityCallerCall */ false);
     }
 
-    /** Whether the caller can get the package or uid that launched its activity. */
-    private boolean canGetLaunchedFrom() {
+    @Override
+    public int getActivityCallerUid(IBinder activityToken, IBinder callerToken) {
+        return getUid(activityToken, callerToken, /* isActivityCallerCall */ true);
+    }
+
+    @Override
+    public String getActivityCallerPackage(IBinder activityToken, IBinder callerToken) {
+        return getPackage(activityToken, callerToken, /* isActivityCallerCall */ true);
+    }
+
+    private int getUid(IBinder activityToken, IBinder callerToken, boolean isActivityCallerCall) {
         final int uid = Binder.getCallingUid();
+        final boolean isInternalCaller = isInternalCallerGetLaunchedFrom(uid);
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.forTokenLocked(activityToken);
+            if (r != null && (isInternalCaller || canGetLaunchedFromLocked(uid, r, callerToken,
+                    isActivityCallerCall)) && isValidCaller(r, callerToken, isActivityCallerCall)) {
+                return isActivityCallerCall ? r.getCallerUid(callerToken) : r.launchedFromUid;
+            }
+        }
+        return INVALID_UID;
+    }
+
+    private String getPackage(IBinder activityToken, IBinder callerToken,
+            boolean isActivityCallerCall) {
+        final int uid = Binder.getCallingUid();
+        final boolean isInternalCaller = isInternalCallerGetLaunchedFrom(uid);
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.forTokenLocked(activityToken);
+            if (r != null && (isInternalCaller || canGetLaunchedFromLocked(uid, r, callerToken,
+                    isActivityCallerCall)) && isValidCaller(r, callerToken, isActivityCallerCall)) {
+                return isActivityCallerCall
+                        ? r.getCallerPackage(callerToken) : r.launchedFromPackage;
+            }
+        }
+        return null;
+    }
+
+    private boolean isValidCaller(ActivityRecord r, IBinder callerToken,
+            boolean isActivityCallerCall) {
+        return isActivityCallerCall ? r.hasCaller(callerToken) : callerToken == null;
+    }
+
+    /**
+     * @param uri This uri must NOT contain an embedded userId.
+     * @param userId The userId in which the uri is to be resolved.
+     */
+    @Override
+    public int checkActivityCallerContentUriPermission(IBinder activityToken, IBinder callerToken,
+            Uri uri, int modeFlags, int userId) {
+        // 1. Check if we have access to the URI - > throw if we don't
+        GrantUri grantUri = new GrantUri(userId, uri, modeFlags);
+        if (!mService.mUgmInternal.checkUriPermission(grantUri, Binder.getCallingUid(), modeFlags,
+                /* isFullAccessForContentUri */ true)) {
+            throw new SecurityException("You don't have access to the content URI, hence can't"
+                    + " check if the caller has access to it: " + uri);
+        }
+
+        // 2. Get the permission result for the caller
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.forTokenLocked(activityToken);
+            if (r != null) {
+                boolean granted = r.checkContentUriPermission(callerToken, grantUri, modeFlags);
+                return granted ? PERMISSION_GRANTED : PERMISSION_DENIED;
+            }
+        }
+        return PERMISSION_DENIED;
+    }
+
+    /** Whether the call to one of the getLaunchedFrom APIs is performed by an internal caller. */
+    private boolean isInternalCallerGetLaunchedFrom(int uid) {
         if (UserHandle.getAppId(uid) == SYSTEM_UID) {
             return true;
         }
@@ -698,6 +801,22 @@ class ActivityClientController extends IActivityClientController.Stub {
         final String[] installerNames = pm.getKnownPackageNames(
                 KnownPackages.PACKAGE_INSTALLER, UserHandle.getUserId(uid));
         return installerNames.length > 0 && callingPkg.getPackageName().equals(installerNames[0]);
+    }
+
+    /**
+     * Returns whether the specified {@code uid} can access the launching app's identity by
+     * verifying whether the provided {@code ActivityRecord r} has opted in to sharing its
+     * identity or if the uid of the activity matches that of the launching app.
+     */
+    private static boolean canGetLaunchedFromLocked(int uid, ActivityRecord r,
+            IBinder callerToken, boolean isActivityCallerCall) {
+        if (CompatChanges.isChangeEnabled(ACCESS_SHARED_IDENTITY, uid)) {
+            boolean isShareIdentityEnabled = isActivityCallerCall
+                    ? r.isCallerShareIdentityEnabled(callerToken) : r.mShareIdentity;
+            int callerUid = isActivityCallerCall ? r.getCallerUid(callerToken) : r.launchedFromUid;
+            return isShareIdentityEnabled || callerUid == uid;
+        }
+        return false;
     }
 
     @Override
@@ -733,20 +852,25 @@ class ActivityClientController extends IActivityClientController.Stub {
         try {
             synchronized (mGlobalLock) {
                 final ActivityRecord r = ActivityRecord.isInRootTaskLocked(token);
+                if (r == null) {
+                    return false;
+                }
                 // Create a transition if the activity is playing in case the below activity didn't
                 // commit invisible. That's because if any activity below this one has changed its
                 // visibility while playing transition, there won't able to commit visibility until
                 // the running transition finish.
-                final Transition transition = r != null
-                        && r.mTransitionController.inPlayingTransition(r)
+                final Transition transition = r.mTransitionController.isShellTransitionsEnabled()
+                        && !r.mTransitionController.isCollecting()
                         ? r.mTransitionController.createTransition(TRANSIT_TO_BACK) : null;
-                if (transition != null) {
-                    r.mTransitionController.requestStartTransition(transition, null /*startTask */,
-                            null /* remoteTransition */, null /* displayChange */);
-                }
-                final boolean changed = r != null && r.setOccludesParent(true);
+                final boolean changed = r.setOccludesParent(true);
                 if (transition != null) {
                     if (changed) {
+                        // Always set as scene transition because it expects to be a jump-cut.
+                        transition.setOverrideAnimation(TransitionInfo.AnimationOptions
+                                .makeSceneTransitionAnimOptions(), null, null);
+                        r.mTransitionController.requestStartTransition(transition,
+                                null /*startTask */, null /* remoteTransition */,
+                                null /* displayChange */);
                         r.mTransitionController.setReady(r.getDisplayContent());
                     } else {
                         transition.abort();
@@ -773,20 +897,24 @@ class ActivityClientController extends IActivityClientController.Stub {
                 if (under != null) {
                     under.returningOptions = safeOptions != null ? safeOptions.getOptions(r) : null;
                 }
-                // Create a transition if the activity is playing in case the current activity
-                // didn't commit invisible. That's because if this activity has changed its
-                // visibility while playing transition, there won't able to commit visibility until
-                // the running transition finish.
-                final Transition transition = r.mTransitionController.inPlayingTransition(r)
+                // Create a transition to make sure the activity change is collected.
+                final Transition transition = r.mTransitionController.isShellTransitionsEnabled()
+                        && !r.mTransitionController.isCollecting()
                         ? r.mTransitionController.createTransition(TRANSIT_TO_FRONT) : null;
-                if (transition != null) {
-                    r.mTransitionController.requestStartTransition(transition, null /*startTask */,
-                            null /* remoteTransition */, null /* displayChange */);
-                }
                 final boolean changed = r.setOccludesParent(false);
                 if (transition != null) {
                     if (changed) {
+                        r.mTransitionController.requestStartTransition(transition,
+                                null /*startTask */, null /* remoteTransition */,
+                                null /* displayChange */);
                         r.mTransitionController.setReady(r.getDisplayContent());
+                        if (under != null && under.returningOptions != null
+                                && under.returningOptions.getAnimationType()
+                                        == ANIM_SCENE_TRANSITION) {
+                            // Pass along the scene-transition animation-type
+                            transition.setOverrideAnimation(TransitionInfo.AnimationOptions
+                                    .makeSceneTransitionAnimOptions(), null, null);
+                        }
                     } else {
                         transition.abort();
                     }
@@ -997,10 +1125,8 @@ class ActivityClientController extends IActivityClientController.Stub {
         }
 
         try {
-            final ClientTransaction transaction = ClientTransaction.obtain(
-                    r.app.getThread(), r.token);
-            transaction.addCallback(EnterPipRequestedItem.obtain());
-            mService.getLifecycleManager().scheduleTransaction(transaction);
+            mService.getLifecycleManager().scheduleTransactionItem(r.app.getThread(),
+                    EnterPipRequestedItem.obtain(r.token));
             return true;
         } catch (Exception e) {
             Slog.w(TAG, "Failed to send enter pip requested item: "
@@ -1012,17 +1138,11 @@ class ActivityClientController extends IActivityClientController.Stub {
     /**
      * Alert the client that the Picture-in-Picture state has changed.
      */
-    void onPictureInPictureStateChanged(@NonNull ActivityRecord r,
+    void onPictureInPictureUiStateChanged(@NonNull ActivityRecord r,
             PictureInPictureUiState pipState) {
-        if (!r.inPinnedWindowingMode()) {
-            throw new IllegalStateException("Activity is not in PIP mode");
-        }
-
         try {
-            final ClientTransaction transaction = ClientTransaction.obtain(
-                    r.app.getThread(), r.token);
-            transaction.addCallback(PipStateTransactionItem.obtain(pipState));
-            mService.getLifecycleManager().scheduleTransaction(transaction);
+            mService.getLifecycleManager().scheduleTransactionItem(r.app.getThread(),
+                    PipStateTransactionItem.obtain(r.token, pipState));
         } catch (Exception e) {
             Slog.w(TAG, "Failed to send pip state transaction item: "
                     + r.intent.getComponent(), e);
@@ -1073,6 +1193,120 @@ class ActivityClientController extends IActivityClientController.Stub {
         }
     }
 
+    private @FullscreenRequestHandler.RequestResult int validateMultiwindowFullscreenRequestLocked(
+            Task topFocusedRootTask, int fullscreenRequest, ActivityRecord requesterActivity) {
+        if (requesterActivity.getWindowingMode() == WINDOWING_MODE_PINNED) {
+            return RESULT_APPROVED;
+        }
+        // If this is not coming from the currently top-most activity, reject the request.
+        if (requesterActivity != topFocusedRootTask.getTopMostActivity()) {
+            return RESULT_FAILED_NOT_TOP_FOCUSED;
+        }
+        if (fullscreenRequest == FULLSCREEN_MODE_REQUEST_EXIT) {
+            if (topFocusedRootTask.getWindowingMode() != WINDOWING_MODE_FULLSCREEN) {
+                return RESULT_FAILED_NOT_IN_FULLSCREEN_WITH_HISTORY;
+            }
+            if (topFocusedRootTask.mMultiWindowRestoreWindowingMode == INVALID_WINDOWING_MODE) {
+                return RESULT_FAILED_NOT_IN_FULLSCREEN_WITH_HISTORY;
+            }
+        }
+        return RESULT_APPROVED;
+    }
+
+    @Override
+    public void requestMultiwindowFullscreen(IBinder callingActivity, int fullscreenRequest,
+            IRemoteCallback callback) {
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            synchronized (mGlobalLock) {
+                requestMultiwindowFullscreenLocked(callingActivity, fullscreenRequest, callback);
+            }
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+    }
+
+    private void requestMultiwindowFullscreenLocked(IBinder callingActivity, int fullscreenRequest,
+            IRemoteCallback callback) {
+        final ActivityRecord r = ActivityRecord.forTokenLocked(callingActivity);
+        if (r == null) {
+            return;
+        }
+
+        // If the shell transition is not enabled, just execute and done.
+        final TransitionController controller = r.mTransitionController;
+        if (!controller.isShellTransitionsEnabled()) {
+            final @FullscreenRequestHandler.RequestResult int validateResult;
+            final Task topFocusedRootTask;
+            topFocusedRootTask = mService.getTopDisplayFocusedRootTask();
+            validateResult = validateMultiwindowFullscreenRequestLocked(topFocusedRootTask,
+                    fullscreenRequest, r);
+            reportMultiwindowFullscreenRequestValidatingResult(callback, validateResult);
+            if (validateResult == RESULT_APPROVED) {
+                executeMultiWindowFullscreenRequest(fullscreenRequest, topFocusedRootTask);
+            }
+            return;
+        }
+        // Initiate the transition.
+        final Transition transition = new Transition(TRANSIT_CHANGE, 0 /* flags */, controller,
+                mService.mWindowManager.mSyncEngine);
+        r.mTransitionController.startCollectOrQueue(transition,
+                (deferred) -> {
+                    executeFullscreenRequestTransition(fullscreenRequest, callback, r,
+                            transition, deferred);
+                });
+    }
+
+    private void executeFullscreenRequestTransition(int fullscreenRequest, IRemoteCallback callback,
+            ActivityRecord r, Transition transition, boolean queued) {
+        final @FullscreenRequestHandler.RequestResult int validateResult;
+        final Task topFocusedRootTask;
+        topFocusedRootTask = mService.getTopDisplayFocusedRootTask();
+        validateResult = validateMultiwindowFullscreenRequestLocked(topFocusedRootTask,
+                fullscreenRequest, r);
+        reportMultiwindowFullscreenRequestValidatingResult(callback, validateResult);
+        if (validateResult != RESULT_APPROVED) {
+            transition.abort();
+            return;
+        }
+        final Task requestingTask = r.getTask();
+        transition.collect(requestingTask);
+        executeMultiWindowFullscreenRequest(fullscreenRequest, requestingTask);
+        r.mTransitionController.requestStartTransition(transition, requestingTask,
+                null /* remoteTransition */, null /* displayChange */);
+        transition.setReady(requestingTask, true);
+    }
+
+    private static void reportMultiwindowFullscreenRequestValidatingResult(IRemoteCallback callback,
+            @FullscreenRequestHandler.RequestResult int result) {
+        if (callback == null) {
+            return;
+        }
+        Bundle res = new Bundle();
+        res.putInt(REMOTE_CALLBACK_RESULT_KEY, result);
+        try {
+            callback.sendResult(res);
+        } catch (RemoteException e) {
+            Slog.w(TAG, "client throws an exception back to the server, ignore it");
+        }
+    }
+
+    private static void executeMultiWindowFullscreenRequest(int fullscreenRequest, Task requester) {
+        final int targetWindowingMode;
+        if (fullscreenRequest == FULLSCREEN_MODE_REQUEST_ENTER) {
+            requester.mMultiWindowRestoreWindowingMode =
+                    requester.getRequestedOverrideWindowingMode();
+            targetWindowingMode = WINDOWING_MODE_FULLSCREEN;
+        } else {
+            targetWindowingMode = requester.mMultiWindowRestoreWindowingMode;
+            requester.mMultiWindowRestoreWindowingMode = INVALID_WINDOWING_MODE;
+        }
+        requester.setWindowingMode(targetWindowingMode);
+        if (targetWindowingMode == WINDOWING_MODE_FULLSCREEN) {
+            requester.setBounds(null);
+        }
+    }
+
     @Override
     public void startLockTaskModeByToken(IBinder token) {
         synchronized (mGlobalLock) {
@@ -1111,6 +1345,7 @@ class ActivityClientController extends IActivityClientController.Stub {
     public boolean showAssistFromActivity(IBinder token, Bundle args) {
         final long ident = Binder.clearCallingIdentity();
         try {
+            final String callingAttributionTag;
             synchronized (mGlobalLock) {
                 final ActivityRecord caller = ActivityRecord.forTokenLocked(token);
                 final Task topRootTask = mService.getTopDisplayFocusedRootTask();
@@ -1126,9 +1361,10 @@ class ActivityClientController extends IActivityClientController.Stub {
                             + " is not visible");
                     return false;
                 }
+                callingAttributionTag = top.launchedFromFeatureId;
             }
             return mAssistUtils.showSessionForActiveService(args, SHOW_SOURCE_APPLICATION,
-                    null /* showCallback */, token);
+                    callingAttributionTag, null /* showCallback */, token);
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
@@ -1145,6 +1381,7 @@ class ActivityClientController extends IActivityClientController.Stub {
     @Override
     public void startLocalVoiceInteraction(IBinder callingActivity, Bundle options) {
         Slog.i(TAG, "Activity tried to startLocalVoiceInteraction");
+        final String callingAttributionTag;
         synchronized (mGlobalLock) {
             final Task topRootTask = mService.getTopDisplayFocusedRootTask();
             final ActivityRecord activity = topRootTask != null
@@ -1162,9 +1399,10 @@ class ActivityClientController extends IActivityClientController.Stub {
                 return;
             }
             activity.pendingVoiceInteractionStart = true;
+            callingAttributionTag = activity.launchedFromFeatureId;
         }
         LocalServices.getService(VoiceInteractionManagerInternal.class)
-                .startLocalVoiceInteraction(callingActivity, options);
+                .startLocalVoiceInteraction(callingActivity, callingAttributionTag, options);
     }
 
     @Override
@@ -1218,6 +1456,20 @@ class ActivityClientController extends IActivityClientController.Stub {
         }
     }
 
+    public void setAllowCrossUidActivitySwitchFromBelow(IBinder token, boolean allowed) {
+        final long origId = Binder.clearCallingIdentity();
+        try {
+            synchronized (mGlobalLock) {
+                final ActivityRecord r = ActivityRecord.isInRootTaskLocked(token);
+                if (r != null) {
+                    r.setAllowCrossUidActivitySwitchFromBelow(allowed);
+                }
+            }
+        } finally {
+            Binder.restoreCallingIdentity(origId);
+        }
+    }
+
     @Override
     public void reportActivityFullyDrawn(IBinder token, boolean restoredFromBundle) {
         final long origId = Binder.clearCallingIdentity();
@@ -1225,12 +1477,38 @@ class ActivityClientController extends IActivityClientController.Stub {
             synchronized (mGlobalLock) {
                 final ActivityRecord r = ActivityRecord.isInRootTaskLocked(token);
                 if (r != null) {
-                    r.reportFullyDrawnLocked(restoredFromBundle);
+                    mTaskSupervisor.getActivityMetricsLogger().notifyFullyDrawn(r,
+                            restoredFromBundle);
                 }
             }
         } finally {
             Binder.restoreCallingIdentity(origId);
         }
+    }
+
+    @Override
+    public void overrideActivityTransition(IBinder token, boolean open, int enterAnim, int exitAnim,
+            int backgroundColor) {
+        final long origId = Binder.clearCallingIdentity();
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.isInRootTaskLocked(token);
+            if (r != null) {
+                r.overrideCustomTransition(open, enterAnim, exitAnim, backgroundColor);
+            }
+        }
+        Binder.restoreCallingIdentity(origId);
+    }
+
+    @Override
+    public void clearOverrideActivityTransition(IBinder token, boolean open) {
+        final long origId = Binder.clearCallingIdentity();
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.isInRootTaskLocked(token);
+            if (r != null) {
+                r.clearCustomTransition(open);
+            }
+        }
+        Binder.restoreCallingIdentity(origId);
     }
 
     @Override
@@ -1404,7 +1682,7 @@ class ActivityClientController extends IActivityClientController.Stub {
      * the Activities in the Task should be finished when it finishes. Otherwise, return {@code
      * false}.
      */
-    private boolean isRelativeTaskRootActivity(ActivityRecord r, ActivityRecord taskRoot) {
+    private static boolean isRelativeTaskRootActivity(ActivityRecord r, ActivityRecord taskRoot) {
         // Not a relative root if the given Activity is not the root Activity of its TaskFragment.
         final TaskFragment taskFragment = r.getTaskFragment();
         if (r != taskFragment.getActivity(ar -> !ar.finishing || ar == r,
@@ -1417,7 +1695,7 @@ class ActivityClientController extends IActivityClientController.Stub {
         return taskRoot.getTaskFragment().getCompanionTaskFragment() == taskFragment;
     }
 
-    private boolean isTopActivityInTaskFragment(ActivityRecord activity) {
+    private static boolean isTopActivityInTaskFragment(ActivityRecord activity) {
         return activity.getTaskFragment().topRunningActivity() == activity;
     }
 
@@ -1433,9 +1711,6 @@ class ActivityClientController extends IActivityClientController.Stub {
     public void onBackPressed(IBinder token, IRequestFinishCallback callback) {
         final long origId = Binder.clearCallingIdentity();
         try {
-            final Intent baseActivityIntent;
-            final boolean launchedFromHome;
-            final boolean isLastRunningActivity;
             synchronized (mGlobalLock) {
                 final ActivityRecord r = ActivityRecord.isInRootTaskLocked(token);
                 if (r == null) return;
@@ -1443,42 +1718,16 @@ class ActivityClientController extends IActivityClientController.Stub {
                 final Task task = r.getTask();
                 final ActivityRecord root = task.getRootActivity(false /*ignoreRelinquishIdentity*/,
                         true /*setToBottomIfNone*/);
-                final boolean isTaskRoot = r == root;
-                if (isTaskRoot) {
-                    if (mService.mWindowOrganizerController.mTaskOrganizerController
+                if (r == root && mService.mWindowOrganizerController.mTaskOrganizerController
                         .handleInterceptBackPressedOnTaskRoot(r.getRootTask())) {
-                        // This task is handled by a task organizer that has requested the back
-                        // pressed callback.
-                        return;
-                    }
-                } else if (!isRelativeTaskRootActivity(r, root)) {
-                    // Finish the Activity if the activity is not the task root or relative root.
-                    requestCallbackFinish(callback);
+                    // This task is handled by a task organizer that has requested the back
+                    // pressed callback.
                     return;
                 }
-
-                isLastRunningActivity = isTopActivityInTaskFragment(isTaskRoot ? root : r);
-
-                final boolean isBaseActivity = root.mActivityComponent.equals(task.realActivity);
-                baseActivityIntent = isBaseActivity ? root.intent : null;
-
-                launchedFromHome = root.isLaunchSourceType(ActivityRecord.LAUNCH_SOURCE_TYPE_HOME);
-            }
-
-            // If the activity is one of the main entry points for the application, then we should
-            // refrain from finishing the activity and instead move it to the back to keep it in
-            // memory. The requirements for this are:
-            //   1. The activity is the last running activity in the task.
-            //   2. The current activity is the base activity for the task.
-            //   3. a. If the activity was launched by the home process, we trust that its intent
-            //         was resolved, so we check if the it is a main intent for the application.
-            //      b. Otherwise, we query Package Manager to verify whether the activity is a
-            //         launcher activity for the application.
-            if (baseActivityIntent != null && isLastRunningActivity
-                    && ((launchedFromHome && ActivityRecord.isMainIntent(baseActivityIntent))
-                        || isLauncherActivity(baseActivityIntent.getComponent()))) {
-                moveActivityTaskToBack(token, true /* nonRoot */);
-                return;
+                if (shouldMoveTaskToBack(r, root)) {
+                    moveActivityTaskToBack(token, true /* nonRoot */);
+                    return;
+                }
             }
 
             // The default option for handling the back button is to finish the Activity.
@@ -1488,28 +1737,71 @@ class ActivityClientController extends IActivityClientController.Stub {
         }
     }
 
-    /**
-     * Queries PackageManager to see if the given activity is one of the main entry point for the
-     * application. This should not be called with the WM lock held.
-     */
-    @SuppressWarnings("unchecked")
-    private boolean isLauncherActivity(@NonNull ComponentName activity) {
-        final Intent queryIntent = new Intent(Intent.ACTION_MAIN);
-        queryIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-        queryIntent.setPackage(activity.getPackageName());
-        try {
-            final ParceledListSlice<ResolveInfo> resolved =
-                    mService.getPackageManager().queryIntentActivities(
-                            queryIntent, null, 0, mContext.getUserId());
-            if (resolved == null) return false;
-            for (final ResolveInfo ri : resolved.getList()) {
-                if (ri.getComponentInfo().getComponentName().equals(activity)) {
-                    return true;
-                }
-            }
-        } catch (RemoteException e) {
-            Slog.e(TAG, "Failed to query intent activities", e);
+    static boolean shouldMoveTaskToBack(ActivityRecord r, ActivityRecord rootActivity) {
+        if (r != rootActivity && !isRelativeTaskRootActivity(r, rootActivity)) {
+            return false;
         }
-        return false;
+        final boolean isBaseActivity = rootActivity.mActivityComponent.equals(
+                r.getTask().realActivity);
+        final Intent baseActivityIntent = isBaseActivity ? rootActivity.intent : null;
+
+        // If the activity was launched directly from the home screen, then we should
+        // refrain from finishing the activity and instead move it to the back to keep it in
+        // memory. The requirements for this are:
+        //   1. The activity is the last running activity in the task.
+        //   2. The current activity is the base activity for the task.
+        //   3. The activity was launched by the home process, and is one of the main entry
+        //      points for the application.
+        return baseActivityIntent != null
+                && isTopActivityInTaskFragment(r)
+                && rootActivity.isLaunchSourceType(ActivityRecord.LAUNCH_SOURCE_TYPE_HOME)
+                && ActivityRecord.isMainIntent(baseActivityIntent);
+    }
+
+    @Override
+    public void enableTaskLocaleOverride(IBinder token) {
+        if (UserHandle.getAppId(Binder.getCallingUid()) != SYSTEM_UID) {
+            // Only allow system to align locale.
+            return;
+        }
+
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.forTokenLocked(token);
+            if (r != null) {
+                r.getTask().mAlignActivityLocaleWithTask = true;
+            }
+        }
+    }
+
+    /**
+     * Returns {@code true} if the activity was explicitly requested to be launched in its
+     * current TaskFragment.
+     *
+     * @see ActivityRecord#mRequestedLaunchingTaskFragmentToken
+     */
+    public boolean isRequestedToLaunchInTaskFragment(IBinder activityToken,
+            IBinder taskFragmentToken) {
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.isInRootTaskLocked(activityToken);
+            if (r == null) return false;
+
+            return r.mRequestedLaunchingTaskFragmentToken == taskFragmentToken;
+        }
+    }
+
+    @Override
+    public void setActivityRecordInputSinkEnabled(IBinder activityToken, boolean enabled) {
+        if (!allowDisableActivityRecordInputSink()) {
+            return;
+        }
+
+        mService.mAmInternal.enforceCallingPermission(
+                Manifest.permission.INTERNAL_SYSTEM_WINDOW, "setActivityRecordInputSinkEnabled");
+        synchronized (mGlobalLock) {
+            final ActivityRecord r = ActivityRecord.forTokenLocked(activityToken);
+            if (r != null) {
+                r.mActivityRecordInputSinkEnabled = enabled;
+            }
+        }
     }
 }

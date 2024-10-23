@@ -21,8 +21,13 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.testng.Assert.expectThrows;
 
+import android.content.pm.Signature;
+import android.content.pm.SignedPackage;
 import android.os.Build;
 import android.platform.test.annotations.Presubmit;
+import android.platform.test.annotations.RequiresFlagsEnabled;
+import android.platform.test.flag.junit.CheckFlagsRule;
+import android.platform.test.flag.junit.DeviceFlagsValueProvider;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Log;
@@ -67,6 +72,8 @@ public class SystemConfigTest {
     private File mFooJar;
 
     @Rule public TemporaryFolder mTemporaryFolder = new TemporaryFolder();
+
+    @Rule public CheckFlagsRule mCheckFlagsRule = DeviceFlagsValueProvider.createCheckFlagsRule();
 
     @Before
     public void setUp() throws Exception {
@@ -405,12 +412,11 @@ public class SystemConfigTest {
 
         mSysConfig.readApexPrivAppPermissions(parser, permissionFile, apexDir.toPath());
 
-        assertThat(mSysConfig.getApexPrivAppPermissions("com.android.my_module",
-                "com.android.apk_in_apex"))
-            .containsExactly("android.permission.FOO");
-        assertThat(mSysConfig.getApexPrivAppDenyPermissions("com.android.my_module",
-                "com.android.apk_in_apex"))
-            .containsExactly("android.permission.BAR");
+        ArrayMap<String, Boolean> permissions = mSysConfig.getPermissionAllowlist()
+                .getApexPrivilegedAppAllowlists().get("com.android.my_module")
+                .get("com.android.apk_in_apex");
+        assertThat(permissions)
+            .containsExactly("android.permission.FOO", true, "android.permission.BAR", false);
     }
 
     /**
@@ -593,6 +599,96 @@ public class SystemConfigTest {
                 + " </permissions>";
         parseSharedLibraries(contents);
         assertFooIsOnlySharedLibrary();
+    }
+
+    /**
+     * Tests that readPermissions works correctly for the tag: {@code update-ownership}.
+     */
+    @Test
+    public void readPermissions_updateOwnership_successful() throws IOException {
+        final String contents =
+                "<config>\n"
+                        + "    <update-ownership package=\"com.foo\" installer=\"com.bar\" />\n"
+                        + "</config>";
+        final File folder = createTempSubfolder("folder");
+        createTempFile(folder, "update_ownership.xml", contents);
+
+        readPermissions(folder, /* Grant all permission flags */ ~0);
+
+        assertThat(mSysConfig.getSystemAppUpdateOwnerPackageName("com.foo"))
+                .isEqualTo("com.bar");
+    }
+
+    /**
+     * Tests that readPermissions works correctly for the tag: {@code update-ownership}.
+     */
+    @Test
+    public void readPermissions_updateOwnership_noPackage() throws IOException {
+        final String contents =
+                "<config>\n"
+                        + "    <update-ownership />\n"
+                        + "</config>";
+        final File folder = createTempSubfolder("folder");
+        createTempFile(folder, "update_ownership.xml", contents);
+
+        readPermissions(folder, /* Grant all permission flags */ ~0);
+
+        assertThat(mSysConfig.getSystemAppUpdateOwnerPackageName("com.foo")).isNull();
+    }
+
+    /**
+     * Tests that readPermissions works correctly for the tag: {@code update-ownership}.
+     */
+    @Test
+    public void readPermissions_updateOwnership_noInstaller() throws IOException {
+        final String contents =
+                "<config>\n"
+                        + "    <update-ownership package=\"com.foo\" />\n"
+                        + "</config>";
+        final File folder = createTempSubfolder("folder");
+        createTempFile(folder, "update_ownership.xml", contents);
+
+        readPermissions(folder, /* Grant all permission flags */ ~0);
+
+        assertThat(mSysConfig.getSystemAppUpdateOwnerPackageName("com.foo")).isNull();
+    }
+
+    /**
+     * Tests that SystemConfig::getEnhancedConfirmationTrustedInstallers correctly parses a list of
+     * SignedPackage objects.
+     */
+    @Test
+    @RequiresFlagsEnabled(
+            android.permission.flags.Flags.FLAG_ENHANCED_CONFIRMATION_MODE_APIS_ENABLED)
+    public void getEnhancedConfirmationTrustedInstallers_returnsTrustedInstallers()
+            throws IOException {
+        String packageName = "com.example.app";
+        String certificateDigestStr = "E9:7A:BC:2C:D1:CA:8D:58:6A:57:0B:8C:F8:60:AA:D2:"
+                + "8D:13:30:2A:FB:C9:00:2C:5D:53:B2:6C:09:A4:85:A0";
+
+        byte[] certificateDigest = new Signature(certificateDigestStr.replace(":", ""))
+                .toByteArray();
+        String contents = "<config>"
+                + "<" + "enhanced-confirmation-trusted-installer" + " "
+                + "package=\"" + packageName + "\""
+                + " sha256-cert-digest=\"" + certificateDigestStr + "\""
+                + "/>"
+                + "</config>";
+
+        final File folder = createTempSubfolder("folder");
+        createTempFile(folder, "enhanced-confirmation.xml", contents);
+        readPermissions(folder, /* Grant all permission flags */ ~0);
+
+        ArraySet<SignedPackage> actualTrustedInstallers =
+                mSysConfig.getEnhancedConfirmationTrustedInstallers();
+
+        assertThat(actualTrustedInstallers.size()).isEqualTo(1);
+        SignedPackage actual = actualTrustedInstallers.stream().findFirst().orElseThrow();
+        SignedPackage expected = new SignedPackage(packageName, certificateDigest);
+
+        assertThat(actual.getCertificateDigest()).isEqualTo(expected.getCertificateDigest());
+        assertThat(actual.getPackageName()).isEqualTo(expected.getPackageName());
+        assertThat(actual).isEqualTo(expected);
     }
 
     private void parseSharedLibraries(String contents) throws IOException {

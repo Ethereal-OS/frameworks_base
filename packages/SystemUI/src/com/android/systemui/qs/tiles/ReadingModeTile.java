@@ -32,15 +32,16 @@ import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
-import com.android.systemui.plugins.qs.QSTile.BooleanState;
+import com.android.systemui.plugins.qs.QSTile;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 
 import javax.inject.Inject;
 
-public class ReadingModeTile extends QSTileImpl<BooleanState> {
+public class ReadingModeTile extends QSTileImpl<QSTile.BooleanState> {
 
     public static final String TILE_SPEC = "reading_mode";
 
@@ -53,6 +54,7 @@ public class ReadingModeTile extends QSTileImpl<BooleanState> {
     @Inject
     public ReadingModeTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -60,7 +62,7 @@ public class ReadingModeTile extends QSTileImpl<BooleanState> {
             StatusBarStateController statusBarStateController,
             ActivityStarter activityStarter,
             QSLogger qsLogger) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
         mHardware = LineageHardwareManager.getInstance(mContext);
     }
@@ -110,7 +112,7 @@ public class ReadingModeTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.ETHEREAL;
+        return MetricsEvent.GEOMETRICS;
     }
 
     @Override

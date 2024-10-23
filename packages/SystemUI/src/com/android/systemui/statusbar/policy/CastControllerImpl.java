@@ -35,9 +35,9 @@ import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
 
 import com.android.internal.annotations.GuardedBy;
-import com.android.systemui.R;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dump.DumpManager;
+import com.android.systemui.res.R;
 import com.android.systemui.util.Utils;
 
 import java.io.PrintWriter;
@@ -167,7 +167,8 @@ public class CastControllerImpl implements CastController {
                 int statusCode = route.getStatusCode();
                 if (statusCode == RouteInfo.STATUS_CONNECTING) {
                     device.state = CastDevice.STATE_CONNECTING;
-                } else if (route.isSelected() || statusCode == RouteInfo.STATUS_CONNECTED) {
+                } else if (route.isSelected() && statusCode != RouteInfo.STATUS_NOT_AVAILABLE
+                        || statusCode == RouteInfo.STATUS_CONNECTED) {
                     device.state = CastDevice.STATE_CONNECTED;
                 } else {
                     device.state = CastDevice.STATE_DISCONNECTED;
@@ -195,7 +196,7 @@ public class CastControllerImpl implements CastController {
 
     @Override
     public void startCasting(CastDevice device) {
-        if (device == null || !(device.tag instanceof RouteInfo)) return;
+        if (device == null || device.tag == null) return;
         final RouteInfo route = (RouteInfo) device.tag;
         if (DEBUG) Log.d(TAG, "startCasting: " + routeToString(route));
         mMediaRouter.selectRoute(ROUTE_TYPE_REMOTE_DISPLAY, route);
@@ -215,6 +216,12 @@ public class CastControllerImpl implements CastController {
         } else {
             mMediaRouter.getFallbackRoute().select();
         }
+    }
+
+    @Override
+    public boolean hasConnectedCastDevice() {
+        return getCastDevices().stream().anyMatch(
+                castDevice -> castDevice.state == CastDevice.STATE_CONNECTED);
     }
 
     private void setProjection(MediaProjectionInfo projection, boolean started) {
@@ -285,11 +292,12 @@ public class CastControllerImpl implements CastController {
 
     @VisibleForTesting
     void fireOnCastDevicesChanged() {
+        final ArrayList<Callback> callbacks;
         synchronized (mCallbacks) {
-            for (Callback callback : mCallbacks) {
-                fireOnCastDevicesChanged(callback);
-            }
-
+            callbacks = new ArrayList<>(mCallbacks);
+        }
+        for (Callback callback : callbacks) {
+            fireOnCastDevicesChanged(callback);
         }
     }
 

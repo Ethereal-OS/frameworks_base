@@ -17,17 +17,21 @@
 package com.android.server.policy;
 
 import static android.hardware.devicestate.DeviceStateManager.INVALID_DEVICE_STATE;
-import static android.hardware.devicestate.DeviceStateManager.MINIMUM_DEVICE_STATE;
+import static android.hardware.devicestate.DeviceStateManager.MINIMUM_DEVICE_STATE_IDENTIFIER;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.hardware.input.InputManagerInternal;
+import android.hardware.devicestate.DeviceState;
 import android.os.Environment;
+import android.os.PowerManager;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Slog;
@@ -37,8 +41,8 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.Preconditions;
 import com.android.server.LocalServices;
-import com.android.server.devicestate.DeviceState;
 import com.android.server.devicestate.DeviceStateProvider;
+import com.android.server.input.InputManagerInternal;
 import com.android.server.policy.devicestate.config.Conditions;
 import com.android.server.policy.devicestate.config.DeviceStateConfig;
 import com.android.server.policy.devicestate.config.Flags;
@@ -54,6 +58,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -80,7 +85,8 @@ import javax.xml.datatype.DatatypeConfigurationException;
  * provided.
  */
 public final class DeviceStateProviderImpl implements DeviceStateProvider,
-        InputManagerInternal.LidSwitchCallback, SensorEventListener {
+        InputManagerInternal.LidSwitchCallback, SensorEventListener,
+        PowerManager.OnThermalStatusChangedListener {
     private static final String TAG = "DeviceStateProviderImpl";
     private static final boolean DEBUG = false;
 
@@ -88,7 +94,7 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
     private static final BooleanSupplier FALSE_BOOLEAN_SUPPLIER = () -> false;
 
     @VisibleForTesting
-    static final DeviceState DEFAULT_DEVICE_STATE = new DeviceState(MINIMUM_DEVICE_STATE,
+    static final DeviceState DEFAULT_DEVICE_STATE = new DeviceState(MINIMUM_DEVICE_STATE_IDENTIFIER,
             "DEFAULT", 0 /* flags */);
 
     private static final String VENDOR_CONFIG_FILE_PATH = "etc/devicestate/";
@@ -97,6 +103,12 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
     private static final String FLAG_CANCEL_OVERRIDE_REQUESTS = "FLAG_CANCEL_OVERRIDE_REQUESTS";
     private static final String FLAG_APP_INACCESSIBLE = "FLAG_APP_INACCESSIBLE";
     private static final String FLAG_EMULATED_ONLY = "FLAG_EMULATED_ONLY";
+    private static final String FLAG_CANCEL_WHEN_REQUESTER_NOT_ON_TOP =
+            "FLAG_CANCEL_WHEN_REQUESTER_NOT_ON_TOP";
+    private static final String FLAG_UNSUPPORTED_WHEN_THERMAL_STATUS_CRITICAL =
+            "FLAG_UNSUPPORTED_WHEN_THERMAL_STATUS_CRITICAL";
+    private static final String FLAG_UNSUPPORTED_WHEN_POWER_SAVE_MODE =
+            "FLAG_UNSUPPORTED_WHEN_POWER_SAVE_MODE";
 
     /** Interface that allows reading the device state configuration. */
     interface ReadableConfig {
@@ -152,6 +164,16 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
                                     break;
                                 case FLAG_EMULATED_ONLY:
                                     flags |= DeviceState.FLAG_EMULATED_ONLY;
+                                    break;
+                                case FLAG_CANCEL_WHEN_REQUESTER_NOT_ON_TOP:
+                                    flags |= DeviceState.FLAG_CANCEL_WHEN_REQUESTER_NOT_ON_TOP;
+                                    break;
+                                case FLAG_UNSUPPORTED_WHEN_THERMAL_STATUS_CRITICAL:
+                                    flags |= DeviceState
+                                            .FLAG_UNSUPPORTED_WHEN_THERMAL_STATUS_CRITICAL;
+                                    break;
+                                case FLAG_UNSUPPORTED_WHEN_POWER_SAVE_MODE:
+                                    flags |= DeviceState.FLAG_UNSUPPORTED_WHEN_POWER_SAVE_MODE;
                                 default:
                                     Slog.w(TAG, "Parsed unknown flag with name: "
                                             + configFlagString);
@@ -194,6 +216,11 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
     private Boolean mIsLidOpen;
     @GuardedBy("mLock")
     private final Map<Sensor, SensorEvent> mLatestSensorEvent = new ArrayMap<>();
+    @GuardedBy("mLock")
+    private @PowerManager.ThermalStatus int mThermalStatus = PowerManager.THERMAL_STATUS_NONE;
+
+    @GuardedBy("mLock")
+    private boolean mPowerSaveModeEnabled;
 
     private DeviceStateProviderImpl(@NonNull Context context,
             @NonNull List<DeviceState> deviceStates,
@@ -208,6 +235,34 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
         mOrderedStates = orderedStates;
 
         setStateConditions(deviceStates, stateConditions);
+
+        PowerManager powerManager = context.getSystemService(PowerManager.class);
+        if (powerManager != null) {
+            // If any of the device states are thermal sensitive, i.e. it should be disabled when
+            // the device is overheating, then we will update the list of supported states when
+            // thermal status changes.
+            if (hasThermalSensitiveState(deviceStates)) {
+                powerManager.addThermalStatusListener(this);
+            }
+
+            // If any of the device states are power sensitive, i.e. it should be disabled when
+            // power save mode is enabled, then we will update the list of supported states when
+            // power save mode is toggled.
+            if (hasPowerSaveSensitiveState(deviceStates)) {
+                IntentFilter filter = new IntentFilter(
+                        PowerManager.ACTION_POWER_SAVE_MODE_CHANGED_INTERNAL);
+                BroadcastReceiver receiver = new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        if (PowerManager.ACTION_POWER_SAVE_MODE_CHANGED_INTERNAL.equals(
+                                intent.getAction())) {
+                            onPowerSaveModeChanged(powerManager.isPowerSaveMode());
+                        }
+                    }
+                };
+                mContext.registerReceiver(receiver, filter);
+            }
+        }
     }
 
     private void setStateConditions(@NonNull List<DeviceState> deviceStates,
@@ -341,22 +396,35 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
             }
             mListener = listener;
         }
-        notifySupportedStatesChanged();
+        notifySupportedStatesChanged(SUPPORTED_DEVICE_STATES_CHANGED_INITIALIZED);
         notifyDeviceStateChangedIfNeeded();
     }
 
     /** Notifies the listener that the set of supported device states has changed. */
-    private void notifySupportedStatesChanged() {
-        DeviceState[] supportedStates;
+    private void notifySupportedStatesChanged(@SupportedStatesUpdatedReason int reason) {
+        List<DeviceState> supportedStates = new ArrayList<>();
+        Listener listener;
         synchronized (mLock) {
             if (mListener == null) {
                 return;
             }
-
-            supportedStates = Arrays.copyOf(mOrderedStates, mOrderedStates.length);
+            listener = mListener;
+            for (DeviceState deviceState : mOrderedStates) {
+                if (isThermalStatusCriticalOrAbove(mThermalStatus)
+                        && deviceState.hasFlag(
+                                DeviceState.FLAG_UNSUPPORTED_WHEN_THERMAL_STATUS_CRITICAL)) {
+                    continue;
+                }
+                if (mPowerSaveModeEnabled && deviceState.hasFlag(
+                        DeviceState.FLAG_UNSUPPORTED_WHEN_POWER_SAVE_MODE)) {
+                    continue;
+                }
+                supportedStates.add(deviceState);
+            }
         }
 
-        mListener.onSupportedDeviceStatesChanged(supportedStates);
+        listener.onSupportedDeviceStatesChanged(
+                supportedStates.toArray(new DeviceState[supportedStates.size()]), reason);
     }
 
     /** Computes the current device state and notifies the listener of a change, if needed. */
@@ -434,6 +502,24 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
     @Override
     public void onAccuracyChanged(Sensor sensor, int accuracy) {
         // Do nothing.
+    }
+
+    @Override
+    public void dump(@NonNull PrintWriter writer, @Nullable String[] args) {
+        writer.println("DeviceStateProviderImpl");
+
+        synchronized (mLock) {
+            writer.println("  mLastReportedState = " + mLastReportedState);
+            writer.println("  mPowerSaveModeEnabled = " + mPowerSaveModeEnabled);
+            writer.println("  mThermalStatus = " + mThermalStatus);
+            writer.println("  mIsLidOpen = " + mIsLidOpen);
+            writer.println("  Sensor values:");
+
+            for (Sensor sensor : mLatestSensorEvent.keySet()) {
+                SensorEvent sensorEvent = mLatestSensorEvent.get(sensor);
+                writer.println("   - " + toSensorValueString(sensor, sensorEvent));
+            }
+        }
     }
 
     /**
@@ -602,12 +688,14 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
         Slog.i(TAG, "Sensor values:");
         for (Sensor sensor : mLatestSensorEvent.keySet()) {
             SensorEvent sensorEvent = mLatestSensorEvent.get(sensor);
-            if (sensorEvent != null) {
-                Slog.i(TAG, sensor.getName() + ": " + Arrays.toString(sensorEvent.values));
-            } else {
-                Slog.i(TAG, sensor.getName() + ": null");
-            }
+            Slog.i(TAG, toSensorValueString(sensor, sensorEvent));
         }
+    }
+
+    private String toSensorValueString(Sensor sensor, @Nullable SensorEvent event) {
+        String sensorString = sensor == null ? "null" : sensor.getName();
+        String eventValues = event == null ? "null" : Arrays.toString(event.values);
+        return sensorString + " : " + eventValues;
     }
 
     /**
@@ -638,5 +726,68 @@ public final class DeviceStateProviderImpl implements DeviceStateProvider,
         public InputStream openRead() throws IOException {
             return new FileInputStream(mFile);
         }
+    }
+
+    @VisibleForTesting
+    void onPowerSaveModeChanged(boolean isPowerSaveModeEnabled) {
+        synchronized (mLock) {
+            if (mPowerSaveModeEnabled != isPowerSaveModeEnabled) {
+                mPowerSaveModeEnabled = isPowerSaveModeEnabled;
+                notifySupportedStatesChanged(
+                        isPowerSaveModeEnabled ? SUPPORTED_DEVICE_STATES_CHANGED_POWER_SAVE_ENABLED
+                                : SUPPORTED_DEVICE_STATES_CHANGED_POWER_SAVE_DISABLED);
+            }
+        }
+    }
+
+    @Override
+    public void onThermalStatusChanged(@PowerManager.ThermalStatus int thermalStatus) {
+        int previousThermalStatus;
+        synchronized (mLock) {
+            previousThermalStatus = mThermalStatus;
+            mThermalStatus = thermalStatus;
+        }
+
+        boolean isThermalStatusCriticalOrAbove = isThermalStatusCriticalOrAbove(thermalStatus);
+        boolean isPreviousThermalStatusCriticalOrAbove =
+                isThermalStatusCriticalOrAbove(previousThermalStatus);
+        if (isThermalStatusCriticalOrAbove != isPreviousThermalStatusCriticalOrAbove) {
+            Slog.i(TAG, "Updating supported device states due to thermal status change."
+                    + " isThermalStatusCriticalOrAbove: " + isThermalStatusCriticalOrAbove);
+            notifySupportedStatesChanged(
+                    isThermalStatusCriticalOrAbove
+                            ? SUPPORTED_DEVICE_STATES_CHANGED_THERMAL_CRITICAL
+                            : SUPPORTED_DEVICE_STATES_CHANGED_THERMAL_NORMAL);
+        }
+    }
+
+    private static boolean isThermalStatusCriticalOrAbove(
+            @PowerManager.ThermalStatus int thermalStatus) {
+        switch (thermalStatus) {
+            case PowerManager.THERMAL_STATUS_CRITICAL:
+            case PowerManager.THERMAL_STATUS_EMERGENCY:
+            case PowerManager.THERMAL_STATUS_SHUTDOWN:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean hasThermalSensitiveState(List<DeviceState> deviceStates) {
+        for (DeviceState state : deviceStates) {
+            if (state.hasFlag(DeviceState.FLAG_UNSUPPORTED_WHEN_THERMAL_STATUS_CRITICAL)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasPowerSaveSensitiveState(List<DeviceState> deviceStates) {
+        for (int i = 0; i < deviceStates.size(); i++) {
+            if (deviceStates.get(i).hasFlag(DeviceState.FLAG_UNSUPPORTED_WHEN_POWER_SAVE_MODE)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

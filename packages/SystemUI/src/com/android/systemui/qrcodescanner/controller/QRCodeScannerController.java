@@ -32,7 +32,6 @@ import android.provider.Settings;
 import android.util.Log;
 
 import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
-import com.android.internal.util.ethereal.EtherealUtils;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.settings.UserTracker;
@@ -127,6 +126,7 @@ public class QRCodeScannerController implements
         mUserTracker = userTracker;
         mConfigEnableLockScreenButton = mContext.getResources().getBoolean(
             android.R.bool.config_enableQrCodeScannerOnLockScreen);
+        mExecutor.execute(this::updateQRCodeScannerActivityDetails);
     }
 
     /**
@@ -165,18 +165,18 @@ public class QRCodeScannerController implements
      * Returns true if lock screen entry point for QR Code Scanner is to be enabled.
      */
     public boolean isEnabledForLockScreenButton() {
-        return mQRCodeScannerEnabled && isAbleToOpenCameraApp() && isAvailableOnDevice();
+        return mQRCodeScannerEnabled && isAbleToLaunchScannerActivity() && isAllowedOnLockScreen();
     }
 
-    /** Returns whether the feature is available on the device. */
-    public boolean isAvailableOnDevice() {
+    /** Returns whether the QR scanner button is allowed on lockscreen. */
+    public boolean isAllowedOnLockScreen() {
         return mConfigEnableLockScreenButton;
     }
 
     /**
-     * Returns true if the feature can open a camera app on the device.
+     * Returns true if the feature can open the configured QR scanner activity.
      */
-    public boolean isAbleToOpenCameraApp() {
+    public boolean isAbleToLaunchScannerActivity() {
         return mIntent != null && isActivityCallable(mIntent);
     }
 
@@ -279,7 +279,7 @@ public class QRCodeScannerController implements
         bundle.putString("caller_package", GSA_PACKAGE);
         bundle.putLong("start_activity_time_nanos", SystemClock.elapsedRealtimeNanos());
         intent.setComponent(new ComponentName(GSA_PACKAGE, LENS_ACTIVITY))
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .setPackage(GSA_PACKAGE)
                 .setData(Uri.parse("google://lens"))
                 .putExtra("lens_activity_params", bundle);
@@ -301,19 +301,18 @@ public class QRCodeScannerController implements
         String prevQrCodeScannerActivity = mQRCodeScannerActivity;
         ComponentName componentName = null;
         Intent intent = new Intent();
-        if (qrCodeScannerActivity != null && !qrCodeScannerActivity.isEmpty()) {
+        if (qrCodeScannerActivity != null) {
             componentName = ComponentName.unflattenFromString(qrCodeScannerActivity);
             intent.setComponent(componentName);
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
         }
 
         Intent lensIntent = getLensIntent();
-        if (intent != null && isActivityAvailable(intent)) {
+        if (isActivityAvailable(intent)) {
             mQRCodeScannerActivity = qrCodeScannerActivity;
             mComponentName = componentName;
             mIntent = intent;
-        } else if (EtherealUtils. isPackageInstalled(mContext, GSA_PACKAGE, false) &&
-                lensIntent != null && isActivityCallable(lensIntent)) {
+        } else if (isActivityCallable(lensIntent)) {
             mQRCodeScannerActivity = LENS_ACTIVITY;
             mComponentName = lensIntent.getComponent();
             mIntent = lensIntent;
@@ -373,6 +372,8 @@ public class QRCodeScannerController implements
 
         // Reset cached values to default as we are no longer listening
         mQRCodeScannerPreferenceObserver = new HashMap<>();
+        mSecureSettings.putStringForUser(Settings.Secure.SHOW_QR_CODE_SCANNER_SETTING, null,
+                mUserTracker.getUserId());
     }
 
     private void unregisterDefaultQRCodeScannerObserver() {
@@ -381,11 +382,6 @@ public class QRCodeScannerController implements
 
         // Reset cached values to default as we are no longer listening
         mOnDefaultQRCodeScannerChangedListener = null;
-        mQRCodeScannerActivity = null;
-        mIntent = null;
-        mComponentName = null;
-        mSecureSettings.putStringForUser(Settings.Secure.SHOW_QR_CODE_SCANNER_SETTING, null,
-                mUserTracker.getUserId());
     }
 
     private void notifyQRCodeScannerActivityChanged() {
@@ -413,10 +409,7 @@ public class QRCodeScannerController implements
 
         // While registering the observers for the first time update the default values in the
         // background
-        mExecutor.execute(() -> {
-                updateQRCodeScannerActivityDetails();
-                updateQRCodeScannerPreferenceDetails(/* updateSettings = */true);
-                });
+        mExecutor.execute(() -> updateQRCodeScannerActivityDetails());
         mOnDefaultQRCodeScannerChangedListener =
                 properties -> {
                     if (DeviceConfig.NAMESPACE_SYSTEMUI.equals(properties.getNamespace())

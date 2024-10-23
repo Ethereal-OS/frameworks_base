@@ -117,7 +117,6 @@ public class NotificationShellCmd extends ShellCommand {
     private final NotificationManagerService mDirectService;
     private final INotificationManager mBinderService;
     private final PackageManager mPm;
-    private NotificationChannel mChannel;
 
     public NotificationShellCmd(NotificationManagerService service) {
         mDirectService = service;
@@ -183,7 +182,13 @@ public class NotificationShellCmd extends ShellCommand {
                             interruptionFilter = INTERRUPTION_FILTER_ALL;
                     }
                     final int filter = interruptionFilter;
-                    mBinderService.setInterruptionFilter(callingPackage, filter);
+                    if (android.app.Flags.modesApi()) {
+                        mBinderService.setInterruptionFilter(callingPackage, filter,
+                                /* fromUser= */ true);
+                    } else {
+                        mBinderService.setInterruptionFilter(callingPackage, filter,
+                                /* fromUser= */ false);
+                    }
                 }
                 break;
                 case "allow_dnd": {
@@ -540,16 +545,16 @@ public class NotificationShellCmd extends ShellCommand {
                     if ("broadcast".equals(intentKind)) {
                         pi = PendingIntent.getBroadcastAsUser(
                                 context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT
-                                        | PendingIntent.FLAG_MUTABLE_UNAUDITED,
+                                        | PendingIntent.FLAG_IMMUTABLE,
                                 UserHandle.CURRENT);
                     } else if ("service".equals(intentKind)) {
                         pi = PendingIntent.getService(
                                 context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT
-                                        | PendingIntent.FLAG_MUTABLE_UNAUDITED);
+                                        | PendingIntent.FLAG_IMMUTABLE);
                     } else {
                         pi = PendingIntent.getActivityAsUser(
                                 context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT
-                                        | PendingIntent.FLAG_MUTABLE_UNAUDITED, null,
+                                        | PendingIntent.FLAG_IMMUTABLE, null,
                                 UserHandle.CURRENT);
                     }
                     builder.setContentIntent(pi);

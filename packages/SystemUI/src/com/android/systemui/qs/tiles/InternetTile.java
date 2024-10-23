@@ -41,19 +41,18 @@ import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.settingslib.graph.SignalDrawable;
 import com.android.settingslib.mobile.TelephonyIcons;
 import com.android.settingslib.net.DataUsageController;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
-import com.android.systemui.plugins.qs.QSIconView;
-import com.android.systemui.plugins.qs.QSTile.SignalState;
+import com.android.systemui.plugins.qs.QSTile;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
-import com.android.systemui.qs.AlphaControlledSignalTileView;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
-import com.android.systemui.qs.tiles.dialog.InternetDialogFactory;
+import com.android.systemui.qs.tiles.dialog.InternetDialogManager;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.statusbar.connectivity.AccessPointController;
 import com.android.systemui.statusbar.connectivity.IconState;
@@ -62,14 +61,13 @@ import com.android.systemui.statusbar.connectivity.NetworkController;
 import com.android.systemui.statusbar.connectivity.SignalCallback;
 import com.android.systemui.statusbar.connectivity.WifiIcons;
 import com.android.systemui.statusbar.connectivity.WifiIndicators;
-import com.android.systemui.statusbar.policy.KeyguardStateController;
 
 import java.io.PrintWriter;
 
 import javax.inject.Inject;
 
 /** Quick settings tile: Internet **/
-public class InternetTile extends SecureQSTile<SignalState> {
+public class InternetTile extends SecureQSTile<QSTile.BooleanState> {
 
     public static final String TILE_SPEC = "internet";
 
@@ -86,12 +84,13 @@ public class InternetTile extends SecureQSTile<SignalState> {
     private int mLastTileState = LAST_STATE_UNKNOWN;
 
     protected final InternetSignalCallback mSignalCallback = new InternetSignalCallback();
-    private final InternetDialogFactory mInternetDialogFactory;
+    private final InternetDialogManager mInternetDialogManager;
     final Handler mHandler;
 
     @Inject
     public InternetTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -101,12 +100,13 @@ public class InternetTile extends SecureQSTile<SignalState> {
             QSLogger qsLogger,
             NetworkController networkController,
             AccessPointController accessPointController,
-            InternetDialogFactory internetDialogFactory,
+            InternetDialogManager internetDialogManager,
             KeyguardStateController keyguardStateController
+
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger, keyguardStateController);
-        mInternetDialogFactory = internetDialogFactory;
+        mInternetDialogManager = internetDialogManager;
         mHandler = mainHandler;
         mController = networkController;
         mAccessPointController = accessPointController;
@@ -115,15 +115,10 @@ public class InternetTile extends SecureQSTile<SignalState> {
     }
 
     @Override
-    public SignalState newTileState() {
-        SignalState s = new SignalState();
+    public BooleanState newTileState() {
+        BooleanState s = new BooleanState();
         s.forceExpandIcon = true;
         return s;
-    }
-
-    @Override
-    public QSIconView createTileView(Context context) {
-        return new AlphaControlledSignalTileView(context);
     }
 
     @Override
@@ -136,7 +131,7 @@ public class InternetTile extends SecureQSTile<SignalState> {
         if (checkKeyguard(view, keyguardShowing)) {
             return;
         }
-        mHandler.post(() -> mInternetDialogFactory.create(true,
+        mHandler.post(() -> mInternetDialogManager.create(true,
                 mAccessPointController.canConfigMobileData(),
                 mAccessPointController.canConfigWifi(), view));
     }
@@ -314,12 +309,15 @@ public class InternetTile extends SecureQSTile<SignalState> {
             if (DEBUG) {
                 Log.d(TAG, "setWifiIndicators: " + indicators);
             }
+            if (!indicators.isDefault) {
+                return;
+            }
             synchronized (mWifiInfo) {
                 mWifiInfo.mEnabled = indicators.enabled;
                 mWifiInfo.mSsid = indicators.description;
                 mWifiInfo.mIsTransient = indicators.isTransient;
                 mWifiInfo.mStatusLabel = indicators.statusLabel;
-                if (indicators.qsIcon != null|| !indicators.isDefault) {
+                if (indicators.qsIcon != null) {
                     mWifiInfo.mConnected = indicators.qsIcon.visible;
                     mWifiInfo.mWifiSignalIconId = indicators.qsIcon.icon;
                     mWifiInfo.mWifiSignalContentDescription = indicators.qsIcon.contentDescription;
@@ -329,7 +327,7 @@ public class InternetTile extends SecureQSTile<SignalState> {
                     mWifiInfo.mWifiSignalContentDescription = null;
                 }
             }
-            if (indicators.qsIcon != null|| !indicators.isDefault) {
+            if (indicators.qsIcon != null) {
                 refreshState(mWifiInfo);
             }
         }
@@ -457,18 +455,33 @@ public class InternetTile extends SecureQSTile<SignalState> {
     }
 
     @Override
-    protected void handleUpdateState(SignalState state, Object arg) {
+    protected void handleUpdateState(BooleanState state, Object arg) {
         mQSLogger.logInternetTileUpdate(
                 getTileSpec(), mLastTileState, arg == null ? "null" : arg.toString());
         if (arg instanceof CellularCallbackInfo) {
             mLastTileState = LAST_STATE_CELLULAR;
-            handleUpdateCellularState(state, arg);
+            CellularCallbackInfo cb = (CellularCallbackInfo) arg;
+            CellularCallbackInfo cellularInfo = new CellularCallbackInfo();
+            synchronized (cb) {
+                cb.copyTo(cellularInfo);
+            }
+            handleUpdateCellularState(state, cellularInfo);
         } else if (arg instanceof WifiCallbackInfo) {
             mLastTileState = LAST_STATE_WIFI;
-            handleUpdateWifiState(state, arg);
+            WifiCallbackInfo cb = (WifiCallbackInfo) arg;
+            WifiCallbackInfo wifiInfo = new WifiCallbackInfo();
+            synchronized (cb) {
+                cb.copyTo(wifiInfo);
+            }
+            handleUpdateWifiState(state, wifiInfo);
         } else if (arg instanceof EthernetCallbackInfo) {
             mLastTileState = LAST_STATE_ETHERNET;
-            handleUpdateEthernetState(state, arg);
+            EthernetCallbackInfo cb = (EthernetCallbackInfo) arg;
+            EthernetCallbackInfo ethernetInfo = new EthernetCallbackInfo();
+            synchronized (cb) {
+                cb.copyTo(ethernetInfo);
+            }
+            handleUpdateEthernetState(state, ethernetInfo);
         } else {
             // handleUpdateState will be triggered when user expands the QuickSetting panel with
             // arg = null, in this case the last updated CellularCallbackInfo or WifiCallbackInfo
@@ -480,11 +493,11 @@ public class InternetTile extends SecureQSTile<SignalState> {
                 }
                 handleUpdateCellularState(state, cellularInfo);
             } else if (mLastTileState == LAST_STATE_WIFI) {
-                WifiCallbackInfo mifiInfo = new WifiCallbackInfo();
+                WifiCallbackInfo wifiInfo = new WifiCallbackInfo();
                 synchronized (mSignalCallback.mWifiInfo) {
-                    mSignalCallback.mWifiInfo.copyTo(mifiInfo);
+                    mSignalCallback.mWifiInfo.copyTo(wifiInfo);
                 }
-                handleUpdateWifiState(state, mifiInfo);
+                handleUpdateWifiState(state, wifiInfo);
             } else if (mLastTileState == LAST_STATE_ETHERNET) {
                 EthernetCallbackInfo ethernetInfo = new EthernetCallbackInfo();
                 synchronized (mSignalCallback.mEthernetInfo) {
@@ -495,18 +508,13 @@ public class InternetTile extends SecureQSTile<SignalState> {
         }
     }
 
-    private void handleUpdateWifiState(SignalState state, Object arg) {
+    private void handleUpdateWifiState(BooleanState state, Object arg) {
         WifiCallbackInfo cb = (WifiCallbackInfo) arg;
         if (DEBUG) {
             Log.d(TAG, "handleUpdateWifiState: " + "WifiCallbackInfo = " + cb.toString());
         }
         boolean wifiConnected = cb.mEnabled && (cb.mWifiSignalIconId > 0) && (cb.mSsid != null);
         boolean wifiNotConnected = (cb.mWifiSignalIconId > 0) && (cb.mSsid == null);
-        if (state.slash == null) {
-            state.slash = new SlashState();
-            state.slash.rotation = 6;
-        }
-        state.slash.isSlashed = false;
         state.secondaryLabel = getSecondaryLabel(cb.mIsTransient, removeDoubleQuotes(cb.mSsid));
         state.state = Tile.STATE_ACTIVE;
         state.dualTarget = true;
@@ -544,7 +552,6 @@ public class InternetTile extends SecureQSTile<SignalState> {
             state.icon = ResourceIcon.get(
                 com.android.internal.R.drawable.ic_signal_wifi_transient_animation);
         } else if (!state.value) {
-            state.slash.isSlashed = true;
             state.state = Tile.STATE_INACTIVE;
             state.icon = ResourceIcon.get(WifiIcons.QS_WIFI_DISABLED);
         } else if (wifiConnected) {
@@ -569,11 +576,11 @@ public class InternetTile extends SecureQSTile<SignalState> {
                 R.string.accessibility_quick_settings_open_settings, getTileLabel());
         state.expandedAccessibilityClassName = Switch.class.getName();
         if (DEBUG) {
-            Log.d(TAG, "handleUpdateWifiState: " + "SignalState = " + state.toString());
+            Log.d(TAG, "handleUpdateWifiState: " + "BooleanState = " + state.toString());
         }
     }
 
-    private void handleUpdateCellularState(SignalState state, Object arg) {
+    private void handleUpdateCellularState(BooleanState state, Object arg) {
         CellularCallbackInfo cb = (CellularCallbackInfo) arg;
         if (DEBUG) {
             Log.d(TAG, "handleUpdateCellularState: " + "CellularCallbackInfo = " + cb.toString());
@@ -612,11 +619,11 @@ public class InternetTile extends SecureQSTile<SignalState> {
             state.stateDescription = state.secondaryLabel;
         }
         if (DEBUG) {
-            Log.d(TAG, "handleUpdateCellularState: " + "SignalState = " + state.toString());
+            Log.d(TAG, "handleUpdateCellularState: " + "BooleanState = " + state.toString());
         }
     }
 
-    private void handleUpdateEthernetState(SignalState state, Object arg) {
+    private void handleUpdateEthernetState(BooleanState state, Object arg) {
         EthernetCallbackInfo cb = (EthernetCallbackInfo) arg;
         if (DEBUG) {
             Log.d(TAG, "handleUpdateEthernetState: " + "EthernetCallbackInfo = " + cb.toString());
@@ -630,7 +637,7 @@ public class InternetTile extends SecureQSTile<SignalState> {
         state.icon = ResourceIcon.get(cb.mEthernetSignalIconId);
         state.secondaryLabel = cb.mEthernetContentDescription;
         if (DEBUG) {
-            Log.d(TAG, "handleUpdateEthernetState: " + "SignalState = " + state.toString());
+            Log.d(TAG, "handleUpdateEthernetState: " + "BooleanState = " + state.toString());
         }
     }
 
@@ -671,10 +678,15 @@ public class InternetTile extends SecureQSTile<SignalState> {
         }
 
         @Override
+        @NonNull
         public Drawable getDrawable(Context context) {
             SignalDrawable d = new SignalDrawable(context);
             d.setLevel(getState());
             return d;
+        }
+        @Override
+        public String toString() {
+            return String.format("SignalIcon[mState=0x%08x]", mState);
         }
     }
 

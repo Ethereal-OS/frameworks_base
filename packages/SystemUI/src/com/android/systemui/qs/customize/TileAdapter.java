@@ -45,9 +45,13 @@ import androidx.recyclerview.widget.RecyclerView.State;
 import androidx.recyclerview.widget.RecyclerView.ViewHolder;
 
 import com.android.internal.logging.UiEventLogger;
-import com.android.systemui.R;
+import com.android.systemui.FontSizeUtils;
+import com.android.systemui.flags.FeatureFlags;
+import com.android.systemui.flags.Flags;
+import com.android.systemui.res.R;
 import com.android.systemui.qs.QSEditEvent;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.TileLayout;
 import com.android.systemui.qs.TileUtils;
 import com.android.systemui.qs.customize.TileAdapter.Holder;
 import com.android.systemui.qs.customize.TileQueryHelper.TileInfo;
@@ -55,7 +59,6 @@ import com.android.systemui.qs.customize.TileQueryHelper.TileStateListener;
 import com.android.systemui.qs.dagger.QSScope;
 import com.android.systemui.qs.dagger.QSThemedContext;
 import com.android.systemui.qs.external.CustomTile;
-import com.android.systemui.qs.tileimpl.QSIconViewImpl;
 import com.android.systemui.qs.tileimpl.QSTileViewImpl;
 
 import java.util.ArrayList;
@@ -83,8 +86,6 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
     private static final int ACTION_NONE = 0;
     private static final int ACTION_ADD = 1;
     private static final int ACTION_MOVE = 2;
-
-    private static final int NUM_COLUMNS_ID = R.integer.quick_settings_num_columns;
 
     private final Context mContext;
 
@@ -117,11 +118,15 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
     private RecyclerView mRecyclerView;
     private int mNumColumns;
 
+    private TextView mTempTextView;
+    private int mMinTileViewHeight;
+
     @Inject
     public TileAdapter(
             @QSThemedContext Context context,
             QSHost qsHost,
-            UiEventLogger uiEventLogger) {
+            UiEventLogger uiEventLogger,
+            FeatureFlags featureFlags) {
         mContext = context;
         mHost = qsHost;
         mUiEventLogger = uiEventLogger;
@@ -129,10 +134,11 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
         mDecoration = new TileItemDecoration(context);
         mMarginDecoration = new MarginTileDecoration();
         mMinNumTiles = context.getResources().getInteger(R.integer.quick_settings_min_num_tiles);
-        mNumColumns = context.getResources().getInteger(NUM_COLUMNS_ID);
+        mNumColumns = TileUtils.getQSColumnsCount(context);
         mAccessibilityDelegate = new TileAdapterDelegate();
-        mNumColumns = TileUtils.getQSColumnsCount(context, mNumColumns);
         mSizeLookup.setSpanIndexCacheEnabled(true);
+        mTempTextView = new TextView(context);
+        mMinTileViewHeight = context.getResources().getDimensionPixelSize(R.dimen.qs_tile_height);
     }
 
     @Override
@@ -151,8 +157,7 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
      * @return {@code true} if the number of columns changed, {@code false} otherwise
      */
     public boolean updateNumColumns() {
-        int numColumns = mContext.getResources().getInteger(NUM_COLUMNS_ID);
-        numColumns = TileUtils.getQSColumnsCount(mContext, numColumns);
+        int numColumns = TileUtils.getQSColumnsCount(mContext);
         if (numColumns != mNumColumns) {
             mNumColumns = numColumns;
             return true;
@@ -295,7 +300,7 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
         }
         FrameLayout frame = (FrameLayout) inflater.inflate(R.layout.qs_customize_tile_frame, parent,
                 false);
-        View view = new CustomizeTileView(context, new QSIconViewImpl(context));
+        View view = new CustomizeTileView(context);
         frame.addView(view);
         return new Holder(frame);
     }
@@ -323,6 +328,10 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
 
     @Override
     public void onBindViewHolder(final Holder holder, int position) {
+        if (holder.mTileView != null) {
+            holder.mTileView.setMinimumHeight(mMinTileViewHeight);
+        }
+
         if (holder.getItemViewType() == TYPE_HEADER) {
             setSelectableForHeaders(holder.itemView);
             return;
@@ -336,7 +345,7 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
             final String titleText;
             Resources res = mContext.getResources();
             if (mCurrentDrag == null) {
-                titleText = res.getString(R.string.drag_or_tap_to_add_tiles);
+                titleText = res.getString(R.string.drag_to_add_tiles);
             } else if (!canRemoveTiles() && mCurrentDrag.getAdapterPosition() < mEditIndex) {
                 titleText = res.getString(R.string.drag_to_remove_disabled, mMinNumTiles);
             } else {
@@ -422,8 +431,12 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
             public boolean onTouch(View v, MotionEvent ev) {
                 if (ev.getAction() == MotionEvent.ACTION_UP) {
                     int position = holder.getLayoutPosition();
-                    if (position >= mEditIndex || canRemoveTiles()) {
-                        move(position, mEditIndex, true);
+                    if (position < mEditIndex) {
+                        if (canRemoveTiles()) {
+                           move(position, mEditIndex, true);
+                        }
+                    } else {
+                       move(position, mEditIndex, true);
                     }
                 }
                 return false;
@@ -876,5 +889,20 @@ public class TileAdapter extends RecyclerView.Adapter<Holder> implements TileSta
                 + res.getDimensionPixelSize(R.dimen.qs_brightness_margin_bottom)
                 - buttonMinWidth
                 - res.getDimensionPixelSize(R.dimen.qs_tile_margin_top_bottom);
+    }
+
+    /**
+     * Re-estimate the tile view height based under current font scaling. Like
+     * {@link TileLayout#estimateCellHeight()}, the tile view height would be estimated with 2
+     * labels as general case.
+     */
+    public void reloadTileHeight() {
+        final int minHeight = mContext.getResources().getDimensionPixelSize(R.dimen.qs_tile_height);
+        FontSizeUtils.updateFontSize(mTempTextView, R.dimen.qs_tile_text_size);
+        int unspecifiedSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
+        mTempTextView.measure(unspecifiedSpec, unspecifiedSpec);
+        int padding = mContext.getResources().getDimensionPixelSize(R.dimen.qs_tile_padding);
+        int estimatedTileViewHeight = mTempTextView.getMeasuredHeight() * 2 + padding * 2;
+        mMinTileViewHeight = Math.max(minHeight, estimatedTileViewHeight);
     }
 }

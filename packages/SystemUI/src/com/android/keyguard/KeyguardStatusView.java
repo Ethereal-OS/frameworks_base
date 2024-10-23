@@ -19,21 +19,19 @@ package com.android.keyguard;
 import static java.util.Collections.emptySet;
 
 import android.content.Context;
+import android.graphics.Canvas;
+import android.os.Build;
 import android.os.Trace;
-import android.content.ContentResolver;
-import android.content.res.Resources;
-import android.os.UserHandle;
-import android.provider.Settings;
 import android.util.AttributeSet;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewPropertyAnimator;
 import android.widget.GridLayout;
 
-import com.android.systemui.Dependency;
-import com.android.systemui.R;
-import com.android.systemui.omni.CurrentWeatherView;
+import com.android.systemui.res.R;
+import com.android.systemui.shade.TouchLogger;
 import com.android.systemui.statusbar.CrossFadeHelper;
-import com.android.systemui.tuner.TunerService;
 
 import java.io.PrintWriter;
 import java.util.Set;
@@ -43,24 +41,16 @@ import java.util.Set;
  * - keyguard clock
  * - media player (split shade mode only)
  */
-public class KeyguardStatusView extends GridLayout implements
-     TunerService.Tunable {
+public class KeyguardStatusView extends GridLayout {
     private static final boolean DEBUG = KeyguardConstants.DEBUG;
     private static final String TAG = "KeyguardStatusView";
-
-    private static final String LOCKSCREEN_WEATHER_ENABLED =
-            "system:" + Settings.System.OMNI_LOCKSCREEN_WEATHER_ENABLED;
-    private static final String LOCKSCREEN_WEATHER_STYLE =
-            "system:" + Settings.System.AICP_LOCKSCREEN_WEATHER_STYLE;
 
     private ViewGroup mStatusViewContainer;
     private KeyguardClockSwitch mClockView;
     private KeyguardSliceView mKeyguardSlice;
     private View mMediaHostContainer;
-    private CurrentWeatherView mWeatherView;
-    private boolean mShowWeather;
-    private boolean mOmniStyle;
 
+    private int mDrawAlpha = 255;
     private float mDarkAmount = 0;
 
     public KeyguardStatusView(Context context) {
@@ -73,9 +63,6 @@ public class KeyguardStatusView extends GridLayout implements
 
     public KeyguardStatusView(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
-        Dependency.get(TunerService.class).addTunable(this,
-                LOCKSCREEN_WEATHER_ENABLED,
-                LOCKSCREEN_WEATHER_STYLE);
     }
 
     @Override
@@ -84,19 +71,15 @@ public class KeyguardStatusView extends GridLayout implements
         mStatusViewContainer = findViewById(R.id.status_view_container);
 
         mClockView = findViewById(R.id.keyguard_clock_container);
+        if (KeyguardClockAccessibilityDelegate.isNeeded(mContext)) {
+            mClockView.setAccessibilityDelegate(new KeyguardClockAccessibilityDelegate(mContext));
+        }
 
         mKeyguardSlice = findViewById(R.id.keyguard_slice_view);
-
-        mWeatherView = (CurrentWeatherView) findViewById(R.id.weather_container);
-
 
         mMediaHostContainer = findViewById(R.id.status_view_media_container);
 
         updateDark();
-        updateWeatherView();
-
-        //mKeyguardSlice.setContentChangeListener(this::onSliceContentChanged);
-        //onSliceContentChanged(); doc: This is removed with A13
     }
 
     void setDarkAmount(float darkAmount) {
@@ -110,9 +93,6 @@ public class KeyguardStatusView extends GridLayout implements
 
     void updateDark() {
         mKeyguardSlice.setDarkAmount(mDarkAmount);
-        if (mWeatherView != null) {
-            mWeatherView.blendARGB(mDarkAmount);
-        }
     }
 
     /** Sets a translationY value on every child view except for the media view. */
@@ -132,15 +112,31 @@ public class KeyguardStatusView extends GridLayout implements
         }
     }
 
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        return TouchLogger.logDispatchTouch(TAG, ev, super.dispatchTouchEvent(ev));
+    }
+
     public void dump(PrintWriter pw, String[] args) {
         pw.println("KeyguardStatusView:");
         pw.println("  mDarkAmount: " + mDarkAmount);
+        pw.println("  visibility: " + getVisibility());
         if (mClockView != null) {
             mClockView.dump(pw, args);
         }
         if (mKeyguardSlice != null) {
             mKeyguardSlice.dump(pw, args);
         }
+    }
+
+    @Override
+    public ViewPropertyAnimator animate() {
+        if (Build.IS_DEBUGGABLE) {
+            throw new IllegalArgumentException(
+                    "KeyguardStatusView does not support ViewPropertyAnimator. "
+                            + "Use PropertyAnimator instead.");
+        }
+        return super.animate();
     }
 
     @Override
@@ -151,32 +147,18 @@ public class KeyguardStatusView extends GridLayout implements
     }
 
     @Override
-    public void onTuningChanged(String key, String newValue) {
-        switch (key) {
-            case LOCKSCREEN_WEATHER_ENABLED:
-                mShowWeather =
-                        TunerService.parseIntegerSwitch(newValue, false);
-                updateWeatherView();
-                break;
-            case LOCKSCREEN_WEATHER_STYLE:
-                mOmniStyle =
-                        !TunerService.parseIntegerSwitch(newValue, false);
-                updateWeatherView();
-                break;
-            default:
-                break;
-        }
+    protected boolean onSetAlpha(int alpha) {
+        mDrawAlpha = alpha;
+        return true;
     }
 
-    public void updateWeatherView() {
-        if (mWeatherView != null) {
-            if (mShowWeather && mOmniStyle && mKeyguardSlice.getVisibility() == View.VISIBLE) {
-                mWeatherView.setVisibility(View.VISIBLE);
-                mWeatherView.enableUpdates();
-            } else if (!mShowWeather || !mOmniStyle) {
-                mWeatherView.setVisibility(View.GONE);
-                mWeatherView.disableUpdates();
-            }
-        }
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        KeyguardClockFrame.saveCanvasAlpha(
+                this, canvas, mDrawAlpha,
+                c -> {
+                    super.dispatchDraw(c);
+                    return kotlin.Unit.INSTANCE;
+                });
     }
 }

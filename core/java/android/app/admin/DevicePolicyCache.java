@@ -15,9 +15,15 @@
  */
 package android.app.admin;
 
+import static android.app.admin.DevicePolicyManager.CONTENT_PROTECTION_DISABLED;
+import static android.app.admin.DevicePolicyManager.ContentProtectionPolicy;
+
 import android.annotation.UserIdInt;
 
 import com.android.server.LocalServices;
+
+import java.util.Collections;
+import java.util.Map;
 
 /**
  * Stores a copy of the set of device policies maintained by {@link DevicePolicyManager} that
@@ -56,11 +62,22 @@ public abstract class DevicePolicyCache {
     public abstract int getPermissionPolicy(@UserIdInt int userHandle);
 
     /**
-     * Caches {@link DevicePolicyManager#canAdminGrantSensorsPermissionsForUser(int)} for the
-     * given user.
+     * Caches {@link DevicePolicyManager#getContentProtectionPolicy(android.content.ComponentName)}
+     * of the given user.
      */
-    public abstract boolean canAdminGrantSensorsPermissionsForUser(@UserIdInt int userHandle);
+    public abstract @ContentProtectionPolicy int getContentProtectionPolicy(@UserIdInt int userId);
 
+    /**
+     * True if there is an admin on the device who can grant sensor permissions.
+     */
+    public abstract boolean canAdminGrantSensorsPermissions();
+
+    /**
+     * Returns a map of package names to package names, for which all launcher shortcuts which
+     * match a key package name should be modified to launch the corresponding value package
+     * name in the managed profile. The overridden shortcut should be badged accordingly.
+     */
+    public abstract Map<String, String> getLauncherShortcutOverrides();
 
     /**
      * Empty implementation.
@@ -84,8 +101,17 @@ public abstract class DevicePolicyCache {
         }
 
         @Override
-        public boolean canAdminGrantSensorsPermissionsForUser(int userHandle) {
+        public @ContentProtectionPolicy int getContentProtectionPolicy(@UserIdInt int userId) {
+            return CONTENT_PROTECTION_DISABLED;
+        }
+
+        @Override
+        public boolean canAdminGrantSensorsPermissions() {
             return false;
+        }
+        @Override
+        public Map<String, String>  getLauncherShortcutOverrides() {
+            return Collections.EMPTY_MAP;
         }
     }
 }

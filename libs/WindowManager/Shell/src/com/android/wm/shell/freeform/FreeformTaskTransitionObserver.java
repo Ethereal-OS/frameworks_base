@@ -175,7 +175,6 @@ public class FreeformTaskTransitionObserver implements Transitions.TransitionObs
         final List<ActivityManager.RunningTaskInfo> taskInfo =
                 mTransitionToTaskInfo.getOrDefault(transition, Collections.emptyList());
         mTransitionToTaskInfo.remove(transition);
-
         for (int i = 0; i < taskInfo.size(); ++i) {
             mWindowDecorViewModel.destroyWindowDecoration(taskInfo.get(i));
         }

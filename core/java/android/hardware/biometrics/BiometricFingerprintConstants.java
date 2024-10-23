@@ -20,6 +20,8 @@ import android.annotation.IntDef;
 import android.app.KeyguardManager;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.hardware.biometrics.BiometricManager.Authenticators;
+import android.hardware.fingerprint.FingerprintEnrollOptions;
+import android.hardware.fingerprint.FingerprintEnrollOptions.EnrollReason;
 import android.hardware.fingerprint.FingerprintManager;
 import android.os.Build;
 
@@ -218,7 +220,8 @@ public interface BiometricFingerprintConstants {
             FINGERPRINT_ACQUIRED_UNKNOWN,
             FINGERPRINT_ACQUIRED_IMMOBILE,
             FINGERPRINT_ACQUIRED_TOO_BRIGHT,
-            FINGERPRINT_ACQUIRED_POWER_PRESSED})
+            FINGERPRINT_ACQUIRED_POWER_PRESSED,
+            FINGERPRINT_ACQUIRED_RE_ENROLL})
     @Retention(RetentionPolicy.SOURCE)
     @interface FingerprintAcquired {}
 
@@ -310,6 +313,12 @@ public interface BiometricFingerprintConstants {
     int FINGERPRINT_ACQUIRED_POWER_PRESSED = 11;
 
     /**
+     * This message is sent to encourage the user to re-enroll their fingerprints.
+     * @hide
+     */
+    int FINGERPRINT_ACQUIRED_RE_ENROLL = 12;
+
+    /**
      * @hide
      */
     int FINGERPRINT_ACQUIRED_VENDOR_BASE = 1000;
@@ -339,5 +348,23 @@ public interface BiometricFingerprintConstants {
                 // Keep the UDFPS mode in case of an unknown message.
                 return false;
         }
+    }
+
+
+    /**
+     * Converts FaceEnrollOptions.reason into BiometricsProtoEnums.enrollReason
+     */
+    static int reasonToMetric(@EnrollReason int reason) {
+        switch(reason) {
+            case FingerprintEnrollOptions.ENROLL_REASON_RE_ENROLL_NOTIFICATION:
+                return BiometricsProtoEnums.ENROLLMENT_SOURCE_FRR_NOTIFICATION;
+            case FingerprintEnrollOptions.ENROLL_REASON_SETTINGS:
+                return BiometricsProtoEnums.ENROLLMENT_SOURCE_SETTINGS;
+            case FingerprintEnrollOptions.ENROLL_REASON_SUW:
+                return BiometricsProtoEnums.ENROLLMENT_SOURCE_SUW;
+            default:
+                return BiometricsProtoEnums.ENROLLMENT_SOURCE_UNKNOWN;
+        }
+
     }
 }

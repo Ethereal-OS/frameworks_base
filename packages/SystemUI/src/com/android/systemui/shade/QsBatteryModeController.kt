@@ -2,7 +2,7 @@ package com.android.systemui.shade
 
 import android.content.Context
 import android.view.DisplayCutout
-import com.android.systemui.R
+import com.android.systemui.res.R
 import com.android.systemui.battery.BatteryMeterView
 import com.android.systemui.statusbar.phone.StatusBarContentInsetsProvider
 import javax.inject.Inject
@@ -45,11 +45,7 @@ constructor(
         when {
             qsExpandedFraction > fadeInStartFraction -> BatteryMeterView.MODE_ESTIMATE
             qsExpandedFraction < fadeOutCompleteFraction ->
-                if (hasCenterCutout(cutout)) {
-                    BatteryMeterView.MODE_ON
-                } else {
-                    BatteryMeterView.MODE_ESTIMATE
-                }
+                BatteryMeterView.MODE_ESTIMATE
             else -> null
         }
 

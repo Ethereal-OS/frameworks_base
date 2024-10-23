@@ -9,21 +9,27 @@ package {
 
 android_library {
     name: "SettingsLibMainSwitchPreference",
+    use_resource_processor: true,
+    defaults: [
+        "SettingsLintDefaults",
+    ],
 
     srcs: ["src/**/*.java"],
     resource_dirs: ["res"],
 
     static_libs: [
         "androidx.preference_preference",
+        "com.google.android.material_material",
         "SettingsLibSettingsTheme",
-        "SettingsLibUtils",
     ],
 
     sdk_version: "system_current",
     min_sdk_version: "28",
     apex_available: [
         "//apex_available:platform",
+        "com.android.adservices",
         "com.android.cellbroadcast",
-        "com.android.permission",
+        "com.android.extservices",
+        "com.android.healthfitness",
     ],
 }

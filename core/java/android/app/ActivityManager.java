@@ -20,20 +20,22 @@ import static android.app.WindowConfiguration.activityTypeToString;
 import static android.app.WindowConfiguration.windowingModeToString;
 import static android.content.Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS;
 import static android.content.pm.ActivityInfo.RESIZE_MODE_RESIZEABLE;
+import static android.media.audio.Flags.FLAG_FOREGROUND_AUDIO_CONTROL;
 
 import android.Manifest;
 import android.annotation.ColorInt;
 import android.annotation.DrawableRes;
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.IntRange;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
+import android.annotation.SuppressLint;
 import android.annotation.SystemApi;
 import android.annotation.SystemService;
 import android.annotation.TestApi;
 import android.annotation.UserIdInt;
-import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.ChangeId;
 import android.compat.annotation.EnabledSince;
 import android.compat.annotation.UnsupportedAppUsage;
@@ -81,19 +83,18 @@ import android.util.ArrayMap;
 import android.util.DisplayMetrics;
 import android.util.Singleton;
 import android.util.Size;
-import android.util.TypedXmlPullParser;
-import android.util.TypedXmlSerializer;
+import android.view.WindowInsetsController.Appearance;
 import android.window.TaskSnapshot;
 
 import com.android.internal.app.LocalePicker;
 import com.android.internal.app.procstats.ProcessStats;
-import com.android.internal.gmscompat.sysservice.GmcUserManager;
-import com.android.internal.gmscompat.GmsHooks;
 import com.android.internal.os.RoSystemProperties;
 import com.android.internal.os.TransferPipe;
 import com.android.internal.util.FastPrintWriter;
 import com.android.internal.util.MemInfoReader;
 import com.android.internal.util.Preconditions;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 import com.android.server.LocalServices;
 
 import java.io.FileDescriptor;
@@ -107,7 +108,9 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 /**
  * <p>
@@ -145,6 +148,7 @@ import java.util.concurrent.Executor;
  * </p>
  */
 @SystemService(Context.ACTIVITY_SERVICE)
+@android.ravenwood.annotation.RavenwoodKeepPartialClass
 public class ActivityManager {
     private static String TAG = "ActivityManager";
 
@@ -185,7 +189,7 @@ public class ActivityManager {
     public static final int INSTR_FLAG_NO_RESTART = 1 << 3;
     /**
      * Force the check that instrumentation and the target package are signed with the same
-     * certificate even if {@link Build.IS_ENG} is {@code true}.
+     * certificate even if {@link Build#IS_DEBUGGABLE} is {@code true}.
      * @hide
      */
     public static final int INSTR_FLAG_ALWAYS_CHECK_SIGNATURE = 1 << 4;
@@ -194,12 +198,17 @@ public class ActivityManager {
      * @hide
      */
     public static final int INSTR_FLAG_INSTRUMENT_SDK_SANDBOX = 1 << 5;
+    /**
+     * Instrument an Sdk Sandbox process corresponding to an Sdk running inside the sandbox.
+     * @hide
+     */
+    public static final int INSTR_FLAG_INSTRUMENT_SDK_IN_SANDBOX = 1 << 6;
 
-    static final class UidObserver extends IUidObserver.Stub {
+    static final class MyUidObserver extends UidObserver {
         final OnUidImportanceListener mListener;
         final Context mContext;
 
-        UidObserver(OnUidImportanceListener listener, Context clientContext) {
+        MyUidObserver(OnUidImportanceListener listener, Context clientContext) {
             mListener = listener;
             mContext = clientContext;
         }
@@ -214,23 +223,171 @@ public class ActivityManager {
         public void onUidGone(int uid, boolean disabled) {
             mListener.onUidImportance(uid, RunningAppProcessInfo.IMPORTANCE_GONE);
         }
+    }
 
-        @Override
-        public void onUidActive(int uid) {
-        }
+    final ArrayMap<OnUidImportanceListener, MyUidObserver> mImportanceListeners = new ArrayMap<>();
 
-        @Override
-        public void onUidIdle(int uid, boolean disabled) {
-        }
+    /**
+     * Map of callbacks that have registered for {@link UidFrozenStateChanged} events.
+     * Will be called when a Uid has become frozen or unfrozen.
+     */
+    private final ArrayMap<UidFrozenStateChangedCallback, Executor> mFrozenStateChangedCallbacks =
+             new ArrayMap<>();
 
-        @Override public void onUidCachedChanged(int uid, boolean cached) {
-        }
+    private final IUidFrozenStateChangedCallback mFrozenStateChangedCallback =
+            new IUidFrozenStateChangedCallback.Stub() {
+            @Override
+            public void onUidFrozenStateChanged(int[] uids, int[] frozenStates) {
+                synchronized (mFrozenStateChangedCallbacks) {
+                    mFrozenStateChangedCallbacks.forEach((callback, executor) -> {
+                        executor.execute(
+                                () -> callback.onUidFrozenStateChanged(uids, frozenStates));
+                    });
+                }
+            }
+        };
 
-        @Override public void onUidProcAdjChanged(int uid) {
+    /**
+     * Callback object for {@link #registerUidFrozenStateChangedCallback}
+     *
+     * @hide
+     */
+    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+    @TestApi
+    public interface UidFrozenStateChangedCallback {
+        /**
+         * Indicates that the UID was frozen.
+         *
+         * @hide
+         */
+        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+        @TestApi
+        int UID_FROZEN_STATE_FROZEN = 1;
+
+        /**
+         * Indicates that the UID was unfrozen.
+         *
+         * @hide
+         */
+        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+        @TestApi
+        int UID_FROZEN_STATE_UNFROZEN = 2;
+
+        /**
+         * @hide
+         */
+        @Retention(RetentionPolicy.SOURCE)
+        @IntDef(flag = false, prefix = {"UID_FROZEN_STATE_"}, value = {
+                UID_FROZEN_STATE_FROZEN,
+                UID_FROZEN_STATE_UNFROZEN,
+        })
+        public @interface UidFrozenState {}
+
+        /**
+         * Notify the client that the frozen states of an array of UIDs have changed.
+         *
+         * @param uids The UIDs for which the frozen state has changed
+         * @param frozenStates Frozen state for each UID index, Will be set to
+         *               {@link UidFrozenStateChangedCallback#UID_FROZEN_STATE_FROZEN}
+         *               when the UID is frozen. When the UID is unfrozen,
+         *               {@link UidFrozenStateChangedCallback#UID_FROZEN_STATE_UNFROZEN}
+         *               will be set.
+         *
+         * @hide
+         */
+        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+        @TestApi
+        void onUidFrozenStateChanged(@NonNull int[] uids,
+                @NonNull @UidFrozenState int[] frozenStates);
+    }
+
+    /**
+     * Register a {@link UidFrozenStateChangedCallback} object to receive notification
+     * when a UID is frozen or unfrozen. Will throw an exception if the same
+     * callback object is registered more than once.
+     *
+     * @param executor The executor that the callback will be run from.
+     * @param callback The callback to be registered. Callbacks for previous frozen/unfrozen
+     *                 UID changes will not be delivered. Only changes in state from the point of
+     *                 registration onward will be reported.
+     * @throws IllegalStateException if the {@code callback} is already registered.
+     *
+     * @hide
+     */
+    @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+    @TestApi
+    public void registerUidFrozenStateChangedCallback(
+            @NonNull Executor executor,
+            @NonNull UidFrozenStateChangedCallback callback) {
+        Preconditions.checkNotNull(executor, "executor cannot be null");
+        Preconditions.checkNotNull(callback, "callback cannot be null");
+        synchronized (mFrozenStateChangedCallbacks) {
+            if (mFrozenStateChangedCallbacks.containsKey(callback)) {
+                throw new IllegalStateException("Callback already registered: " + callback);
+            }
+            mFrozenStateChangedCallbacks.put(callback, executor);
+            if (mFrozenStateChangedCallbacks.size() > 1) {
+                /* There's no need to register more than one binder interface */
+                return;
+            }
+
+            try {
+                getService().registerUidFrozenStateChangedCallback(mFrozenStateChangedCallback);
+            } catch (RemoteException e) {
+                throw e.rethrowFromSystemServer();
+            }
         }
     }
 
-    final ArrayMap<OnUidImportanceListener, UidObserver> mImportanceListeners = new ArrayMap<>();
+    /**
+     * Unregister a {@link UidFrozenStateChangedCallback} callback.
+     * @param callback The callback to be unregistered.
+     *
+     * @hide
+     */
+    @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+    @TestApi
+    public void unregisterUidFrozenStateChangedCallback(
+            @NonNull UidFrozenStateChangedCallback callback) {
+        Preconditions.checkNotNull(callback, "callback cannot be null");
+        synchronized (mFrozenStateChangedCallbacks) {
+            mFrozenStateChangedCallbacks.remove(callback);
+            if (mFrozenStateChangedCallbacks.isEmpty()) {
+                try {
+                    getService().unregisterUidFrozenStateChangedCallback(
+                            mFrozenStateChangedCallback);
+                } catch (RemoteException e) {
+                    throw e.rethrowFromSystemServer();
+                }
+            }
+        }
+    }
+
+    /**
+     * Query the frozen state of a list of UIDs.
+     *
+     * @param uids the array of UIDs which the client would like to know the frozen state of.
+     * @return An array containing the frozen state for each requested UID, by index. Will be set
+     *               to {@link UidFrozenStateChangedCallback#UID_FROZEN_STATE_FROZEN}
+     *               if the UID is frozen. If the UID is not frozen or not found,
+     *               {@link UidFrozenStateChangedCallback#UID_FROZEN_STATE_UNFROZEN}
+     *               will be set.
+     *
+     * @hide
+     */
+    @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+    @TestApi
+    public @NonNull @UidFrozenStateChangedCallback.UidFrozenState
+            int[] getUidFrozenState(@NonNull int[] uids) {
+        try {
+            return getService().getUidFrozenState(uids);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
 
     /**
      * <a href="{@docRoot}guide/topics/manifest/meta-data-element.html">{@code
@@ -406,6 +563,13 @@ public class ActivityManager {
     public static final int START_FLAG_NATIVE_DEBUGGING = 1<<3;
 
     /**
+     * Flag for IActivityManaqer.startActivity: launch the app for
+     * debugging and suspend threads.
+     * @hide
+     */
+    public static final int START_FLAG_DEBUG_SUSPEND = 1 << 4;
+
+    /**
      * Result for IActivityManaqer.broadcastIntent: success!
      * @hide
      */
@@ -551,6 +715,8 @@ public class ActivityManager {
 
     /** @hide Process is hosting a foreground service due to a system binding. */
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+    @SuppressLint("UnflaggedApi") // @TestApi without associated feature.
+    @TestApi
     public static final int PROCESS_STATE_BOUND_FOREGROUND_SERVICE =
             ProcessStateEnum.BOUND_FOREGROUND_SERVICE;
 
@@ -618,6 +784,7 @@ public class ActivityManager {
 
     /**
      * The set of flags for process capability.
+     * Keep it in sync with ProcessCapability in atoms.proto.
      * @hide
      */
     @IntDef(flag = true, prefix = { "PROCESS_CAPABILITY_" }, value = {
@@ -625,44 +792,179 @@ public class ActivityManager {
             PROCESS_CAPABILITY_FOREGROUND_LOCATION,
             PROCESS_CAPABILITY_FOREGROUND_CAMERA,
             PROCESS_CAPABILITY_FOREGROUND_MICROPHONE,
+            PROCESS_CAPABILITY_POWER_RESTRICTED_NETWORK,
+            PROCESS_CAPABILITY_BFSL,
+            PROCESS_CAPABILITY_USER_RESTRICTED_NETWORK,
+            PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface ProcessCapability {}
 
+    /**
+     * Used to log FGS API events from CAMERA API
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_CAMERA = 1;
+
+    /**
+     * Used to log FGS API events from BLUETOOTH API, used
+     * with FGS type of CONNECTED_DEVICE
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_BLUETOOTH = 2;
+    /**
+     * Used to log FGS API events from Location API.
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_LOCATION = 3;
+    /**
+     * Used to log FGS API events from media playback API
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_MEDIA_PLAYBACK = 4;
+    /**
+     * Used to log FGS API events from Audio API
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_AUDIO = 5;
+    /**
+     * Used to log FGS API events from microphone API
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_MICROPHONE = 6;
+    /**
+     * Used to log FGS API events from phone API
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_PHONE_CALL = 7;
+    /**
+     * Used to log FGS API events from USB API
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_USB = 8;
+    /**
+     * Used to log FGS API events from CDM API
+     * @hide
+     */
+    @SystemApi
+    public static final int FOREGROUND_SERVICE_API_TYPE_CDM = 9;
+
+    /**
+     * Constants used to denote what API type
+     * is creating an API event for logging.
+     * @hide
+     */
+    @IntDef(flag = false, prefix = { "FOREGROUND_SERVICE_API_TYPE_" }, value = {
+            FOREGROUND_SERVICE_API_TYPE_CAMERA,
+            FOREGROUND_SERVICE_API_TYPE_BLUETOOTH,
+            FOREGROUND_SERVICE_API_TYPE_LOCATION,
+            FOREGROUND_SERVICE_API_TYPE_MEDIA_PLAYBACK,
+            FOREGROUND_SERVICE_API_TYPE_AUDIO,
+            FOREGROUND_SERVICE_API_TYPE_MICROPHONE,
+            FOREGROUND_SERVICE_API_TYPE_PHONE_CALL,
+            FOREGROUND_SERVICE_API_TYPE_USB,
+            FOREGROUND_SERVICE_API_TYPE_CDM,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface ForegroundServiceApiType {}
+
+    /**
+     * Used to log a start event for an FGS API
+     * @hide
+     */
+    public static final int FOREGROUND_SERVICE_API_EVENT_BEGIN = 1;
+    /**
+     * Used to log a stop event for an FGS API
+     * @hide
+     */
+    public static final int FOREGROUND_SERVICE_API_EVENT_END = 2;
+    /**
+     * Constants used to denote API state
+     * during an API event for logging.
+     * @hide
+     */
+    @IntDef(flag = false, prefix = { "FOREGROUND_SERVICE_API_EVENT_" }, value = {
+            FOREGROUND_SERVICE_API_EVENT_BEGIN,
+            FOREGROUND_SERVICE_API_EVENT_END,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface ForegroundServiceApiEvent {}
+
     /** @hide Process does not have any capability */
-    @TestApi
+    @SystemApi
     public static final int PROCESS_CAPABILITY_NONE = 0;
 
     /** @hide Process can access location while in foreground */
-    @TestApi
+    @SystemApi
     public static final int PROCESS_CAPABILITY_FOREGROUND_LOCATION = 1 << 0;
 
     /** @hide Process can access camera while in foreground */
-    @TestApi
+    @SystemApi
     public static final int PROCESS_CAPABILITY_FOREGROUND_CAMERA = 1 << 1;
 
     /** @hide Process can access microphone while in foreground */
-    @TestApi
+    @SystemApi
     public static final int PROCESS_CAPABILITY_FOREGROUND_MICROPHONE = 1 << 2;
 
-    /** @hide Process can access network despite any power saving resrictions */
+    /** @hide Process can access network despite any power saving restrictions */
     @TestApi
-    public static final int PROCESS_CAPABILITY_NETWORK = 1 << 3;
+    public static final int PROCESS_CAPABILITY_POWER_RESTRICTED_NETWORK = 1 << 3;
 
-    /** @hide all capabilities, the ORing of all flags in {@link ProcessCapability}*/
+    /**
+     * Flag used to indicate whether an app is allowed to start a foreground service from the
+     * background, decided by the procstates. ("BFSL" == "background foreground service launch")
+     *
+     * - BFSL has a number of exemptions -- e.g. when an app is power-allowlisted, including
+     *   temp-allowlist -- but this capability is *not* used to represent such exemptions.
+     *   This is set only based on the procstate and the foreground service type.
+     * - Basically, procstates <= BFGS (i.e. BFGS, FGS, BTOP, TOP, ...) are BFSL-allowed,
+     *   and that's how things worked on Android S/T.
+     *   However, Android U added a "SHORT_SERVICE" FGS type, which gets the FGS procstate
+     *   *but* can't start another FGS. So now we use this flag to decide whether FGS/BFGS
+     *   procstates are BFSL-allowed. (higher procstates, such as BTOP, will still always be
+     *   BFSL-allowed.)
+     *   We propagate this flag across via service bindings and provider references.
+     *
+     * @hide
+     */
+    public static final int PROCESS_CAPABILITY_BFSL = 1 << 4;
+
+    /**
+     * @hide
+     * Process can access network at a high enough proc state despite any user restrictions.
+     */
     @TestApi
+    public static final int PROCESS_CAPABILITY_USER_RESTRICTED_NETWORK = 1 << 5;
+
+    /**
+     * @hide
+     * Process can access volume APIs and can request audio focus with GAIN.
+     */
+    @FlaggedApi(FLAG_FOREGROUND_AUDIO_CONTROL)
+    @SystemApi
+    public static final int PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL = 1 << 6;
+
+    /**
+     * @hide all capabilities, the ORing of all flags in {@link ProcessCapability}.
+     *
+     * Don't expose it as TestApi -- we may add new capabilities any time, which could
+     * break CTS tests if they relied on it.
+     */
     public static final int PROCESS_CAPABILITY_ALL = PROCESS_CAPABILITY_FOREGROUND_LOCATION
             | PROCESS_CAPABILITY_FOREGROUND_CAMERA
             | PROCESS_CAPABILITY_FOREGROUND_MICROPHONE
-            | PROCESS_CAPABILITY_NETWORK;
-    /**
-     * All explicit capabilities. These are capabilities that need to be specified from manifest
-     * file.
-     * @hide
-     */
-    @TestApi
-    public static final int PROCESS_CAPABILITY_ALL_EXPLICIT =
-            PROCESS_CAPABILITY_FOREGROUND_LOCATION;
+            | PROCESS_CAPABILITY_POWER_RESTRICTED_NETWORK
+            | PROCESS_CAPABILITY_BFSL
+            | PROCESS_CAPABILITY_USER_RESTRICTED_NETWORK
+            | PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL;
 
     /**
      * All implicit capabilities. There are capabilities that process automatically have.
@@ -676,38 +978,45 @@ public class ActivityManager {
      * Print capability bits in human-readable form.
      * @hide
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void printCapabilitiesSummary(PrintWriter pw, @ProcessCapability int caps) {
         pw.print((caps & PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0 ? 'L' : '-');
         pw.print((caps & PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0 ? 'C' : '-');
         pw.print((caps & PROCESS_CAPABILITY_FOREGROUND_MICROPHONE) != 0 ? 'M' : '-');
-        pw.print((caps & PROCESS_CAPABILITY_NETWORK) != 0 ? 'N' : '-');
+        pw.print((caps & PROCESS_CAPABILITY_POWER_RESTRICTED_NETWORK) != 0 ? 'N' : '-');
+        pw.print((caps & PROCESS_CAPABILITY_BFSL) != 0 ? 'F' : '-');
+        pw.print((caps & PROCESS_CAPABILITY_USER_RESTRICTED_NETWORK) != 0 ? 'U' : '-');
+        pw.print((caps & PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL) != 0 ? 'A' : '-');
     }
 
     /** @hide */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void printCapabilitiesSummary(StringBuilder sb, @ProcessCapability int caps) {
         sb.append((caps & PROCESS_CAPABILITY_FOREGROUND_LOCATION) != 0 ? 'L' : '-');
         sb.append((caps & PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0 ? 'C' : '-');
         sb.append((caps & PROCESS_CAPABILITY_FOREGROUND_MICROPHONE) != 0 ? 'M' : '-');
-        sb.append((caps & PROCESS_CAPABILITY_NETWORK) != 0 ? 'N' : '-');
+        sb.append((caps & PROCESS_CAPABILITY_POWER_RESTRICTED_NETWORK) != 0 ? 'N' : '-');
+        sb.append((caps & PROCESS_CAPABILITY_BFSL) != 0 ? 'F' : '-');
+        sb.append((caps & PROCESS_CAPABILITY_USER_RESTRICTED_NETWORK) != 0 ? 'U' : '-');
+        sb.append((caps & PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL) != 0 ? 'A' : '-');
     }
 
     /**
      * Print capability bits in human-readable form.
      * @hide
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static void printCapabilitiesFull(PrintWriter pw, @ProcessCapability int caps) {
         printCapabilitiesSummary(pw, caps);
-        final int remain = caps & ~(PROCESS_CAPABILITY_FOREGROUND_LOCATION
-                | PROCESS_CAPABILITY_FOREGROUND_CAMERA
-                | PROCESS_CAPABILITY_FOREGROUND_MICROPHONE
-                | PROCESS_CAPABILITY_NETWORK);
+        final int remain = caps & ~PROCESS_CAPABILITY_ALL;
         if (remain != 0) {
-            pw.print('+');
-            pw.print(remain);
+            pw.print("+0x");
+            pw.print(Integer.toHexString(remain));
         }
     }
 
     /** @hide */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static String getCapabilitiesSummary(@ProcessCapability int caps) {
         final StringBuilder sb = new StringBuilder();
         printCapabilitiesSummary(sb, caps);
@@ -727,6 +1036,7 @@ public class ActivityManager {
      * @return the value of the corresponding enums.proto ProcessStateEnum value.
      * @hide
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static final int processStateAmToProto(int amInt) {
         switch (amInt) {
             case PROCESS_STATE_UNKNOWN:
@@ -787,16 +1097,19 @@ public class ActivityManager {
     public static final int MAX_PROCESS_STATE = PROCESS_STATE_NONEXISTENT;
 
     /** @hide Should this process state be considered a background state? */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static final boolean isProcStateBackground(int procState) {
         return procState >= PROCESS_STATE_TRANSIENT_BACKGROUND;
     }
 
     /** @hide Should this process state be considered in the cache? */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static final boolean isProcStateCached(int procState) {
         return procState >= PROCESS_STATE_CACHED_ACTIVITY;
     }
 
     /** @hide Is this a foreground service type? */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static boolean isForegroundService(int procState) {
         return procState == PROCESS_STATE_FOREGROUND_SERVICE;
     }
@@ -870,10 +1183,25 @@ public class ActivityManager {
         mContext = context;
     }
 
+    private static volatile int sCurrentUser$ravenwood = UserHandle.USER_NULL;
+
+    /** @hide */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public static void init$ravenwood(int currentUser) {
+        sCurrentUser$ravenwood = currentUser;
+    }
+
+    /** @hide */
+    @android.ravenwood.annotation.RavenwoodKeep
+    public static void reset$ravenwood() {
+        sCurrentUser$ravenwood = UserHandle.USER_NULL;
+    }
+
     /**
      * Returns whether the launch was successful.
      * @hide
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static final boolean isStartResultSuccessful(int result) {
         return FIRST_START_SUCCESS_CODE <= result && result <= LAST_START_SUCCESS_CODE;
     }
@@ -882,6 +1210,7 @@ public class ActivityManager {
      * Returns whether the launch result was a fatal error.
      * @hide
      */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static final boolean isStartResultFatalError(int result) {
         return FIRST_START_FATAL_ERROR_CODE <= result && result <= LAST_START_FATAL_ERROR_CODE;
     }
@@ -1052,6 +1381,7 @@ public class ActivityManager {
     public @interface RestrictionLevel{}
 
     /** @hide */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static String restrictionLevelToName(@RestrictionLevel int level) {
         switch (level) {
             case RESTRICTION_LEVEL_UNKNOWN:
@@ -1192,7 +1522,7 @@ public class ActivityManager {
     @UnsupportedAppUsage
     public static boolean isLowRamDeviceStatic() {
         return RoSystemProperties.CONFIG_LOW_RAM ||
-                (Build.IS_ENG && DEVELOPMENT_FORCE_LOW_RAM);
+                (Build.IS_DEBUGGABLE && DEVELOPMENT_FORCE_LOW_RAM);
     }
 
     /**
@@ -1273,6 +1603,8 @@ public class ActivityManager {
         private int mColorBackgroundFloating;
         private int mStatusBarColor;
         private int mNavigationBarColor;
+        @Appearance
+        private int mStatusBarAppearance;
         private boolean mEnsureStatusBarContrastWhenTransparent;
         private boolean mEnsureNavigationBarContrastWhenTransparent;
         private int mResizeMode;
@@ -1373,8 +1705,8 @@ public class ActivityManager {
                 final Icon icon = mIconRes == Resources.ID_NULL ? null :
                         Icon.createWithResource(ActivityThread.currentPackageName(), mIconRes);
                 return new TaskDescription(mLabel, icon, mPrimaryColor, mBackgroundColor,
-                        mStatusBarColor, mNavigationBarColor, false, false, RESIZE_MODE_RESIZEABLE,
-                        -1, -1, 0);
+                        mStatusBarColor, mNavigationBarColor, 0, false, false,
+                        RESIZE_MODE_RESIZEABLE, -1, -1, 0);
             }
         }
 
@@ -1392,7 +1724,7 @@ public class ActivityManager {
         @Deprecated
         public TaskDescription(String label, @DrawableRes int iconRes, int colorPrimary) {
             this(label, Icon.createWithResource(ActivityThread.currentPackageName(), iconRes),
-                    colorPrimary, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
+                    colorPrimary, 0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
             if ((colorPrimary != 0) && (Color.alpha(colorPrimary) != 255)) {
                 throw new RuntimeException("A TaskDescription's primary color should be opaque");
             }
@@ -1410,7 +1742,7 @@ public class ActivityManager {
         @Deprecated
         public TaskDescription(String label, @DrawableRes int iconRes) {
             this(label, Icon.createWithResource(ActivityThread.currentPackageName(), iconRes),
-                    0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
+                    0, 0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
         }
 
         /**
@@ -1422,7 +1754,7 @@ public class ActivityManager {
          */
         @Deprecated
         public TaskDescription(String label) {
-            this(label, null, 0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
+            this(label, null, 0, 0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
         }
 
         /**
@@ -1432,7 +1764,7 @@ public class ActivityManager {
          */
         @Deprecated
         public TaskDescription() {
-            this(null, null, 0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
+            this(null, null, 0, 0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
         }
 
         /**
@@ -1448,7 +1780,7 @@ public class ActivityManager {
         @Deprecated
         public TaskDescription(String label, Bitmap icon, int colorPrimary) {
             this(label, icon != null ? Icon.createWithBitmap(icon) : null, colorPrimary, 0, 0, 0,
-                    false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
+                    0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
             if ((colorPrimary != 0) && (Color.alpha(colorPrimary) != 255)) {
                 throw new RuntimeException("A TaskDescription's primary color should be opaque");
             }
@@ -1464,14 +1796,15 @@ public class ActivityManager {
          */
         @Deprecated
         public TaskDescription(String label, Bitmap icon) {
-            this(label, icon != null ? Icon.createWithBitmap(icon) : null, 0, 0, 0, 0, false, false,
-                    RESIZE_MODE_RESIZEABLE, -1, -1, 0);
+            this(label, icon != null ? Icon.createWithBitmap(icon) : null, 0, 0, 0, 0, 0, false,
+                    false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
         }
 
         /** @hide */
         public TaskDescription(@Nullable String label, @Nullable Icon icon,
                 int colorPrimary, int colorBackground,
                 int statusBarColor, int navigationBarColor,
+                @Appearance int statusBarAppearance,
                 boolean ensureStatusBarContrastWhenTransparent,
                 boolean ensureNavigationBarContrastWhenTransparent, int resizeMode, int minWidth,
                 int minHeight, int colorBackgroundFloating) {
@@ -1481,6 +1814,7 @@ public class ActivityManager {
             mColorBackground = colorBackground;
             mStatusBarColor = statusBarColor;
             mNavigationBarColor = navigationBarColor;
+            mStatusBarAppearance = statusBarAppearance;
             mEnsureStatusBarContrastWhenTransparent = ensureStatusBarContrastWhenTransparent;
             mEnsureNavigationBarContrastWhenTransparent =
                     ensureNavigationBarContrastWhenTransparent;
@@ -1509,6 +1843,7 @@ public class ActivityManager {
             mColorBackground = other.mColorBackground;
             mStatusBarColor = other.mStatusBarColor;
             mNavigationBarColor = other.mNavigationBarColor;
+            mStatusBarAppearance = other.mStatusBarAppearance;
             mEnsureStatusBarContrastWhenTransparent = other.mEnsureStatusBarContrastWhenTransparent;
             mEnsureNavigationBarContrastWhenTransparent =
                     other.mEnsureNavigationBarContrastWhenTransparent;
@@ -1537,6 +1872,9 @@ public class ActivityManager {
             }
             if (other.mNavigationBarColor != 0) {
                 mNavigationBarColor = other.mNavigationBarColor;
+            }
+            if (other.mStatusBarAppearance != 0) {
+                mStatusBarAppearance = other.mStatusBarAppearance;
             }
 
             mEnsureStatusBarContrastWhenTransparent = other.mEnsureStatusBarContrastWhenTransparent;
@@ -1809,9 +2147,24 @@ public class ActivityManager {
         /**
          * @hide
          */
+        @Appearance
+        public int getStatusBarAppearance() {
+            return mStatusBarAppearance;
+        }
+
+        /**
+         * @hide
+         */
         public void setEnsureStatusBarContrastWhenTransparent(
                 boolean ensureStatusBarContrastWhenTransparent) {
             mEnsureStatusBarContrastWhenTransparent = ensureStatusBarContrastWhenTransparent;
+        }
+
+        /**
+         * @hide
+         */
+        public void setStatusBarAppearance(@Appearance int statusBarAppearance) {
+            mStatusBarAppearance = statusBarAppearance;
         }
 
         /**
@@ -1938,6 +2291,7 @@ public class ActivityManager {
             dest.writeInt(mColorBackground);
             dest.writeInt(mStatusBarColor);
             dest.writeInt(mNavigationBarColor);
+            dest.writeInt(mStatusBarAppearance);
             dest.writeBoolean(mEnsureStatusBarContrastWhenTransparent);
             dest.writeBoolean(mEnsureNavigationBarContrastWhenTransparent);
             dest.writeInt(mResizeMode);
@@ -1961,6 +2315,7 @@ public class ActivityManager {
             mColorBackground = source.readInt();
             mStatusBarColor = source.readInt();
             mNavigationBarColor = source.readInt();
+            mStatusBarAppearance = source.readInt();
             mEnsureStatusBarContrastWhenTransparent = source.readBoolean();
             mEnsureNavigationBarContrastWhenTransparent = source.readBoolean();
             mResizeMode = source.readInt();
@@ -1996,6 +2351,32 @@ public class ActivityManager {
         }
 
         @Override
+        public int hashCode() {
+            int result = 17;
+            if (mLabel != null) {
+                result = result * 31 + mLabel.hashCode();
+            }
+            if (mIcon != null) {
+                result = result * 31 + mIcon.hashCode();
+            }
+            if (mIconFilename != null) {
+                result = result * 31 + mIconFilename.hashCode();
+            }
+            result = result * 31 + mColorPrimary;
+            result = result * 31 + mColorBackground;
+            result = result * 31 + mColorBackgroundFloating;
+            result = result * 31 + mStatusBarColor;
+            result = result * 31 + mNavigationBarColor;
+            result = result * 31 + mStatusBarAppearance;
+            result = result * 31 + (mEnsureStatusBarContrastWhenTransparent ? 1 : 0);
+            result = result * 31 + (mEnsureNavigationBarContrastWhenTransparent ? 1 : 0);
+            result = result * 31 + mResizeMode;
+            result = result * 31 + mMinWidth;
+            result = result * 31 + mMinHeight;
+            return result;
+        }
+
+        @Override
         public boolean equals(@Nullable Object obj) {
             if (!(obj instanceof TaskDescription)) {
                 return false;
@@ -2009,6 +2390,7 @@ public class ActivityManager {
                     && mColorBackground == other.mColorBackground
                     && mStatusBarColor == other.mStatusBarColor
                     && mNavigationBarColor == other.mNavigationBarColor
+                    && mStatusBarAppearance == other.mStatusBarAppearance
                     && mEnsureStatusBarContrastWhenTransparent
                             == other.mEnsureStatusBarContrastWhenTransparent
                     && mEnsureNavigationBarContrastWhenTransparent
@@ -2815,6 +3197,15 @@ public class ActivityManager {
      */
     public static class MemoryInfo implements Parcelable {
         /**
+         * The advertised memory of the system, as the end user would encounter in a retail display
+         * environment. This value might be different from {@code totalMem}. This could be due to
+         * many reasons. For example, the ODM could reserve part of the memory for the Trusted
+         * Execution Environment (TEE) which the kernel doesn't have access or knowledge about it.
+         */
+        @SuppressLint("MutableBareField")
+        public long advertisedMem;
+
+        /**
          * The available memory on the system.  This number should not
          * be considered absolute: due to the nature of the kernel, a significant
          * portion of this memory is actually in use and needed for the overall
@@ -2863,6 +3254,7 @@ public class ActivityManager {
         }
 
         public void writeToParcel(Parcel dest, int flags) {
+            dest.writeLong(advertisedMem);
             dest.writeLong(availMem);
             dest.writeLong(totalMem);
             dest.writeLong(threshold);
@@ -2874,6 +3266,7 @@ public class ActivityManager {
         }
 
         public void readFromParcel(Parcel source) {
+            advertisedMem = source.readLong();
             availMem = source.readLong();
             totalMem = source.readLong();
             threshold = source.readLong();
@@ -3131,7 +3524,13 @@ public class ActivityManager {
         /**
          * All packages that have been loaded into the process.
          */
-        public String pkgList[];
+        public String[] pkgList;
+
+        /**
+         * Additional packages loaded into the process as dependency.
+         * @hide
+         */
+        public String[] pkgDeps;
 
         /**
          * Constant for {@link #flags}: this is an app that is unable to
@@ -3217,7 +3616,7 @@ public class ActivityManager {
          * foreground.  This may be running a window that is behind the current
          * foreground (so paused and with its state saved, not interacting with
          * the user, but visible to them to some degree); it may also be running
-         * other services under the system's control that it inconsiders important.
+         * other services under the system's control that it considers important.
          */
         public static final int IMPORTANCE_VISIBLE = 200;
 
@@ -3289,9 +3688,9 @@ public class ActivityManager {
         public static final int IMPORTANCE_CANT_SAVE_STATE = 350;
 
         /**
-         * Constant for {@link #importance}: This process process contains
-         * cached code that is expendable, not actively running any app components
-         * we care about.
+         * Constant for {@link #importance}: This process contains cached code
+         * that is expendable, not actively running any app components we care
+         * about.
          */
         public static final int IMPORTANCE_CACHED = 400;
 
@@ -3512,6 +3911,7 @@ public class ActivityManager {
             dest.writeInt(pid);
             dest.writeInt(uid);
             dest.writeStringArray(pkgList);
+            dest.writeStringArray(pkgDeps);
             dest.writeInt(this.flags);
             dest.writeInt(lastTrimLevel);
             dest.writeInt(importance);
@@ -3530,6 +3930,7 @@ public class ActivityManager {
             pid = source.readInt();
             uid = source.readInt();
             pkgList = source.readStringArray();
+            pkgDeps = source.readStringArray();
             flags = source.readInt();
             lastTrimLevel = source.readInt();
             importance = source.readInt();
@@ -3628,11 +4029,211 @@ public class ActivityManager {
      */
     public List<RunningAppProcessInfo> getRunningAppProcesses() {
         try {
-            List<RunningAppProcessInfo> res = getService().getRunningAppProcesses();
-            if (GmsCompat.isEnabled()) {
-                res = GmsHooks.addRecentlyBoundPids(mContext, res);
+            return getService().getRunningAppProcesses();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Return a list of {@link ApplicationStartInfo} records containing the information about the
+     * most recent app startups.
+     *
+     * <p class="note"> Note: System stores this historical information in a ring buffer and only
+     * the most recent records will be returned. </p>
+     *
+     * @param maxNum      The maximum number of results to be returned; a value of 0
+     *                    means to ignore this parameter and return all matching records. If fewer
+     *                    records exist, all existing records will be returned.
+     *
+     * @return a list of {@link ApplicationStartInfo} records matching the criteria, sorted in
+     *         the order from most recent to least recent.
+     */
+    @NonNull
+    @FlaggedApi(Flags.FLAG_APP_START_INFO)
+    public List<ApplicationStartInfo> getHistoricalProcessStartReasons(
+            @IntRange(from = 0) int maxNum) {
+        try {
+            ParceledListSlice<ApplicationStartInfo> startInfos = getService()
+                    .getHistoricalProcessStartReasons(null, maxNum, mContext.getUserId());
+            return startInfos == null ? Collections.emptyList() : startInfos.getList();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Return a list of {@link ApplicationStartInfo} records containing the information about the
+     * most recent app startups.
+     *
+     * <p class="note"> Note: System stores this historical information in a ring buffer and only
+     * the most recent records will be returned. </p>
+     *
+     * @param packageName Package name for which app startups to receive.
+     * @param maxNum      The maximum number of results to be returned; a value of 0
+     *                    means to ignore this parameter and return all matching records. If fewer
+     *                    records exist, all existing records will be returned.
+     *
+     * @return a list of {@link ApplicationStartInfo} records matching the criteria, sorted in
+     *         the order from most recent to least recent.
+     *
+     * @hide
+     */
+    @NonNull
+    @SystemApi
+    @FlaggedApi(Flags.FLAG_APP_START_INFO)
+    @RequiresPermission(Manifest.permission.DUMP)
+    public List<ApplicationStartInfo> getExternalHistoricalProcessStartReasons(
+            @NonNull String packageName, @IntRange(from = 0) int maxNum) {
+        try {
+            ParceledListSlice<ApplicationStartInfo> startInfos = getService()
+                    .getHistoricalProcessStartReasons(packageName, maxNum, mContext.getUserId());
+            return startInfos == null ? Collections.emptyList() : startInfos.getList();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    private final ArrayList<AppStartInfoCallbackWrapper> mAppStartInfoCallbacks =
+            new ArrayList<>();
+    @Nullable
+    private IApplicationStartInfoCompleteListener mAppStartInfoCompleteListener = null;
+
+    private static final class AppStartInfoCallbackWrapper {
+        @NonNull final Executor mExecutor;
+        @NonNull final Consumer<ApplicationStartInfo> mListener;
+
+        AppStartInfoCallbackWrapper(@NonNull final Executor executor,
+                @NonNull final Consumer<ApplicationStartInfo> listener) {
+            mExecutor = executor;
+            mListener = listener;
+        }
+    }
+
+    /**
+     * Adds a callback to be notified when the {@link ApplicationStartInfo} records of this startup
+     * are complete.
+     *
+     * <p class="note"> Note: callback will be removed automatically after being triggered.</p>
+     *
+     * <p class="note"> Note: callback will not wait for {@link Activity#reportFullyDrawn} to occur.
+     * Timestamp for fully drawn may be added after callback occurs. Set callback after invoking
+     * {@link Activity#reportFullyDrawn} if timestamp for fully drawn is required.</p>
+     *
+     * <p class="note"> Note: if start records have already been retrieved, the callback will be
+     * invoked immediately on the specified executor with the previously resolved AppStartInfo.</p>
+     *
+     * <p class="note"> Note: callback is asynchronous and should be made from a background thread.
+     * </p>
+     *
+     * @param executor    The executor on which the listener should be called.
+     * @param listener    Callback to be called when collection of {@link ApplicationStartInfo} is
+     *                    complete. Will replace existing listener if one is already attached.
+     *
+     * @throws IllegalArgumentException if executor or listener are null.
+     */
+    @FlaggedApi(Flags.FLAG_APP_START_INFO)
+    public void addApplicationStartInfoCompletionListener(@NonNull final Executor executor,
+            @NonNull final Consumer<ApplicationStartInfo> listener) {
+        Preconditions.checkNotNull(executor, "executor cannot be null");
+        Preconditions.checkNotNull(listener, "listener cannot be null");
+        synchronized (mAppStartInfoCallbacks) {
+            for (int i = 0; i < mAppStartInfoCallbacks.size(); i++) {
+                if (listener.equals(mAppStartInfoCallbacks.get(i).mListener)) {
+                    return;
+                }
             }
-            return res;
+            if (mAppStartInfoCompleteListener == null) {
+                mAppStartInfoCompleteListener = new IApplicationStartInfoCompleteListener.Stub() {
+                    @Override
+                    public void onApplicationStartInfoComplete(
+                            ApplicationStartInfo applicationStartInfo) {
+                        synchronized (mAppStartInfoCallbacks) {
+                            for (int i = 0; i < mAppStartInfoCallbacks.size(); i++) {
+                                final AppStartInfoCallbackWrapper callback =
+                                        mAppStartInfoCallbacks.get(i);
+                                callback.mExecutor.execute(() -> callback.mListener.accept(
+                                        applicationStartInfo));
+                            }
+                            mAppStartInfoCallbacks.clear();
+                            mAppStartInfoCompleteListener = null;
+                        }
+                    }
+                };
+                boolean succeeded = false;
+                try {
+                    getService().addApplicationStartInfoCompleteListener(
+                            mAppStartInfoCompleteListener, mContext.getUserId());
+                    succeeded = true;
+                } catch (RemoteException e) {
+                    throw e.rethrowFromSystemServer();
+                }
+                if (succeeded) {
+                    mAppStartInfoCallbacks.add(new AppStartInfoCallbackWrapper(executor, listener));
+                } else {
+                    mAppStartInfoCompleteListener = null;
+                    mAppStartInfoCallbacks.clear();
+                }
+            } else {
+                mAppStartInfoCallbacks.add(new AppStartInfoCallbackWrapper(executor, listener));
+            }
+        }
+    }
+
+    /**
+     * Removes the provided callback set by {@link #addApplicationStartInfoCompletionListener}.
+     */
+    @FlaggedApi(Flags.FLAG_APP_START_INFO)
+    public void removeApplicationStartInfoCompletionListener(
+            @NonNull final Consumer<ApplicationStartInfo> listener) {
+        Preconditions.checkNotNull(listener, "listener cannot be null");
+        synchronized (mAppStartInfoCallbacks) {
+            for (int i = 0; i < mAppStartInfoCallbacks.size(); i++) {
+                final AppStartInfoCallbackWrapper callback = mAppStartInfoCallbacks.get(i);
+                if (listener.equals(callback.mListener)) {
+                    mAppStartInfoCallbacks.remove(i);
+                    break;
+                }
+            }
+            if (mAppStartInfoCompleteListener != null && mAppStartInfoCallbacks.isEmpty()) {
+                try {
+                    getService().removeApplicationStartInfoCompleteListener(
+                            mAppStartInfoCompleteListener, mContext.getUserId());
+                } catch (RemoteException e) {
+                    throw e.rethrowFromSystemServer();
+                }
+                mAppStartInfoCompleteListener = null;
+            }
+        }
+    }
+
+    /**
+     * Adds an optional developer supplied timestamp to the calling apps most recent
+     * {@link ApplicationStartInfo}. This is in addition to system recorded timestamps.
+     *
+     * <p class="note"> Note: timestamps added after {@link Activity#reportFullyDrawn} is called
+     * will be discarded.</p>
+     *
+     * <p class="note"> Note: will overwrite existing timestamp if called with same key.</p>
+     *
+     * @param key         Unique key for timestamp. Must be greater than
+     *                    {@link ApplicationStartInfo#START_TIMESTAMP_RESERVED_RANGE_SYSTEM} and
+     *                    less than or equal to
+     *                    {@link ApplicationStartInfo#START_TIMESTAMP_RESERVED_RANGE_DEVELOPER}.
+     *                    Will thow {@link java.lang.IllegalArgumentException} if not in range.
+     * @param timestampNs Clock monotonic time in nanoseconds of event to be recorded.
+     */
+    @FlaggedApi(Flags.FLAG_APP_START_INFO)
+    public void addStartInfoTimestamp(@IntRange(
+            from = ApplicationStartInfo.START_TIMESTAMP_RESERVED_RANGE_DEVELOPER_START,
+            to = ApplicationStartInfo.START_TIMESTAMP_RESERVED_RANGE_DEVELOPER) int key,
+            long timestampNs) {
+        if (key <= ApplicationStartInfo.START_TIMESTAMP_RESERVED_RANGE_SYSTEM
+                || key > ApplicationStartInfo.START_TIMESTAMP_RESERVED_RANGE_DEVELOPER) {
+            throw new IllegalArgumentException("Key not in allowed range.");
+        }
+        try {
+            getService().addStartInfoTimestamp(key, timestampNs, mContext.getUserId());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -3797,6 +4398,33 @@ public class ActivityManager {
     }
 
     /**
+     * Same as {@link #getUidImportance(int)}, but it only works on UIDs that currently
+     * have a service binding, or provider reference, to the calling UID, even if the target UID
+     * belong to another android user or profile.
+     *
+     * <p>This will return {@link RunningAppProcessInfo#IMPORTANCE_GONE} on all other UIDs,
+     * regardless of if they're valid or not.
+     *
+     * <p>Privileged system apps may prefer this API to {@link #getUidImportance(int)} to
+     * avoid requesting the permission {@link Manifest.permission#PACKAGE_USAGE_STATS}, which
+     * would allow access to APIs that return more senstive information.
+     *
+     * @hide
+     */
+    @FlaggedApi(Flags.FLAG_GET_BINDING_UID_IMPORTANCE)
+    @SystemApi
+    @RequiresPermission(Manifest.permission.GET_BINDING_UID_IMPORTANCE)
+    public @RunningAppProcessInfo.Importance int getBindingUidImportance(int uid) {
+        try {
+            int procState = getService().getBindingUidProcessState(uid,
+                    mContext.getOpPackageName());
+            return RunningAppProcessInfo.procStateToImportanceForClient(procState, mContext);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Callback to get reports about changes to the importance of a uid.  Use with
      * {@link #addOnUidImportanceListener}.
      * @hide
@@ -3816,7 +4444,7 @@ public class ActivityManager {
     }
 
     /**
-     * Start monitoring changes to the imoportance of uids running in the system.
+     * Start monitoring changes to the importance of all uids running in the system.
      * @param listener The listener callback that will receive change reports.
      * @param importanceCutpoint The level of importance in which the caller is interested
      * in differences.  For example, if {@link RunningAppProcessInfo#IMPORTANCE_PERCEPTIBLE}
@@ -3827,6 +4455,10 @@ public class ActivityManager {
      * <p>The caller must hold the {@link android.Manifest.permission#PACKAGE_USAGE_STATS}
      * permission to use this feature.</p>
      *
+     * <p>Calling this API with the same instance of {@code listener} without
+     * unregistering with {@link #removeOnUidImportanceListener} before it will result in
+     * an {@link IllegalArgumentException}.</p>
+     *
      * @throws IllegalArgumentException If the listener is already registered.
      * @throws SecurityException If the caller does not hold
      * {@link android.Manifest.permission#PACKAGE_USAGE_STATS}.
@@ -3836,17 +4468,53 @@ public class ActivityManager {
     @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
     public void addOnUidImportanceListener(OnUidImportanceListener listener,
             @RunningAppProcessInfo.Importance int importanceCutpoint) {
-        synchronized (this) {
+        addOnUidImportanceListenerInternal(listener, importanceCutpoint, null /* uids */);
+    }
+
+    /**
+     * Start monitoring changes to the importance of given uids running in the system.
+     *
+     * @param listener The listener callback that will receive change reports.
+     * @param importanceCutpoint The level of importance in which the caller is interested
+     * in differences.  For example, if {@link RunningAppProcessInfo#IMPORTANCE_PERCEPTIBLE}
+     * is used here, you will receive a call each time a uids importance transitions between
+     * being <= {@link RunningAppProcessInfo#IMPORTANCE_PERCEPTIBLE} and
+     * > {@link RunningAppProcessInfo#IMPORTANCE_PERCEPTIBLE}.
+     * @param uids The UIDs that this listener is interested with.
+     * {@link #addOnUidImportanceListener(OnUidImportanceListener, int)} in this case.
+     *
+     * <p>Calling this API with the same instance of {@code listener} without
+     * unregistering with {@link #removeOnUidImportanceListener} before it will result in
+     * an {@link IllegalArgumentException}.</p>
+     *
+     * @throws IllegalArgumentException If the listener is already registered.
+     * @hide
+     */
+    @FlaggedApi(Flags.FLAG_UID_IMPORTANCE_LISTENER_FOR_UIDS)
+    @SystemApi
+    @SuppressLint("SamShouldBeLast")
+    @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+    public void addOnUidImportanceListener(@NonNull OnUidImportanceListener listener,
+            @RunningAppProcessInfo.Importance int importanceCutpoint, @NonNull int[] uids) {
+        Objects.requireNonNull(listener);
+        Objects.requireNonNull(uids);
+        addOnUidImportanceListenerInternal(listener, importanceCutpoint, uids);
+    }
+
+    @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+    private void addOnUidImportanceListenerInternal(@NonNull OnUidImportanceListener listener,
+            @RunningAppProcessInfo.Importance int importanceCutpoint, @Nullable int[] uids) {
+        synchronized (mImportanceListeners) {
             if (mImportanceListeners.containsKey(listener)) {
                 throw new IllegalArgumentException("Listener already registered: " + listener);
             }
             // TODO: implement the cut point in the system process to avoid IPCs.
-            UidObserver observer = new UidObserver(listener, mContext);
+            MyUidObserver observer = new MyUidObserver(listener, mContext);
             try {
-                getService().registerUidObserver(observer,
+                getService().registerUidObserverForUids(observer,
                         UID_OBSERVER_PROCSTATE | UID_OBSERVER_GONE,
                         RunningAppProcessInfo.importanceToProcState(importanceCutpoint),
-                        mContext.getOpPackageName());
+                        mContext.getOpPackageName(), uids);
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             }
@@ -3864,8 +4532,8 @@ public class ActivityManager {
     @SystemApi
     @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
     public void removeOnUidImportanceListener(OnUidImportanceListener listener) {
-        synchronized (this) {
-            UidObserver observer = mImportanceListeners.remove(listener);
+        synchronized (mImportanceListeners) {
+            MyUidObserver observer = mImportanceListeners.remove(listener);
             if (observer == null) {
                 throw new IllegalArgumentException("Listener not registered: " + listener);
             }
@@ -3940,7 +4608,8 @@ public class ActivityManager {
      * processes to reclaim memory; the system will take care of restarting
      * these processes in the future as needed.
      *
-     * <p class="note">Third party applications can only use this API to kill their own processes.
+     * <p class="note">On devices that run Android 14 or higher,
+     * third party applications can only use this API to kill their own processes.
      * </p>
      *
      * @param packageName The name of the package whose processes are to
@@ -4010,6 +4679,21 @@ public class ActivityManager {
     @RequiresPermission(Manifest.permission.FORCE_STOP_PACKAGES)
     public void forceStopPackage(String packageName) {
         forceStopPackageAsUser(packageName, mContext.getUserId());
+    }
+
+    /**
+     * Similar to {@link #forceStopPackageAsUser(String, int)} but will also stop the package even
+     * when the user is in the stopping state.
+     *
+     * @hide
+     */
+    @RequiresPermission(Manifest.permission.FORCE_STOP_PACKAGES)
+    public void forceStopPackageAsUserEvenWhenStopping(String packageName, @UserIdInt int userId) {
+        try {
+            getService().forceStopPackageEvenWhenStopping(packageName, userId);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 
     /**
@@ -4134,12 +4818,19 @@ public class ActivityManager {
      * Returns "true" if the user interface is currently being messed with
      * by a monkey.
      */
+    @android.ravenwood.annotation.RavenwoodReplace
     public static boolean isUserAMonkey() {
         try {
             return getService().isUserAMonkey();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+    }
+
+    /** @hide */
+    public static boolean isUserAMonkey$ravenwood() {
+        // Ravenwood environment is never considered a "monkey"
+        return false;
     }
 
     /**
@@ -4218,13 +4909,29 @@ public class ActivityManager {
         }
     }*/
 
+    /** @hide
+     * Determines whether the given UID can access unexported components
+     * @param uid the calling UID
+     * @return true if the calling UID is ROOT or SYSTEM
+     */
+    public static boolean canAccessUnexportedComponents(int uid) {
+        final int appId = UserHandle.getAppId(uid);
+        return (appId == Process.ROOT_UID || appId == Process.SYSTEM_UID);
+    }
+
     /** @hide */
     @UnsupportedAppUsage
     public static int checkComponentPermission(String permission, int uid,
             int owningUid, boolean exported) {
+        return checkComponentPermission(permission, uid, Context.DEVICE_ID_DEFAULT,
+                owningUid, exported);
+    }
+
+    /** @hide */
+    public static int checkComponentPermission(String permission, int uid, int deviceId,
+            int owningUid, boolean exported) {
         // Root, system server get to do everything.
-        final int appId = UserHandle.getAppId(uid);
-        if (appId == Process.ROOT_UID || appId == Process.SYSTEM_UID) {
+        if (canAccessUnexportedComponents(uid)) {
             return PackageManager.PERMISSION_GRANTED;
         }
         // Isolated processes don't get any permissions.
@@ -4250,8 +4957,7 @@ public class ActivityManager {
             return PackageManager.PERMISSION_GRANTED;
         }
         try {
-            return AppGlobals.getPackageManager()
-                    .checkUidPermission(permission, uid);
+            return AppGlobals.getPermissionManager().checkUidPermission(uid, permission, deviceId);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -4260,8 +4966,8 @@ public class ActivityManager {
     /** @hide */
     public static int checkUidPermission(String permission, int uid) {
         try {
-            return AppGlobals.getPackageManager()
-                    .checkUidPermission(permission, uid);
+            return AppGlobals.getPermissionManager().checkUidPermission(
+                    uid, permission, Context.DEVICE_ID_DEFAULT);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -4313,16 +5019,18 @@ public class ActivityManager {
             "android.permission.INTERACT_ACROSS_USERS",
             "android.permission.INTERACT_ACROSS_USERS_FULL"
     })
+    @android.ravenwood.annotation.RavenwoodReplace
     public static int getCurrentUser() {
-        if (GmsCompat.isEnabled()) {
-            return GmcUserManager.amGetCurrentUser();
-        }
-
         try {
             return getService().getCurrentUserId();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+    }
+
+    /** @hide */
+    public static int getCurrentUser$ravenwood() {
+        return sCurrentUser$ravenwood;
     }
 
     /**
@@ -4350,10 +5058,69 @@ public class ActivityManager {
     @RequiresPermission(anyOf = {android.Manifest.permission.MANAGE_USERS,
             android.Manifest.permission.CREATE_USERS})
     public boolean switchUser(@NonNull UserHandle user) {
-        if (user == null) {
-            throw new IllegalArgumentException("UserHandle cannot be null.");
-        }
+        Preconditions.checkArgument(user != null, "UserHandle cannot be null.");
+
         return switchUser(user.getIdentifier());
+    }
+
+    /**
+     * Starts the given user in background and assign the user to the given display.
+     *
+     * <p>This method will allow the user to launch activities on that display, and it's typically
+     * used only on automotive builds when the vehicle has multiple displays (you can verify if it's
+     * supported by calling {@link UserManager#isVisibleBackgroundUsersSupported()}).
+     *
+     * <p><b>NOTE:</b> differently from {@link #switchUser(int)}, which stops the current foreground
+     * user before starting a new one, this method does not stop the previous user running in
+     * background in the display, and it will return {@code false} in this case. It's up to the
+     * caller to call {@link #stopUser(int, boolean)} before starting a new user.
+     *
+     * @param userId user to be started in the display. It will return {@code false} if the user is
+     * a profile, the {@link #getCurrentUser()}, the {@link UserHandle#SYSTEM system user}, or
+     * does not exist.
+     *
+     * @param displayId id of the display.
+     *
+     * @return whether the operation succeeded. Notice that if the user was already started in such
+     * display before, it will return {@code false}.
+     *
+     * @throws UnsupportedOperationException if the device does not support background users on
+     * secondary displays.
+     *
+     * @hide
+     */
+    @TestApi
+    @RequiresPermission(anyOf = {android.Manifest.permission.MANAGE_USERS,
+            android.Manifest.permission.INTERACT_ACROSS_USERS})
+    public boolean startUserInBackgroundVisibleOnDisplay(@UserIdInt int userId, int displayId) {
+        if (!UserManager.isVisibleBackgroundUsersEnabled()) {
+            throw new UnsupportedOperationException(
+                    "device does not support users on secondary displays");
+        }
+        try {
+            return getService().startUserInBackgroundVisibleOnDisplay(userId, displayId,
+                    /* unlockProgressListener= */ null);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Gets the id of displays that can be used by
+     * {@link #startUserInBackgroundOnSecondaryDisplay(int, int)}.
+     *
+     * @hide
+     */
+    @TestApi
+    @Nullable
+    @RequiresPermission(anyOf = {android.Manifest.permission.MANAGE_USERS,
+            android.Manifest.permission.INTERACT_ACROSS_USERS})
+    public int[] getDisplayIdsForStartingVisibleBackgroundUsers() {
+        try {
+            return getService().getDisplayIdsForStartingVisibleBackgroundUsers();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 
     /**
@@ -4414,6 +5181,7 @@ public class ActivityManager {
             STOP_USER_ON_SWITCH_TRUE,
             STOP_USER_ON_SWITCH_FALSE
     })
+    @Retention(RetentionPolicy.SOURCE)
     public @interface StopUserOnSwitch {}
 
     /**
@@ -4509,6 +5277,10 @@ public class ActivityManager {
     /**
      * Stops the given {@code userId}.
      *
+     * <p><b>NOTE:</b> on systems that support
+     * {@link UserManager#isVisibleBackgroundUsersSupported() background users on secondary
+     * displays}, this method will also unassign the user from the display it was started on.
+     *
      * @hide
      */
     @TestApi
@@ -4545,10 +5317,6 @@ public class ActivityManager {
      */
     @UnsupportedAppUsage
     public boolean isUserRunning(int userId) {
-        if (GmsCompat.isEnabled()) {
-            return GmcUserManager.amIsUserRunning(userId);
-        }
-
         try {
             return getService().isUserRunning(userId, 0);
         } catch (RemoteException e) {
@@ -4604,6 +5372,7 @@ public class ActivityManager {
     /**
      * @hide
      */
+    @android.ravenwood.annotation.RavenwoodReplace
     public static boolean isSystemReady() {
         if (!sSystemReady) {
             if (ActivityThread.isSystem()) {
@@ -4618,11 +5387,17 @@ public class ActivityManager {
         return sSystemReady;
     }
 
+    /** @hide */
+    public static boolean isSystemReady$ravenwood() {
+        // Ravenwood environment is always considered as booted and ready
+        return true;
+    }
+
     /**
      * @hide
      */
     public static void broadcastStickyIntent(Intent intent, int userId) {
-        broadcastStickyIntent(intent, AppOpsManager.OP_NONE, userId);
+        broadcastStickyIntent(intent, AppOpsManager.OP_NONE, null, userId);
     }
 
     /**
@@ -4631,11 +5406,30 @@ public class ActivityManager {
      * @hide
      */
     public static void broadcastStickyIntent(Intent intent, int appOp, int userId) {
+        broadcastStickyIntent(intent, appOp, null, userId);
+    }
+
+    /**
+     * Convenience for sending a sticky broadcast.  For internal use only.
+     *
+     * @hide
+     */
+    public static void broadcastStickyIntent(Intent intent, int appOp, Bundle options, int userId) {
+        broadcastStickyIntent(intent, null, appOp, options, userId);
+    }
+
+    /**
+     * Convenience for sending a sticky broadcast.  For internal use only.
+     *
+     * @hide
+     */
+    public static void broadcastStickyIntent(Intent intent, String[] excludedPackages,
+            int appOp, Bundle options, int userId) {
         try {
             getService().broadcastIntentWithFeature(
                     null, null, intent, null, null, Activity.RESULT_OK, null, null,
                     null /*requiredPermissions*/, null /*excludedPermissions*/,
-                    null /*excludedPackages*/, appOp, null, false, true, userId);
+                    excludedPackages, appOp, options, false, true, userId);
         } catch (RemoteException ex) {
         }
     }
@@ -4926,11 +5720,13 @@ public class ActivityManager {
     }
 
     /** @hide */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static boolean isProcStateConsideredInteraction(@ProcessState int procState) {
         return (procState <= PROCESS_STATE_TOP || procState == PROCESS_STATE_BOUND_TOP);
     }
 
     /** @hide */
+    @android.ravenwood.annotation.RavenwoodKeep
     public static String procStateToString(int procState) {
         final String procStateStr;
         switch (procState) {
@@ -5171,6 +5967,25 @@ public class ActivityManager {
     }
 
     /**
+     * Used by ThemeOverlayController to notify when color
+     * palette is ready.
+     *
+     * @param userId The ID of the user where ThemeOverlayController is ready.
+     *
+     * @throws RemoteException
+     *
+     * @hide
+     */
+    @RequiresPermission(Manifest.permission.SET_THEME_OVERLAY_CONTROLLER_READY)
+    public void setThemeOverlayReady(@UserIdInt int userId) {
+        try {
+            getService().setThemeOverlayReady(userId);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Resets the state of the {@link com.android.server.am.AppErrors} instance.
      * This is intended for use with CTS only.
      * @hide
@@ -5217,6 +6032,93 @@ public class ActivityManager {
     }
 
     /**
+     * Delays delivering broadcasts to the specified package.
+     *
+     * <p> When {@code delayedDurationMs} is {@code 0}, it will clears any previously
+     * set forced delays.
+     *
+     * <p><b>Note: This method is only intended for testing and it only
+     * works for packages that are already running.
+     *
+     * @hide
+     */
+    @RequiresPermission(android.Manifest.permission.DUMP)
+    public void forceDelayBroadcastDelivery(@NonNull String targetPackage,
+            @IntRange(from = 0) long delayedDurationMs) {
+        try {
+            getService().forceDelayBroadcastDelivery(targetPackage, delayedDurationMs);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Checks if the "modern" broadcast queue is enabled.
+     *
+     * @hide
+     */
+    @RequiresPermission(android.Manifest.permission.DUMP)
+    public boolean isModernBroadcastQueueEnabled() {
+        try {
+            return getService().isModernBroadcastQueueEnabled();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Checks if the process represented by the given {@code pid} is frozen.
+     *
+     * @hide
+     */
+    @RequiresPermission(android.Manifest.permission.DUMP)
+    public boolean isProcessFrozen(int pid) {
+        try {
+            return getService().isProcessFrozen(pid);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Internal method for logging API starts. Used with
+     * FGS metrics logging. Is called by APIs that are
+     * used with FGS to log an API event (eg when
+     * the camera starts).
+     * @hide
+     *
+     */
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.LOG_FOREGROUND_RESOURCE_USE)
+    public void noteForegroundResourceUseBegin(@ForegroundServiceApiType int apiType,
+            int uid, int pid) throws SecurityException {
+        try {
+            getService().logFgsApiBegin(apiType, uid, pid);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Internal method for logging API end. Used with
+     * FGS metrics logging. Is called by APIs that are
+     * used with FGS to log an API event (eg when
+     * the camera starts).
+     * @hide
+     *
+     */
+    @SystemApi
+    @RequiresPermission(android.Manifest.permission.LOG_FOREGROUND_RESOURCE_USE)
+    public void noteForegroundResourceUseEnd(@ForegroundServiceApiType int apiType,
+            int uid, int pid) throws SecurityException {
+        try {
+            getService().logFgsApiEnd(apiType, uid, pid);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * @return The reason code of whether or not the given UID should be exempted from background
      * restrictions here.
      *
@@ -5235,6 +6137,31 @@ public class ActivityManager {
             e.rethrowFromSystemServer();
         }
         return PowerExemptionManager.REASON_DENIED;
+    }
+
+    /**
+     * Notifies {@link #getRunningAppProcesses app processes} that the system properties
+     * have changed.
+     *
+     * @see SystemProperties#addChangeCallback
+     *
+     * @hide
+     */
+    @TestApi
+    public void notifySystemPropertiesChanged() {
+        // Note: this cannot use {@link ServiceManager#listServices()} to notify all the services,
+        // as that is not available from tests.
+        final var binder = ActivityManager.getService().asBinder();
+        if (binder != null) {
+            var data = Parcel.obtain();
+            try {
+                binder.transact(IBinder.SYSPROPS_TRANSACTION, data, null /* reply */,
+                        0 /* flags */);
+            } catch (RemoteException e) {
+                throw e.rethrowFromSystemServer();
+            }
+            data.recycle();
+        }
     }
 
     /**

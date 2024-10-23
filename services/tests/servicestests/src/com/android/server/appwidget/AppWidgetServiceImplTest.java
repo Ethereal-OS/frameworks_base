@@ -47,15 +47,16 @@ import android.content.pm.ShortcutServiceInternal;
 import android.os.Handler;
 import android.os.UserHandle;
 import android.test.InstrumentationTestCase;
-import android.test.suitebuilder.annotation.SmallTest;
 import android.util.AtomicFile;
-import android.util.TypedXmlPullParser;
-import android.util.TypedXmlSerializer;
 import android.util.Xml;
 import android.widget.RemoteViews;
 
+import androidx.test.filters.SmallTest;
+
 import com.android.frameworks.servicestests.R;
 import com.android.internal.appwidget.IAppWidgetHost;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 import com.android.server.LocalServices;
 
 import org.mockito.ArgumentCaptor;

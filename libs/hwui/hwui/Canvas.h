@@ -16,23 +16,25 @@
 
 #pragma once
 
+#include <SaveFlags.h>
+#include <SkBitmap.h>
+#include <SkCanvas.h>
+#include <SkMatrix.h>
+#include <androidfw/ResourceTypes.h>
 #include <cutils/compiler.h>
 #include <utils/Functor.h>
-#include <SaveFlags.h>
 
-#include <androidfw/ResourceTypes.h>
 #include "Properties.h"
 #include "pipeline/skia/AnimatedDrawables.h"
 #include "utils/Macros.h"
 
-#include <SkBitmap.h>
-#include <SkCanvas.h>
-#include <SkMatrix.h>
-
 class SkAnimatedImage;
+enum class SkBlendMode;
 class SkCanvasState;
+class SkRRect;
 class SkRuntimeShaderBuilder;
 class SkVertices;
+class Mesh;
 
 namespace minikin {
 class Font;
@@ -151,7 +153,7 @@ public:
         LOG_ALWAYS_FATAL("Not supported");
     }
 
-    virtual void punchHole(const SkRRect& rect) = 0;
+    virtual void punchHole(const SkRRect& rect, float alpha) = 0;
 
     // ----------------------------------------------------------------------------
     // Canvas state operations
@@ -173,6 +175,7 @@ public:
     virtual void setMatrix(const SkMatrix& matrix) = 0;
 
     virtual void concat(const SkMatrix& matrix) = 0;
+    virtual void concat(const SkM44& matrix) = 0;
     virtual void rotate(float degrees) = 0;
     virtual void scale(float sx, float sy) = 0;
     virtual void skew(float sx, float sy) = 0;
@@ -185,6 +188,7 @@ public:
 
     virtual bool clipRect(float left, float top, float right, float bottom, SkClipOp op) = 0;
     virtual bool clipPath(const SkPath* path, SkClipOp op) = 0;
+    virtual void clipShader(sk_sp<SkShader> shader, SkClipOp op) = 0;
     // Resets clip to wide open, used to emulate the now-removed SkClipOp::kReplace on
     // apps with compatibility < P. Canvases for version P and later are restricted to
     // intersect and difference at the Java level, matching SkClipOp's definition.
@@ -225,6 +229,7 @@ public:
                          float sweepAngle, bool useCenter, const Paint& paint) = 0;
     virtual void drawPath(const SkPath& path, const Paint& paint) = 0;
     virtual void drawVertices(const SkVertices*, SkBlendMode, const Paint& paint) = 0;
+    virtual void drawMesh(const Mesh& mesh, sk_sp<SkBlender>, const Paint& paint) = 0;
 
     // Bitmap-based
     virtual void drawBitmap(Bitmap& bitmap, float left, float top, const Paint* paint) = 0;
@@ -282,7 +287,7 @@ protected:
      * totalAdvance: used to define width of text decorations (underlines, strikethroughs).
      */
     virtual void drawGlyphs(ReadGlyphFunc glyphFunc, int count, const Paint& paint, float x,
-                            float y,float totalAdvance) = 0;
+                            float y, float totalAdvance) = 0;
     virtual void drawLayoutOnPath(const minikin::Layout& layout, float hOffset, float vOffset,
                                   const Paint& paint, const SkPath& path, size_t start,
                                   size_t end) = 0;

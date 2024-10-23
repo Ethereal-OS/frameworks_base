@@ -17,10 +17,13 @@ package android.service.euicc;
 
 import static android.telephony.euicc.EuiccCardManager.ResetOption;
 
+import android.Manifest;
 import android.annotation.CallSuper;
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
 import android.annotation.SystemApi;
 import android.app.PendingIntent;
@@ -35,6 +38,8 @@ import android.telephony.euicc.EuiccManager;
 import android.telephony.euicc.EuiccManager.OtaStatus;
 import android.text.TextUtils;
 import android.util.Log;
+
+import com.android.internal.telephony.flags.Flags;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -132,12 +137,24 @@ public abstract class EuiccService extends Service {
      * @see android.telephony.euicc.EuiccManager#ACTION_MANAGE_EMBEDDED_SUBSCRIPTIONS
      * The difference is this one is used by system to bring up the LUI.
      */
+    @RequiresPermission(Manifest.permission.BIND_EUICC_SERVICE)
     public static final String ACTION_MANAGE_EMBEDDED_SUBSCRIPTIONS =
             "android.service.euicc.action.MANAGE_EMBEDDED_SUBSCRIPTIONS";
 
     /** @see android.telephony.euicc.EuiccManager#ACTION_PROVISION_EMBEDDED_SUBSCRIPTION */
+    @RequiresPermission(Manifest.permission.BIND_EUICC_SERVICE)
     public static final String ACTION_PROVISION_EMBEDDED_SUBSCRIPTION =
             "android.service.euicc.action.PROVISION_EMBEDDED_SUBSCRIPTION";
+
+    /** @see android.telephony.euicc.EuiccManager#ACTION_TRANSFER_EMBEDDED_SUBSCRIPTIONS */
+    @RequiresPermission(Manifest.permission.BIND_EUICC_SERVICE)
+    public static final String ACTION_TRANSFER_EMBEDDED_SUBSCRIPTIONS =
+            "android.service.euicc.action.TRANSFER_EMBEDDED_SUBSCRIPTIONS";
+
+    /** @see android.telephony.euicc.EuiccManager#ACTION_CONVERT_TO_EMBEDDED_SUBSCRIPTION */
+    @RequiresPermission(Manifest.permission.BIND_EUICC_SERVICE)
+    public static final String ACTION_CONVERT_TO_EMBEDDED_SUBSCRIPTION =
+            "android.service.euicc.action.CONVERT_TO_EMBEDDED_SUBSCRIPTION";
 
     /**
      * @see android.telephony.euicc.EuiccManager#ACTION_TOGGLE_SUBSCRIPTION_PRIVILEGED. This is
@@ -490,6 +507,28 @@ public abstract class EuiccService extends Service {
             int slotId, DownloadableSubscription subscription, boolean forceDeactivateSim);
 
     /**
+     * Populate {@link DownloadableSubscription} metadata for the given downloadable subscription.
+     *
+     * @param slotId ID of the SIM slot to use for the operation.
+     * @param portIndex Index of the port from the slot. portIndex is used if the eUICC must
+     *     be activated to perform the operation.
+     * @param subscription A subscription whose metadata needs to be populated.
+     * @param forceDeactivateSim If true, and if an active SIM must be deactivated to access the
+     *     eUICC, perform this action automatically. Otherwise, {@link #RESULT_MUST_DEACTIVATE_SIM}
+     *     should be returned to allow the user to consent to this operation first.
+     * @return The result of the operation.
+     * @see android.telephony.euicc.EuiccManager#getDownloadableSubscriptionMetadata
+     */
+    @NonNull
+    public GetDownloadableSubscriptionMetadataResult onGetDownloadableSubscriptionMetadata(
+            int slotId, int portIndex, @NonNull DownloadableSubscription subscription,
+            boolean forceDeactivateSim) {
+        // stub implementation, LPA needs to implement this
+        throw new UnsupportedOperationException(
+                "LPA must override onGetDownloadableSubscriptionMetadata");
+    }
+
+    /**
      * Return metadata for subscriptions which are available for download for this device.
      *
      * @param slotId ID of the SIM slot to use for the operation.
@@ -723,10 +762,43 @@ public abstract class EuiccService extends Service {
     public abstract int onRetainSubscriptionsForFactoryReset(int slotId);
 
     /**
+     * Return the available memory in bytes of the eUICC.
+     *
+     * @param slotId ID of the SIM slot being queried.
+     * @return the available memory in bytes.
+     * @see android.telephony.euicc.EuiccManager#getAvailableMemoryInBytes
+     */
+    @FlaggedApi(Flags.FLAG_ESIM_AVAILABLE_MEMORY)
+    public long onGetAvailableMemoryInBytes(int slotId) {
+        // stub implementation, LPA needs to implement this
+        throw new UnsupportedOperationException("The connected LPA does not implement"
+                + "EuiccService#onGetAvailableMemoryInBytes(int)");
+    }
+
+    /**
      * Dump to a provided printWriter.
      */
     public void dump(@NonNull PrintWriter printWriter) {
         printWriter.println("The connected LPA does not implement EuiccService#dump()");
+    }
+
+    /**
+     * Result code to string
+     *
+     * @param result The result code.
+     * @return The result code in string format.
+     *
+     * @hide
+     */
+    public static String resultToString(@Result int result) {
+        switch (result) {
+            case RESULT_OK: return "OK";
+            case RESULT_MUST_DEACTIVATE_SIM : return "MUST_DEACTIVATE_SIM";
+            case RESULT_RESOLVABLE_ERRORS: return "RESOLVABLE_ERRORS";
+            case RESULT_FIRST_USER: return "FIRST_USER";
+            default:
+            return "UNKNOWN(" + result + ")";
+        }
     }
 
     /**
@@ -779,6 +851,34 @@ public abstract class EuiccService extends Service {
         }
 
         @Override
+        @FlaggedApi(Flags.FLAG_ESIM_AVAILABLE_MEMORY)
+        public void getAvailableMemoryInBytes(
+                int slotId, IGetAvailableMemoryInBytesCallback callback) {
+            mExecutor.execute(
+                    () -> {
+                        long availableMemoryInBytes = EuiccManager.EUICC_MEMORY_FIELD_UNAVAILABLE;
+                        String unsupportedOperationMessage = "";
+                        try {
+                            availableMemoryInBytes =
+                                    EuiccService.this.onGetAvailableMemoryInBytes(slotId);
+                        } catch (UnsupportedOperationException e) {
+                            unsupportedOperationMessage = e.getMessage();
+                        }
+
+                        try {
+                            if (!unsupportedOperationMessage.isEmpty()) {
+                                callback.onUnsupportedOperationException(
+                                        unsupportedOperationMessage);
+                            } else {
+                                callback.onSuccess(availableMemoryInBytes);
+                            }
+                        } catch (RemoteException e) {
+                            // Can't communicate with the phone process; ignore.
+                        }
+                    });
+        }
+
+        @Override
         public void startOtaIfNecessary(
                 int slotId, IOtaStatusChangedCallback statusChangedCallback) {
             mExecutor.execute(new Runnable() {
@@ -814,16 +914,31 @@ public abstract class EuiccService extends Service {
         }
 
         @Override
-        public void getDownloadableSubscriptionMetadata(int slotId,
+        public void getDownloadableSubscriptionMetadata(int slotId, int portIndex,
                 DownloadableSubscription subscription,
-                boolean forceDeactivateSim,
+                boolean switchAfterDownload, boolean forceDeactivateSim,
                 IGetDownloadableSubscriptionMetadataCallback callback) {
             mExecutor.execute(new Runnable() {
                 @Override
                 public void run() {
-                    GetDownloadableSubscriptionMetadataResult result =
-                            EuiccService.this.onGetDownloadableSubscriptionMetadata(
+                    GetDownloadableSubscriptionMetadataResult result;
+                    if (switchAfterDownload) {
+                        try {
+                            result = EuiccService.this.onGetDownloadableSubscriptionMetadata(
+                                    slotId, portIndex, subscription, forceDeactivateSim);
+                        } catch (UnsupportedOperationException | AbstractMethodError e) {
+                            Log.w(TAG, "The new onGetDownloadableSubscriptionMetadata(int, int, "
+                                    + "DownloadableSubscription, boolean) is not implemented."
+                                    + " Fall back to the old one.", e);
+                            result = EuiccService.this.onGetDownloadableSubscriptionMetadata(
                                     slotId, subscription, forceDeactivateSim);
+                        }
+                    } else {
+                        // When switchAfterDownload is false, this operation is port agnostic.
+                        // Call API without portIndex.
+                        result = EuiccService.this.onGetDownloadableSubscriptionMetadata(
+                                slotId, subscription, forceDeactivateSim);
+                    }
                     try {
                         callback.onComplete(result);
                     } catch (RemoteException e) {

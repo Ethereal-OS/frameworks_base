@@ -18,9 +18,6 @@ package android.hardware.display;
 
 import android.annotation.TestApi;
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
-import android.os.BatteryManager;
 import android.os.Build;
 import android.os.SystemProperties;
 import android.provider.Settings;
@@ -40,8 +37,7 @@ import java.util.Map;
  */
 @TestApi
 public class AmbientDisplayConfiguration {
-    private static final IntentFilter sIntentFilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
-
+    private static final String TAG = "AmbientDisplayConfig";
     private final Context mContext;
     private final boolean mAlwaysOnByDefault;
     private final boolean mPickupGestureEnabledByDefault;
@@ -56,7 +52,7 @@ public class AmbientDisplayConfiguration {
             Settings.Secure.DOZE_WAKE_LOCK_SCREEN_GESTURE,
             Settings.Secure.DOZE_WAKE_DISPLAY_GESTURE,
             Settings.Secure.DOZE_TAP_SCREEN_GESTURE,
-            Settings.Secure.DOZE_ON_CHARGE
+            Settings.Secure.DOZE_ON_CHARGE,
     };
 
     /** Non-user configurable doze settings */
@@ -116,6 +112,12 @@ public class AmbientDisplayConfiguration {
     }
 
     /** @hide */
+    public boolean pickupGestureAmbient(int user) {
+        return boolSettingDefaultOff(Settings.Secure.DOZE_PICK_UP_GESTURE_AMBIENT, user)
+                && pickupGestureEnabled(user) && pulseOnNotificationEnabled(user);
+    }
+
+    /** @hide */
     public boolean dozePickupSensorAvailable() {
         return mContext.getResources().getBoolean(R.bool.config_dozePulsePickup);
     }
@@ -124,6 +126,12 @@ public class AmbientDisplayConfiguration {
     public boolean tapGestureEnabled(int user) {
         return boolSettingDefaultOn(Settings.Secure.DOZE_TAP_SCREEN_GESTURE, user)
                 && tapSensorAvailable();
+    }
+
+    /** @hide */
+    public boolean singleTapGestureAmbient(int user) {
+        return boolSettingDefaultOff(Settings.Secure.DOZE_SINGLE_TAP_GESTURE_AMBIENT, user)
+                && tapGestureEnabled(user) && pulseOnNotificationEnabled(user);
     }
 
     /** @hide */
@@ -148,6 +156,12 @@ public class AmbientDisplayConfiguration {
     }
 
     /** @hide */
+    public boolean doubleTapGestureAmbient(int user) {
+        return boolSettingDefaultOff(Settings.Secure.DOZE_DOUBLE_TAP_GESTURE_AMBIENT, user)
+                && doubleTapGestureEnabled(user) && pulseOnNotificationEnabled(user);
+    }
+
+    /** @hide */
     public boolean quickPickupSensorEnabled(int user) {
         return boolSettingDefaultOn(Settings.Secure.DOZE_QUICK_PICKUP_GESTURE, user)
                 && !TextUtils.isEmpty(quickPickupSensorType())
@@ -159,7 +173,7 @@ public class AmbientDisplayConfiguration {
     public boolean screenOffUdfpsEnabled(int user) {
         return !TextUtils.isEmpty(udfpsLongPressSensorType())
             && boolSettingDefaultOff("screen_off_udfps_enabled", user)
-            && mContext.getResources().getBoolean(R.bool.config_supportScreenOffUdfps);
+            && mContext.getResources().getBoolean(R.bool.config_supportsScreenOffUdfps);
     }
 
     /** @hide */
@@ -239,24 +253,22 @@ public class AmbientDisplayConfiguration {
         return alwaysOnEnabledSetting(user) || alwaysOnChargingEnabled(user);
     }
 
+    private boolean boolSettingSystem(String name, int user, int def) {
+        return Settings.System.getIntForUser(mContext.getContentResolver(), name, def, user) != 0;
+    }
+
+    /** @hide */
     public boolean alwaysOnEnabledSetting(int user) {
-        final boolean alwaysOnEnabled = Settings.Secure.getIntForUser(
-                mContext.getContentResolver(), Settings.Secure.DOZE_ALWAYS_ON,
-                mAlwaysOnByDefault ? 1 : 0, user) == 1;
+        boolean alwaysOnEnabled = boolSetting(Settings.Secure.DOZE_ALWAYS_ON, user, mAlwaysOnByDefault ? 1 : 0);
         return alwaysOnEnabled && alwaysOnAvailable() && !accessibilityInversionEnabled(user);
     }
 
-    public boolean alwaysOnChargingEnabledSetting(int user) {
-        return Settings.Secure.getIntForUser(mContext.getContentResolver(),
-            Settings.Secure.DOZE_ON_CHARGE, 0, user) == 1;
-    }
-
-    private boolean alwaysOnChargingEnabled(int user) {
-        if (alwaysOnChargingEnabledSetting(user)) {
-            final Intent intent = mContext.registerReceiver(null, sIntentFilter);
-            if (intent != null) {
-                return intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
-            }
+    /** @hide */
+    public boolean alwaysOnChargingEnabled(int user) {
+        final boolean dozeOnChargeEnabled = boolSetting(Settings.Secure.DOZE_ON_CHARGE, user, 0);
+        if (dozeOnChargeEnabled) {
+            final boolean dozeOnChargeEnabledNow = boolSetting(Settings.Secure.DOZE_ON_CHARGE_NOW, user, 0);
+            return dozeOnChargeEnabledNow && alwaysOnAvailable() && !accessibilityInversionEnabled(user);
         }
         return false;
     }
@@ -307,7 +319,7 @@ public class AmbientDisplayConfiguration {
     }
 
     private boolean alwaysOnDisplayDebuggingEnabled() {
-        return SystemProperties.getBoolean("debug.doze.aod", false) && Build.IS_ENG;
+        return SystemProperties.getBoolean("debug.doze.aod", false) && Build.IS_DEBUGGABLE;
     }
 
     private boolean boolSettingDefaultOn(String name, int user) {

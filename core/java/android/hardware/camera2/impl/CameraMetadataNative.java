@@ -50,10 +50,12 @@ import android.hardware.camera2.marshal.impl.MarshalQueryableStreamConfiguration
 import android.hardware.camera2.marshal.impl.MarshalQueryableStreamConfigurationDuration;
 import android.hardware.camera2.marshal.impl.MarshalQueryableString;
 import android.hardware.camera2.params.Capability;
+import android.hardware.camera2.params.ColorSpaceProfiles;
 import android.hardware.camera2.params.DeviceStateSensorOrientationMap;
 import android.hardware.camera2.params.DynamicRangeProfiles;
 import android.hardware.camera2.params.Face;
 import android.hardware.camera2.params.HighSpeedVideoConfiguration;
+import android.hardware.camera2.params.LensIntrinsicsSample;
 import android.hardware.camera2.params.LensShadingMap;
 import android.hardware.camera2.params.MandatoryStreamCombination;
 import android.hardware.camera2.params.MultiResolutionStreamConfigurationMap;
@@ -76,6 +78,8 @@ import android.os.ServiceSpecificException;
 import android.util.Log;
 import android.util.Range;
 import android.util.Size;
+
+import com.android.internal.camera.flags.Flags;
 
 import dalvik.annotation.optimization.FastNative;
 import dalvik.system.VMRuntime;
@@ -817,6 +821,15 @@ public class CameraMetadataNative implements Parcelable {
                     }
                 });
         sGetCommandMap.put(
+                CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES.getNativeKey(),
+                        new GetCommand() {
+                    @Override
+                    @SuppressWarnings("unchecked")
+                    public <T> T getValue(CameraMetadataNative metadata, Key<T> key) {
+                        return (T) metadata.getColorSpaceProfiles();
+                    }
+                });
+        sGetCommandMap.put(
                 CaptureResult.STATISTICS_OIS_SAMPLES.getNativeKey(),
                         new GetCommand() {
                     @Override
@@ -841,6 +854,15 @@ public class CameraMetadataNative implements Parcelable {
                     @SuppressWarnings("unchecked")
                     public <T> T getValue(CameraMetadataNative metadata, Key<T> key) {
                         return (T) metadata.getMultiResolutionStreamConfigurationMap();
+                    }
+                });
+        sGetCommandMap.put(
+                CaptureResult.STATISTICS_LENS_INTRINSICS_SAMPLES.getNativeKey(),
+                new GetCommand() {
+                    @Override
+                    @SuppressWarnings("unchecked")
+                    public <T> T getValue(CameraMetadataNative metadata, Key<T> key) {
+                        return (T) metadata.getLensIntrinsicSamples();
                     }
                 });
     }
@@ -1085,6 +1107,17 @@ public class CameraMetadataNative implements Parcelable {
         return new DynamicRangeProfiles(profileArray);
     }
 
+    private ColorSpaceProfiles getColorSpaceProfiles() {
+        long[] profileArray = getBase(
+                CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP);
+
+        if (profileArray == null) {
+            return null;
+        }
+
+        return new ColorSpaceProfiles(profileArray);
+    }
+
     private Location getGpsLocation() {
         String processingMethod = get(CaptureResult.JPEG_GPS_PROCESSING_METHOD);
         double[] coords = get(CaptureResult.JPEG_GPS_COORDINATES);
@@ -1115,7 +1148,9 @@ public class CameraMetadataNative implements Parcelable {
 
     private boolean setGpsLocation(Location l) {
         if (l == null) {
-            // If Location value being set is null, remove corresponding keys
+            // If Location value being set is null, remove corresponding keys.
+            // This is safe because api1/client2/CameraParameters.cpp already erases
+            // the keys for JPEG_GPS_LOCATION for certain cases.
             setBase(CaptureRequest.JPEG_GPS_TIMESTAMP, null);
             setBase(CaptureRequest.JPEG_GPS_COORDINATES, null);
             setBase(CaptureRequest.JPEG_GPS_PROCESSING_METHOD, null);
@@ -1351,6 +1386,9 @@ public class CameraMetadataNative implements Parcelable {
                             /*heicconfiguration*/ null,
                             /*heicminduration*/ null,
                             /*heicstallduration*/ null,
+                            /*jpegRconfiguration*/ null,
+                            /*jpegRminduration*/ null,
+                            /*jpegRstallduration*/ null,
                             /*highspeedvideoconfigurations*/ null,
                             /*inputoutputformatsmap*/ null, listHighResolution, supportsPrivate[i]);
                     break;
@@ -1365,6 +1403,9 @@ public class CameraMetadataNative implements Parcelable {
                             /*heicconfiguration*/ null,
                             /*heicminduration*/ null,
                             /*heicstallduration*/ null,
+                            /*jpegRconfiguration*/ null,
+                            /*jpegRminduration*/ null,
+                            /*jpegRstallduration*/ null,
                             highSpeedVideoConfigurations,
                             /*inputoutputformatsmap*/ null, listHighResolution, supportsPrivate[i]);
                     break;
@@ -1379,6 +1420,9 @@ public class CameraMetadataNative implements Parcelable {
                             /*heicconfiguration*/ null,
                             /*heicminduration*/ null,
                             /*heicstallduration*/ null,
+                            /*jpegRconfiguration*/ null,
+                            /*jpegRminduration*/ null,
+                            /*jpegRstallduration*/ null,
                             /*highSpeedVideoConfigurations*/ null,
                             inputOutputFormatsMap, listHighResolution, supportsPrivate[i]);
                     break;
@@ -1393,6 +1437,9 @@ public class CameraMetadataNative implements Parcelable {
                             /*heicconfiguration*/ null,
                             /*heicminduration*/ null,
                             /*heicstallduration*/ null,
+                            /*jpegRconfiguration*/ null,
+                            /*jpegRminduration*/ null,
+                            /*jpegRstallduration*/ null,
                             /*highSpeedVideoConfigurations*/ null,
                             /*inputOutputFormatsMap*/ null, listHighResolution, supportsPrivate[i]);
             }
@@ -1449,6 +1496,23 @@ public class CameraMetadataNative implements Parcelable {
         return ret;
     }
 
+    private boolean isCroppedRawSupported() {
+        boolean ret = false;
+
+        long[] streamUseCases =
+                getBase(CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES);
+        if (streamUseCases == null) {
+            return false;
+        }
+        for (long useCase : streamUseCases) {
+            if (useCase == CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_CROPPED_RAW) {
+                return true;
+            }
+        }
+
+        return ret;
+    }
+
     private MandatoryStreamCombination[] getMandatoryStreamCombinationsHelper(
             int mandatoryStreamsType) {
         int[] capabilities = getBase(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
@@ -1460,7 +1524,8 @@ public class CameraMetadataNative implements Parcelable {
         int hwLevel = getBase(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
         MandatoryStreamCombination.Builder build = new MandatoryStreamCombination.Builder(
                 mCameraId, hwLevel, mDisplaySize, caps, getStreamConfigurationMap(),
-                getStreamConfigurationMapMaximumResolution(), isPreviewStabilizationSupported());
+                getStreamConfigurationMapMaximumResolution(), isPreviewStabilizationSupported(),
+                isCroppedRawSupported());
 
         List<MandatoryStreamCombination> combs = null;
         switch (mandatoryStreamsType) {
@@ -1546,6 +1611,12 @@ public class CameraMetadataNative implements Parcelable {
                 CameraCharacteristics.HEIC_AVAILABLE_HEIC_MIN_FRAME_DURATIONS);
         StreamConfigurationDuration[] heicStallDurations = getBase(
                 CameraCharacteristics.HEIC_AVAILABLE_HEIC_STALL_DURATIONS);
+        StreamConfiguration[] jpegRConfigurations = getBase(
+                CameraCharacteristics.JPEGR_AVAILABLE_JPEG_R_STREAM_CONFIGURATIONS);
+        StreamConfigurationDuration[] jpegRMinFrameDurations = getBase(
+                CameraCharacteristics.JPEGR_AVAILABLE_JPEG_R_MIN_FRAME_DURATIONS);
+        StreamConfigurationDuration[] jpegRStallDurations = getBase(
+                CameraCharacteristics.JPEGR_AVAILABLE_JPEG_R_STALL_DURATIONS);
         HighSpeedVideoConfiguration[] highSpeedVideoConfigurations = getBase(
                 CameraCharacteristics.CONTROL_AVAILABLE_HIGH_SPEED_VIDEO_CONFIGURATIONS);
         ReprocessFormatsMap inputOutputFormatsMap = getBase(
@@ -1557,20 +1628,26 @@ public class CameraMetadataNative implements Parcelable {
                 dynamicDepthConfigurations, dynamicDepthMinFrameDurations,
                 dynamicDepthStallDurations, heicConfigurations,
                 heicMinFrameDurations, heicStallDurations,
+                jpegRConfigurations, jpegRMinFrameDurations, jpegRStallDurations,
                 highSpeedVideoConfigurations, inputOutputFormatsMap,
                 listHighResolution);
     }
 
     private StreamConfigurationMap getStreamConfigurationMapMaximumResolution() {
-        if (!isUltraHighResolutionSensor()) {
-            return null;
-        }
         StreamConfiguration[] configurations = getBase(
                 CameraCharacteristics.SCALER_AVAILABLE_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION);
         StreamConfigurationDuration[] minFrameDurations = getBase(
                 CameraCharacteristics.SCALER_AVAILABLE_MIN_FRAME_DURATIONS_MAXIMUM_RESOLUTION);
         StreamConfigurationDuration[] stallDurations = getBase(
                 CameraCharacteristics.SCALER_AVAILABLE_STALL_DURATIONS_MAXIMUM_RESOLUTION);
+        // If the at least these keys haven't been advertised, there cannot be a meaningful max
+        // resolution StreamConfigurationMap
+        if (configurations == null ||
+                minFrameDurations == null ||
+                stallDurations == null) {
+            return null;
+        }
+
         StreamConfiguration[] depthConfigurations = getBase(
                 CameraCharacteristics.DEPTH_AVAILABLE_DEPTH_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION);
         StreamConfigurationDuration[] depthMinFrameDurations = getBase(
@@ -1589,6 +1666,12 @@ public class CameraMetadataNative implements Parcelable {
                 CameraCharacteristics.HEIC_AVAILABLE_HEIC_MIN_FRAME_DURATIONS_MAXIMUM_RESOLUTION);
         StreamConfigurationDuration[] heicStallDurations = getBase(
                 CameraCharacteristics.HEIC_AVAILABLE_HEIC_STALL_DURATIONS_MAXIMUM_RESOLUTION);
+        StreamConfiguration[] jpegRConfigurations = getBase(
+                CameraCharacteristics.JPEGR_AVAILABLE_JPEG_R_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION);
+        StreamConfigurationDuration[] jpegRMinFrameDurations = getBase(
+                CameraCharacteristics.JPEGR_AVAILABLE_JPEG_R_MIN_FRAME_DURATIONS_MAXIMUM_RESOLUTION);
+        StreamConfigurationDuration[] jpegRStallDurations = getBase(
+                CameraCharacteristics.JPEGR_AVAILABLE_JPEG_R_STALL_DURATIONS_MAXIMUM_RESOLUTION);
         HighSpeedVideoConfiguration[] highSpeedVideoConfigurations = getBase(
                 CameraCharacteristics.CONTROL_AVAILABLE_HIGH_SPEED_VIDEO_CONFIGURATIONS_MAXIMUM_RESOLUTION);
         ReprocessFormatsMap inputOutputFormatsMap = getBase(
@@ -1601,6 +1684,7 @@ public class CameraMetadataNative implements Parcelable {
                 dynamicDepthConfigurations, dynamicDepthMinFrameDurations,
                 dynamicDepthStallDurations, heicConfigurations,
                 heicMinFrameDurations, heicStallDurations,
+                jpegRConfigurations, jpegRMinFrameDurations, jpegRStallDurations,
                 highSpeedVideoConfigurations, inputOutputFormatsMap,
                 listHighResolution, false);
     }
@@ -1712,6 +1796,64 @@ public class CameraMetadataNative implements Parcelable {
         return samples;
     }
 
+    private boolean setLensIntrinsicsSamples(LensIntrinsicsSample[] samples) {
+        if (samples == null) {
+            return false;
+        }
+
+        if (Flags.concertMode()) {
+            long[] tsArray = new long[samples.length];
+            float[] intrinsicsArray = new float[samples.length * 5];
+            for (int i = 0; i < samples.length; i++) {
+                tsArray[i] = samples[i].getTimestampNanos();
+                System.arraycopy(samples[i].getLensIntrinsics(), 0, intrinsicsArray, 5 * i, 5);
+
+            }
+            setBase(CaptureResult.STATISTICS_LENS_INTRINSIC_SAMPLES, intrinsicsArray);
+            setBase(CaptureResult.STATISTICS_LENS_INTRINSIC_TIMESTAMPS, tsArray);
+
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    private LensIntrinsicsSample[] getLensIntrinsicSamples() {
+        if (Flags.concertMode()) {
+            long[] timestamps = getBase(CaptureResult.STATISTICS_LENS_INTRINSIC_TIMESTAMPS);
+            float[] intrinsics = getBase(CaptureResult.STATISTICS_LENS_INTRINSIC_SAMPLES);
+
+            if (timestamps == null) {
+                if (intrinsics != null) {
+                    throw new AssertionError("timestamps is null but intrinsics is not");
+                }
+
+                return null;
+            }
+
+            if (intrinsics == null) {
+                throw new AssertionError("timestamps is not null but intrinsics is");
+            } else if ((intrinsics.length % 5) != 0) {
+                throw new AssertionError("intrinsics are not multiple of 5");
+            }
+
+            if ((intrinsics.length / 5) != timestamps.length) {
+                throw new AssertionError(String.format(
+                        "timestamps has %d entries but intrinsics has %d", timestamps.length,
+                        intrinsics.length / 5));
+            }
+
+            LensIntrinsicsSample[] samples = new LensIntrinsicsSample[timestamps.length];
+            for (int i = 0; i < timestamps.length; i++) {
+                float[] currentIntrinsic = Arrays.copyOfRange(intrinsics, 5 * i, 5 * i + 5);
+                samples[i] = new LensIntrinsicsSample(timestamps[i], currentIntrinsic);
+            }
+            return samples;
+        } else {
+            return null;
+        }
+    }
+
     private Capability[] getExtendedSceneModeCapabilities() {
         int[] maxSizes =
                 getBase(CameraCharacteristics.CONTROL_AVAILABLE_EXTENDED_SCENE_MODE_MAX_SIZES);
@@ -1755,12 +1897,12 @@ public class CameraMetadataNative implements Parcelable {
             int height = maxSizes[3 * i + 2];
             if (mode != CameraMetadata.CONTROL_EXTENDED_SCENE_MODE_DISABLED
                     && j < numExtendedSceneModeZoomRanges) {
-                capabilities[i] = new Capability(mode, width, height, zoomRanges[2 * j],
-                        zoomRanges[2 * j + 1]);
+                capabilities[i] = new Capability(mode, new Size(width, height),
+                        new Range<Float>(zoomRanges[2 * j], zoomRanges[2 * j + 1]));
                 j++;
             } else {
-                capabilities[i] = new Capability(mode, width, height, modeOffMinZoomRatio,
-                        modeOffMaxZoomRatio);
+                capabilities[i] = new Capability(mode, new Size(width, height),
+                        new Range<Float>(modeOffMinZoomRatio, modeOffMaxZoomRatio));
             }
         }
 
@@ -1780,30 +1922,34 @@ public class CameraMetadataNative implements Parcelable {
     }
 
     private <T> void setBase(Key<T> key, T value) {
-        int tag;
-        if (key.hasTag()) {
-            tag = key.getTag();
-        } else {
-            tag = nativeGetTagFromKeyLocal(mMetadataPtr, key.getName());
-            key.cacheTag(tag);
+        try {
+            int tag;
+            if (key.hasTag()) {
+                tag = key.getTag();
+            } else {
+                tag = nativeGetTagFromKeyLocal(mMetadataPtr, key.getName());
+                key.cacheTag(tag);
+            }
+            if (value == null) {
+                // Erase the entry
+                writeValues(tag, /*src*/null);
+                return;
+            } // else update the entry to a new value
+
+            int nativeType = nativeGetTypeFromTagLocal(mMetadataPtr, tag);
+            Marshaler<T> marshaler = getMarshalerForKey(key, nativeType);
+            int size = marshaler.calculateMarshalSize(value);
+
+            // TODO: Optimization. Cache the byte[] and reuse if the size is big enough.
+            byte[] values = new byte[size];
+
+            ByteBuffer buffer = ByteBuffer.wrap(values).order(ByteOrder.nativeOrder());
+            marshaler.marshal(value, buffer);
+
+            writeValues(tag, values);
+        } catch (Exception e) {
+                // Do nothing
         }
-        if (value == null) {
-            // Erase the entry
-            writeValues(tag, /*src*/null);
-            return;
-        } // else update the entry to a new value
-
-        int nativeType = nativeGetTypeFromTagLocal(mMetadataPtr, tag);
-        Marshaler<T> marshaler = getMarshalerForKey(key, nativeType);
-        int size = marshaler.calculateMarshalSize(value);
-
-        // TODO: Optimization. Cache the byte[] and reuse if the size is big enough.
-        byte[] values = new byte[size];
-
-        ByteBuffer buffer = ByteBuffer.wrap(values).order(ByteOrder.nativeOrder());
-        marshaler.marshal(value, buffer);
-
-        writeValues(tag, values);
     }
 
     // Use Command pattern here to avoid lots of expensive if/equals checks in get for overridden
@@ -1877,6 +2023,15 @@ public class CameraMetadataNative implements Parcelable {
                     @Override
                     public <T> void setValue(CameraMetadataNative metadata, T value) {
                         metadata.setLensShadingMap((LensShadingMap) value);
+                    }
+                });
+        sSetCommandMap.put(
+                CaptureResult.STATISTICS_LENS_INTRINSICS_SAMPLES.getNativeKey(),
+                new SetCommand() {
+                    @Override
+                    @SuppressWarnings("unchecked")
+                    public <T> void setValue(CameraMetadataNative metadata, T value) {
+                        metadata.setLensIntrinsicsSamples((LensIntrinsicsSample []) value);
                     }
                 });
     }
@@ -2108,6 +2263,18 @@ public class CameraMetadataNative implements Parcelable {
     @FastNative
     private static native int nativeGetTypeFromTag(int tag, long vendorId)
             throws IllegalArgumentException;
+
+    private synchronized byte[] nativeReadValues(int tag) {
+        return nativeReadValues(tag, mMetadataPtr);
+    }
+
+    private synchronized int nativeGetTypeFromTagLocal(int tag) {
+        return nativeGetTypeFromTagLocal(mMetadataPtr, tag);
+    }
+
+    private synchronized int nativeGetTagFromKeyLocal(String keyname) {
+        return nativeGetTagFromKeyLocal(mMetadataPtr, keyname);
+    }
 
     /**
      * <p>Perform a 0-copy swap of the internal metadata with another object.</p>

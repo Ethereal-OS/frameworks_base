@@ -25,8 +25,10 @@ import static android.service.notification.NotificationListenerService.REASON_GR
 import static android.service.notification.NotificationStats.DISMISSAL_BUBBLE;
 import static android.service.notification.NotificationStats.DISMISS_SENTIMENT_NEUTRAL;
 
+import static com.android.server.notification.Flags.screenshareNotificationHiding;
 import static com.android.wm.shell.bubbles.BubbleDebugConfig.TAG_BUBBLES;
 import static com.android.wm.shell.bubbles.BubbleDebugConfig.TAG_WITH_CLASS_NAME;
+import static com.android.wm.shell.protolog.ShellProtoLogGroup.WM_SHELL_BUBBLES;
 
 import android.app.INotificationManager;
 import android.app.Notification;
@@ -49,6 +51,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.protolog.common.ProtoLog;
 import com.android.internal.statusbar.IStatusBarService;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.flags.FeatureFlags;
@@ -57,6 +60,7 @@ import com.android.systemui.shade.ShadeController;
 import com.android.systemui.shared.system.QuickStepContract;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationShadeWindowController;
+import com.android.systemui.statusbar.notification.NotifPipelineFlags;
 import com.android.systemui.statusbar.notification.NotificationChannelHelper;
 import com.android.systemui.statusbar.notification.collection.NotifCollection;
 import com.android.systemui.statusbar.notification.collection.NotifPipeline;
@@ -65,9 +69,10 @@ import com.android.systemui.statusbar.notification.collection.notifcollection.Co
 import com.android.systemui.statusbar.notification.collection.notifcollection.DismissedByUserStats;
 import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener;
 import com.android.systemui.statusbar.notification.collection.render.NotificationVisibilityProvider;
-import com.android.systemui.statusbar.notification.interruption.NotificationInterruptStateProvider;
+import com.android.systemui.statusbar.notification.interruption.VisualInterruptionDecisionProvider;
 import com.android.systemui.statusbar.phone.StatusBarWindowCallback;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
+import com.android.systemui.statusbar.policy.SensitiveNotificationProtectionController;
 import com.android.systemui.statusbar.policy.ZenModeController;
 import com.android.wm.shell.bubbles.Bubble;
 import com.android.wm.shell.bubbles.BubbleEntry;
@@ -94,21 +99,29 @@ public class BubblesManager {
     private final Context mContext;
     private final Bubbles mBubbles;
     private final NotificationShadeWindowController mNotificationShadeWindowController;
+    private final KeyguardStateController mKeyguardStateController;
     private final ShadeController mShadeController;
     private final IStatusBarService mBarService;
     private final INotificationManager mNotificationManager;
     private final IDreamManager mDreamManager;
     private final NotificationVisibilityProvider mVisibilityProvider;
-    private final NotificationInterruptStateProvider mNotificationInterruptStateProvider;
+    private final VisualInterruptionDecisionProvider mVisualInterruptionDecisionProvider;
     private final NotificationLockscreenUserManager mNotifUserManager;
+    private final SensitiveNotificationProtectionController mSensitiveNotifProtectionController;
     private final CommonNotifCollection mCommonNotifCollection;
     private final NotifPipeline mNotifPipeline;
+    private final NotifPipelineFlags mNotifPipelineFlags;
     private final Executor mSysuiMainExecutor;
+    private final Executor mSysuiUiBgExecutor;
 
     private final Bubbles.SysuiProxy mSysuiProxy;
     // TODO (b/145659174): allow for multiple callbacks to support the "shadow" new notif pipeline
     private final List<NotifCallback> mCallbacks = new ArrayList<>();
     private final StatusBarWindowCallback mStatusBarWindowCallback;
+    private final Runnable mSensitiveStateChangedListener;
+    private boolean mPanelExpanded;
+    private boolean mKeyguardShowing;
+    private boolean mDreamingOrInPreview;
 
     /**
      * Creates {@link BubblesManager}, returns {@code null} if Optional {@link Bubbles} not present
@@ -124,14 +137,17 @@ public class BubblesManager {
             INotificationManager notificationManager,
             IDreamManager dreamManager,
             NotificationVisibilityProvider visibilityProvider,
-            NotificationInterruptStateProvider interruptionStateProvider,
+            VisualInterruptionDecisionProvider visualInterruptionDecisionProvider,
             ZenModeController zenModeController,
             NotificationLockscreenUserManager notifUserManager,
+            SensitiveNotificationProtectionController sensitiveNotificationProtectionController,
             CommonNotifCollection notifCollection,
             NotifPipeline notifPipeline,
             SysUiState sysUiState,
             FeatureFlags featureFlags,
-            Executor sysuiMainExecutor) {
+            NotifPipelineFlags notifPipelineFlags,
+            Executor sysuiMainExecutor,
+            Executor sysuiUiBgExecutor) {
         if (bubblesOptional.isPresent()) {
             return new BubblesManager(context,
                     bubblesOptional.get(),
@@ -142,14 +158,17 @@ public class BubblesManager {
                     notificationManager,
                     dreamManager,
                     visibilityProvider,
-                    interruptionStateProvider,
+                    visualInterruptionDecisionProvider,
                     zenModeController,
                     notifUserManager,
+                    sensitiveNotificationProtectionController,
                     notifCollection,
                     notifPipeline,
                     sysUiState,
                     featureFlags,
-                    sysuiMainExecutor);
+                    notifPipelineFlags,
+                    sysuiMainExecutor,
+                    sysuiUiBgExecutor);
         } else {
             return null;
         }
@@ -165,26 +184,33 @@ public class BubblesManager {
             INotificationManager notificationManager,
             IDreamManager dreamManager,
             NotificationVisibilityProvider visibilityProvider,
-            NotificationInterruptStateProvider interruptionStateProvider,
+            VisualInterruptionDecisionProvider visualInterruptionDecisionProvider,
             ZenModeController zenModeController,
             NotificationLockscreenUserManager notifUserManager,
+            SensitiveNotificationProtectionController sensitiveNotificationProtectionController,
             CommonNotifCollection notifCollection,
             NotifPipeline notifPipeline,
             SysUiState sysUiState,
             FeatureFlags featureFlags,
-            Executor sysuiMainExecutor) {
+            NotifPipelineFlags notifPipelineFlags,
+            Executor sysuiMainExecutor,
+            Executor sysuiUiBgExecutor) {
         mContext = context;
         mBubbles = bubbles;
         mNotificationShadeWindowController = notificationShadeWindowController;
+        mKeyguardStateController = keyguardStateController;
         mShadeController = shadeController;
         mNotificationManager = notificationManager;
         mDreamManager = dreamManager;
         mVisibilityProvider = visibilityProvider;
-        mNotificationInterruptStateProvider = interruptionStateProvider;
+        mVisualInterruptionDecisionProvider = visualInterruptionDecisionProvider;
         mNotifUserManager = notifUserManager;
+        mSensitiveNotifProtectionController = sensitiveNotificationProtectionController;
         mCommonNotifCollection = notifCollection;
         mNotifPipeline = notifPipeline;
+        mNotifPipelineFlags = notifPipelineFlags;
         mSysuiMainExecutor = sysuiMainExecutor;
+        mSysuiUiBgExecutor = sysuiUiBgExecutor;
 
         mBarService = statusBarService == null
                 ? IStatusBarService.Stub.asInterface(
@@ -193,12 +219,11 @@ public class BubblesManager {
 
         setupNotifPipeline();
 
-        keyguardStateController.addCallback(new KeyguardStateController.Callback() {
+        // TODO(b/327410864): use KeyguardTransitionInteractor to listen for keyguard changes
+        mKeyguardStateController.addCallback(new KeyguardStateController.Callback() {
             @Override
             public void onKeyguardShowingChanged() {
-                boolean isUnlockedShade = !keyguardStateController.isShowing()
-                        && !isDreamingOrInPreview();
-                bubbles.onStatusBarStateChanged(isUnlockedShade);
+                updateKeyguardAndDreamingState();
             }
         });
 
@@ -236,9 +261,37 @@ public class BubblesManager {
         // Store callback in a field so it won't get GC'd
         mStatusBarWindowCallback =
                 (keyguardShowing, keyguardOccluded, keyguardGoingAway, bouncerShowing, isDozing,
-                        panelExpanded, isDreaming) ->
+                        panelExpanded, isDreaming) -> {
+                    if (panelExpanded != mPanelExpanded) {
+                        mPanelExpanded = panelExpanded;
                         mBubbles.onNotificationPanelExpandedChanged(panelExpanded);
+                    }
+                    if (!mKeyguardShowing && mDreamingOrInPreview && !isDreaming) {
+                        // We check for dreaming state changes when keyguard status changes.
+                        // This causes us to miss events if dreaming state changes after keyguard.
+                        // Add a check here for the case where keyguard is dismissed before
+                        // dreaming state changes. Otherwise bubbles remain invisible.
+                        // TODO(b/327410864): use KeyguardTransitionInteractor for dreaming changes
+                        updateKeyguardAndDreamingState();
+                    }
+                };
         notificationShadeWindowController.registerCallback(mStatusBarWindowCallback);
+
+        mSensitiveStateChangedListener = new Runnable() {
+            @Override
+            public void run() {
+                if (!screenshareNotificationHiding()) {
+                    return;
+                }
+                bubbles.onSensitiveNotificationProtectionStateChanged(
+                        mSensitiveNotifProtectionController.isSensitiveStateActive());
+            }
+        };
+
+        if (screenshareNotificationHiding()) {
+            mSensitiveNotifProtectionController
+                    .registerSensitiveStateListener(mSensitiveStateChangedListener);
+        }
 
         mSysuiProxy = new Bubbles.SysuiProxy() {
             @Override
@@ -266,7 +319,7 @@ public class BubblesManager {
                     for (NotificationEntry entry : activeEntries) {
                         if (mNotifUserManager.isCurrentProfile(entry.getSbn().getUserId())
                                 && savedBubbleKeys.contains(entry.getKey())
-                                && mNotificationInterruptStateProvider.shouldBubbleUp(entry)
+                                && shouldBubbleUp(entry)
                                 && entry.isBubble()) {
                             result.add(notifToBubbleEntry(entry));
                         }
@@ -360,6 +413,19 @@ public class BubblesManager {
         mBubbles.setSysuiProxy(mSysuiProxy);
     }
 
+    private void updateKeyguardAndDreamingState() {
+        mSysuiUiBgExecutor.execute(() -> {
+            mKeyguardShowing = mKeyguardStateController.isShowing();
+            mDreamingOrInPreview = isDreamingOrInPreview();
+            boolean isUnlockedShade = !mKeyguardShowing && !mDreamingOrInPreview;
+            ProtoLog.d(WM_SHELL_BUBBLES,
+                    "handleKeyguardOrDreamChange isUnlockedShade=%b keyguardShowing=%b "
+                            + "dreamingOrInPreview=%b",
+                    isUnlockedShade, mKeyguardShowing, mDreamingOrInPreview);
+            mBubbles.onStatusBarStateChanged(isUnlockedShade);
+        });
+    }
+
     private boolean isDreamingOrInPreview() {
         try {
             return mDreamManager.isDreamingOrInPreview();
@@ -373,6 +439,7 @@ public class BubblesManager {
         mNotifPipeline.addCollectionListener(new NotifCollectionListener() {
             @Override
             public void onEntryAdded(NotificationEntry entry) {
+                if (entry == null) return;
                 BubblesManager.this.onEntryAdded(entry);
             }
 
@@ -410,16 +477,13 @@ public class BubblesManager {
     }
 
     void onEntryAdded(NotificationEntry entry) {
-        if (mNotificationInterruptStateProvider.shouldBubbleUp(entry)
-                && entry.isBubble()) {
+        if (shouldBubbleUp(entry) && entry.isBubble()) {
             mBubbles.onEntryAdded(notifToBubbleEntry(entry));
         }
     }
 
     void onEntryUpdated(NotificationEntry entry, boolean fromSystem) {
-        boolean shouldBubble = mNotificationInterruptStateProvider.shouldBubbleUp(entry);
-        mBubbles.onEntryUpdated(notifToBubbleEntry(entry),
-                shouldBubble, fromSystem);
+        mBubbles.onEntryUpdated(notifToBubbleEntry(entry), shouldBubbleUp(entry), fromSystem);
     }
 
     void onEntryRemoved(NotificationEntry entry) {
@@ -432,12 +496,8 @@ public class BubblesManager {
         for (int i = 0; i < orderedKeys.length; i++) {
             String key = orderedKeys[i];
             final NotificationEntry entry = mCommonNotifCollection.getEntry(key);
-            BubbleEntry bubbleEntry = entry != null
-                    ? notifToBubbleEntry(entry)
-                    : null;
-            boolean shouldBubbleUp = entry != null
-                    ? mNotificationInterruptStateProvider.shouldBubbleUp(entry)
-                    : false;
+            BubbleEntry bubbleEntry = entry != null ? notifToBubbleEntry(entry) : null;
+            boolean shouldBubbleUp = entry != null ? shouldBubbleUp(entry) : false;
             pendingOrActiveNotif.put(key, new Pair<>(bubbleEntry, shouldBubbleUp));
         }
         mBubbles.onRankingUpdated(rankingMap, pendingOrActiveNotif);
@@ -614,10 +674,22 @@ public class BubblesManager {
         }
     }
 
-    static BubbleEntry notifToBubbleEntry(NotificationEntry e) {
-        return new BubbleEntry(e.getSbn(), e.getRanking(), e.isDismissable(),
+    @VisibleForTesting
+    BubbleEntry notifToBubbleEntry(NotificationEntry e) {
+        return new BubbleEntry(e.getSbn(), e.getRanking(), isDismissableFromBubbles(e),
                 e.shouldSuppressNotificationDot(), e.shouldSuppressNotificationList(),
                 e.shouldSuppressPeek());
+    }
+
+    private boolean isDismissableFromBubbles(NotificationEntry e) {
+        // Bubbles are only accessible from the unlocked state,
+        // so we can calculate this from the Notification flags only.
+        return e.isDismissableForState(/*isLocked=*/ false);
+    }
+
+    private boolean shouldBubbleUp(NotificationEntry e) {
+        if (e == null) return false;
+        return mVisualInterruptionDecisionProvider.makeAndLogBubbleDecision(e).getShouldInterrupt();
     }
 
     /**

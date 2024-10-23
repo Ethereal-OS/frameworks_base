@@ -18,18 +18,22 @@ package com.android.systemui.qs
 
 import android.content.Context
 import android.util.AttributeSet
-import com.android.systemui.R
-import com.android.systemui.qs.TileUtils;
+import com.android.systemui.flags.Flags
+import com.android.systemui.flags.RefactorFlag
+import com.android.systemui.qs.TileUtils
+import com.android.systemui.res.R
 
 open class SideLabelTileLayout(
     context: Context,
     attrs: AttributeSet?
 ) : TileLayout(context, attrs) {
 
+    private val isSmallLandscapeLockscreenEnabled =
+            RefactorFlag.forView(Flags.LOCKSCREEN_ENABLE_LANDSCAPE).isEnabled
+
     override fun updateResources(): Boolean {
         return super.updateResources().also {
-            mMaxAllowedRows = Math.max(TileUtils.getQSRowsCount(context), 
-                    context.resources.getInteger(R.integer.quick_settings_max_rows))
+            mMaxAllowedRows = getResourceRows()
         }
     }
 

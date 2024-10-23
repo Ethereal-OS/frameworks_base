@@ -51,15 +51,12 @@ class ToolbarView : FrameLayout {
     override fun onApplyWindowInsets(insets: WindowInsets?): WindowInsets {
         var lp = layoutParams as FrameLayout.LayoutParams?
         if (lp != null && insets != null) {
-            var stableInsets = insets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars());
-            if (stableInsets.top != 0 || stableInsets.bottom != 0 || stableInsets.left != 0 ||
-                    stableInsets.right != 0) {
-                lp.topMargin = stableInsets.top
-                lp.bottomMargin = stableInsets.bottom
+            if (insets.hasStableInsets()) {
+                lp.topMargin = insets.stableInsetTop
+                lp.bottomMargin = insets.stableInsetBottom
             } else {
-                var systemInsets = insets.getInsets(WindowInsets.Type.systemBars());
-                lp.topMargin = systemInsets.top
-                lp.bottomMargin = systemInsets.bottom
+                lp.topMargin = insets.systemWindowInsetTop
+                lp.bottomMargin = insets.systemWindowInsetBottom
             }
             layoutParams = lp
         }

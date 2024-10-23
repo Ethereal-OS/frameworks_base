@@ -42,12 +42,10 @@ import androidx.annotation.Nullable;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.widget.NotificationExpandButton;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.statusbar.CrossFadeHelper;
 import com.android.systemui.statusbar.NotificationGroupingUtil;
-import com.android.systemui.statusbar.NotificationShelf;
 import com.android.systemui.statusbar.notification.FeedbackIcon;
-import com.android.systemui.statusbar.notification.LegacySourceType;
 import com.android.systemui.statusbar.notification.NotificationFadeAware;
 import com.android.systemui.statusbar.notification.NotificationUtils;
 import com.android.systemui.statusbar.notification.Roundable;
@@ -57,6 +55,7 @@ import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow
 import com.android.systemui.statusbar.notification.row.ExpandableView;
 import com.android.systemui.statusbar.notification.row.HybridGroupManager;
 import com.android.systemui.statusbar.notification.row.HybridNotificationView;
+import com.android.systemui.statusbar.notification.row.shared.AsyncGroupHeaderViewInflation;
 import com.android.systemui.statusbar.notification.row.wrapper.NotificationHeaderViewWrapper;
 import com.android.systemui.statusbar.notification.row.wrapper.NotificationViewWrapper;
 
@@ -133,7 +132,9 @@ public class NotificationChildrenContainer extends ViewGroup
     private int mUntruncatedChildCount;
     private boolean mContainingNotificationIsFaded = false;
     private RoundableState mRoundableState;
-    private boolean mUseRoundnessSourceTypes;
+    private int mMinSingleLineHeight;
+
+    private NotificationChildrenContainerLogger mLogger;
 
     public NotificationChildrenContainer(Context context) {
         this(context, null);
@@ -184,12 +185,19 @@ public class NotificationChildrenContainer extends ViewGroup
                 com.android.internal.R.dimen.notification_content_margin)
                 - mNotificationHeaderMargin;
         mHybridGroupManager.initDimens();
+        mMinSingleLineHeight = getResources().getDimensionPixelSize(
+                R.dimen.conversation_single_line_face_pile_size);
     }
 
     @NonNull
     @Override
     public RoundableState getRoundableState() {
         return mRoundableState;
+    }
+
+    @Override
+    public int getClipHeight() {
+        return Math.max(mActualHeight - mClipBottomAmount, 0);
     }
 
     @Override
@@ -296,6 +304,19 @@ public class NotificationChildrenContainer extends ViewGroup
     }
 
     /**
+     * Set the notification time in the group so that the view can show the latest event in the UI
+     * appropriately.
+     */
+    public void setNotificationGroupWhen(long whenMillis) {
+        if (mNotificationHeaderWrapper != null) {
+            mNotificationHeaderWrapper.setNotificationWhen(whenMillis);
+        }
+        if (mNotificationHeaderWrapperLowPriority != null) {
+            mNotificationHeaderWrapperLowPriority.setNotificationWhen(whenMillis);
+        }
+    }
+
+    /**
      * Add a child notification to this view.
      *
      * @param row        the row to add
@@ -315,13 +336,6 @@ public class NotificationChildrenContainer extends ViewGroup
         row.setContentTransformationAmount(0, false /* isLastChild */);
         row.setNotificationFaded(mContainingNotificationIsFaded);
 
-        if (!mUseRoundnessSourceTypes) {
-            // This is a workaround, the NotificationShelf should be the owner of `OnScroll`
-            // roundness.
-            // Here we should reset the `OnScroll` roundness only on top-level rows.
-            NotificationShelf.resetLegacyOnScrollRoundness(row);
-        }
-
         // It doesn't make sense to keep old animations around, lets cancel them!
         ExpandableViewState viewState = row.getViewState();
         if (viewState != null) {
@@ -329,9 +343,7 @@ public class NotificationChildrenContainer extends ViewGroup
             row.cancelAppearDrawing();
         }
 
-        if (mUseRoundnessSourceTypes) {
-            applyRoundnessAndInvalidate();
-        }
+        applyRoundnessAndInvalidate();
     }
 
     private void ensureRemovedFromTransientContainer(View v) {
@@ -366,10 +378,8 @@ public class NotificationChildrenContainer extends ViewGroup
             mGroupingUtil.restoreChildNotification(row);
         }
 
-        if (mUseRoundnessSourceTypes) {
-            row.requestRoundnessReset(FROM_PARENT, /* animate = */ false);
-            applyRoundnessAndInvalidate();
-        }
+        row.requestRoundnessReset(FROM_PARENT, /* animate = */ false);
+        applyRoundnessAndInvalidate();
     }
 
     /**
@@ -379,15 +389,31 @@ public class NotificationChildrenContainer extends ViewGroup
         return mAttachedChildren.size();
     }
 
-    public void recreateNotificationHeader(OnClickListener listener, boolean isConversation) {
+    /**
+     * Re-create the Notification header view
+     * @param listener OnClickListener of the header view
+     * @param isConversation if the notification group is a conversation group
+     */
+    public void recreateNotificationHeader(
+            OnClickListener listener,
+            boolean isConversation
+    ) {
+        // We don't want to inflate headers from the main thread when async inflation enabled
+        AsyncGroupHeaderViewInflation.assertInLegacyMode();
+        // TODO(b/217799515): remove traces from this function in a follow-up change
+        Trace.beginSection("NotifChildCont#recreateHeader");
         mHeaderClickListener = listener;
         mIsConversation = isConversation;
         StatusBarNotification notification = mContainingNotification.getEntry().getSbn();
         final Notification.Builder builder = Notification.Builder.recoverBuilder(getContext(),
                 notification.getNotification());
+        Trace.beginSection("recreateHeader#makeNotificationGroupHeader");
         RemoteViews header = builder.makeNotificationGroupHeader();
+        Trace.endSection();
         if (mNotificationHeader == null) {
+            Trace.beginSection("recreateHeader#apply");
             mNotificationHeader = (NotificationHeaderView) header.apply(getContext(), this);
+            Trace.endSection();
             mNotificationHeader.findViewById(com.android.internal.R.id.expand_button)
                     .setVisibility(VISIBLE);
             mNotificationHeader.setOnClickListener(mHeaderClickListener);
@@ -396,18 +422,109 @@ public class NotificationChildrenContainer extends ViewGroup
                             getContext(),
                             mNotificationHeader,
                             mContainingNotification);
-            mNotificationHeaderWrapper.useRoundnessSourceTypes(mUseRoundnessSourceTypes);
-            if (mUseRoundnessSourceTypes) {
-                mNotificationHeaderWrapper.setOnRoundnessChangedListener(this::invalidate);
-            }
+            mNotificationHeaderWrapper.setOnRoundnessChangedListener(this::invalidate);
             addView(mNotificationHeader, 0);
             invalidate();
         } else {
+            Trace.beginSection("recreateHeader#reapply");
             header.reapply(getContext(), mNotificationHeader);
+            Trace.endSection();
         }
         mNotificationHeaderWrapper.setExpanded(mChildrenExpanded);
         mNotificationHeaderWrapper.onContentUpdated(mContainingNotification);
         recreateLowPriorityHeader(builder, isConversation);
+        updateHeaderVisibility(false /* animate */);
+        updateChildrenAppearance();
+        Trace.endSection();
+    }
+
+    private void removeGroupHeader() {
+        if (mNotificationHeader == null) {
+            return;
+        }
+        removeView(mNotificationHeader);
+        mNotificationHeader = null;
+        mNotificationHeaderWrapper = null;
+    }
+
+    private void removeLowPriorityGroupHeader() {
+        if (mNotificationHeaderLowPriority == null) {
+            return;
+        }
+        removeView(mNotificationHeaderLowPriority);
+        mNotificationHeaderLowPriority = null;
+        mNotificationHeaderWrapperLowPriority = null;
+    }
+
+    /**
+     * Set the group header view
+     * @param headerView view to set
+     * @param onClickListener OnClickListener of the header view
+     */
+    public void setGroupHeader(
+            NotificationHeaderView headerView,
+            OnClickListener onClickListener
+    ) {
+        if (AsyncGroupHeaderViewInflation.isUnexpectedlyInLegacyMode()) return;
+        mHeaderClickListener = onClickListener;
+
+        removeGroupHeader();
+
+        if (headerView == null) {
+            return;
+        }
+
+        mNotificationHeader = headerView;
+        mNotificationHeader.findViewById(com.android.internal.R.id.expand_button)
+                .setVisibility(VISIBLE);
+        mNotificationHeader.setOnClickListener(mHeaderClickListener);
+        mNotificationHeaderWrapper =
+                (NotificationHeaderViewWrapper) NotificationViewWrapper.wrap(
+                        getContext(),
+                        mNotificationHeader,
+                        mContainingNotification);
+        mNotificationHeaderWrapper.setOnRoundnessChangedListener(this::invalidate);
+        addView(mNotificationHeader, 0);
+        invalidate();
+
+        mNotificationHeaderWrapper.setExpanded(mChildrenExpanded);
+        mNotificationHeaderWrapper.onContentUpdated(mContainingNotification);
+
+        updateHeaderVisibility(false /* animate */);
+        updateChildrenAppearance();
+
+        Trace.endSection();
+    }
+
+    /**
+     * Set the low-priority group header view
+     * @param headerViewLowPriority header view to set
+     * @param onClickListener OnClickListener of the header view
+     */
+    public void setLowPriorityGroupHeader(
+            NotificationHeaderView headerViewLowPriority,
+            OnClickListener onClickListener
+    ) {
+        if (AsyncGroupHeaderViewInflation.isUnexpectedlyInLegacyMode()) return;
+        removeLowPriorityGroupHeader();
+        if (headerViewLowPriority == null) {
+            return;
+        }
+
+        mNotificationHeaderLowPriority = headerViewLowPriority;
+        mNotificationHeaderLowPriority.findViewById(com.android.internal.R.id.expand_button)
+                .setVisibility(VISIBLE);
+        mNotificationHeaderLowPriority.setOnClickListener(onClickListener);
+        mNotificationHeaderWrapperLowPriority =
+                (NotificationHeaderViewWrapper) NotificationViewWrapper.wrap(
+                        getContext(),
+                        mNotificationHeaderLowPriority,
+                        mContainingNotification);
+        mNotificationHeaderWrapperLowPriority.setOnRoundnessChangedListener(this::invalidate);
+        addView(mNotificationHeaderLowPriority, 0);
+        invalidate();
+
+        mNotificationHeaderWrapperLowPriority.onContentUpdated(mContainingNotification);
         updateHeaderVisibility(false /* animate */);
         updateChildrenAppearance();
     }
@@ -417,7 +534,9 @@ public class NotificationChildrenContainer extends ViewGroup
      *
      * @param builder a builder to reuse. Otherwise the builder will be recovered.
      */
-    private void recreateLowPriorityHeader(Notification.Builder builder, boolean isConversation) {
+    @VisibleForTesting
+    void recreateLowPriorityHeader(Notification.Builder builder, boolean isConversation) {
+        AsyncGroupHeaderViewInflation.assertInLegacyMode();
         RemoteViews header;
         StatusBarNotification notification = mContainingNotification.getEntry().getSbn();
         if (mIsLowPriority) {
@@ -437,12 +556,7 @@ public class NotificationChildrenContainer extends ViewGroup
                                 getContext(),
                                 mNotificationHeaderLowPriority,
                                 mContainingNotification);
-                mNotificationHeaderWrapperLowPriority.useRoundnessSourceTypes(
-                        mUseRoundnessSourceTypes
-                );
-                if (mUseRoundnessSourceTypes) {
-                    mNotificationHeaderWrapper.setOnRoundnessChangedListener(this::invalidate);
-                }
+                mNotificationHeaderWrapper.setOnRoundnessChangedListener(this::invalidate);
                 addView(mNotificationHeaderLowPriority, 0);
                 invalidate();
             } else {
@@ -527,8 +641,10 @@ public class NotificationChildrenContainer extends ViewGroup
      * @param alpha alpha value to apply to the content
      */
     public void setContentAlpha(float alpha) {
-        for (int i = 0; i < mNotificationHeader.getChildCount(); i++) {
-            mNotificationHeader.getChildAt(i).setAlpha(alpha);
+        if (mNotificationHeader != null) {
+            for (int i = 0; i < mNotificationHeader.getChildCount(); i++) {
+                mNotificationHeader.getChildAt(i).setAlpha(alpha);
+            }
         }
         for (ExpandableNotificationRow child : getAttachedChildren()) {
             child.setContentAlpha(alpha);
@@ -564,7 +680,11 @@ public class NotificationChildrenContainer extends ViewGroup
      */
     private int getIntrinsicHeight(float maxAllowedVisibleChildren) {
         if (showingAsLowPriority()) {
-            return mNotificationHeaderLowPriority.getHeight();
+            if (AsyncGroupHeaderViewInflation.isEnabled()) {
+                return mHeaderHeight;
+            } else {
+                return mNotificationHeaderLowPriority.getHeight();
+            }
         }
         int intrinsicHeight = mNotificationHeaderMargin + mCurrentHeaderTranslation;
         int visibleChildren = 0;
@@ -869,8 +989,7 @@ public class NotificationChildrenContainer extends ViewGroup
         Path clipPath = mChildClipPath;
         if (clipPath != null) {
             final float translation;
-            if (child instanceof ExpandableNotificationRow) {
-                ExpandableNotificationRow notificationRow = (ExpandableNotificationRow) child;
+            if (child instanceof ExpandableNotificationRow notificationRow) {
                 translation = notificationRow.getTranslation();
             } else {
                 translation = child.getTranslationX();
@@ -878,7 +997,7 @@ public class NotificationChildrenContainer extends ViewGroup
 
             isCanvasChanged = true;
             canvas.save();
-            if (mUseRoundnessSourceTypes && translation != 0f) {
+            if (translation != 0f) {
                 clipPath.offset(translation, 0f);
                 canvas.clipPath(clipPath);
                 clipPath.offset(-translation, 0f);
@@ -1024,12 +1143,24 @@ public class NotificationChildrenContainer extends ViewGroup
         return mCurrentHeader;
     }
 
+    public NotificationHeaderView getNotificationHeader() {
+        return mNotificationHeader;
+    }
+
+    public NotificationHeaderView getNotificationHeaderLowPriority() {
+        return mNotificationHeaderLowPriority;
+    }
+
     private void updateHeaderVisibility(boolean animate) {
         ViewGroup desiredHeader;
         ViewGroup currentHeader = mCurrentHeader;
         desiredHeader = calculateDesiredHeader();
 
         if (currentHeader == desiredHeader) {
+            return;
+        }
+
+        if (AsyncGroupHeaderViewInflation.isEnabled() && desiredHeader == null) {
             return;
         }
 
@@ -1272,6 +1403,9 @@ public class NotificationChildrenContainer extends ViewGroup
             boolean likeHighPriority,
             int headerTranslation) {
         if (!likeHighPriority && showingAsLowPriority()) {
+            if (AsyncGroupHeaderViewInflation.isEnabled()) {
+                return mHeaderHeight;
+            }
             if (mNotificationHeaderLowPriority == null) {
                 Log.e(TAG, "getMinHeight: low priority header is null", new Exception());
                 return 0;
@@ -1296,8 +1430,12 @@ public class NotificationChildrenContainer extends ViewGroup
             if (singleLineView != null) {
                 minExpandHeight += singleLineView.getHeight();
             } else {
-                Log.e(TAG, "getMinHeight: child " + child + " single line view is null",
-                        new Exception());
+                if (AsyncGroupHeaderViewInflation.isEnabled()) {
+                    minExpandHeight += mMinSingleLineHeight;
+                } else {
+                    Log.e(TAG, "getMinHeight: child " + child.getEntry().getKey()
+                            + " single line view is null", new Exception());
+                }
             }
             visibleChildren++;
         }
@@ -1310,15 +1448,19 @@ public class NotificationChildrenContainer extends ViewGroup
     }
 
     public void reInflateViews(OnClickListener listener, StatusBarNotification notification) {
-        if (mNotificationHeader != null) {
-            removeView(mNotificationHeader);
-            mNotificationHeader = null;
+        if (!AsyncGroupHeaderViewInflation.isEnabled()) {
+            // When Async header inflation is enabled, we do not reinflate headers because they are
+            // inflated from the background thread
+            if (mNotificationHeader != null) {
+                removeView(mNotificationHeader);
+                mNotificationHeader = null;
+            }
+            if (mNotificationHeaderLowPriority != null) {
+                removeView(mNotificationHeaderLowPriority);
+                mNotificationHeaderLowPriority = null;
+            }
+            recreateNotificationHeader(listener, mIsConversation);
         }
-        if (mNotificationHeaderLowPriority != null) {
-            removeView(mNotificationHeaderLowPriority);
-            mNotificationHeaderLowPriority = null;
-        }
-        recreateNotificationHeader(listener, mIsConversation);
         initDimens();
         for (int i = 0; i < mDividers.size(); i++) {
             View prevDivider = mDividers.get(i);
@@ -1362,7 +1504,7 @@ public class NotificationChildrenContainer extends ViewGroup
         Resources.Theme theme = new ContextThemeWrapper(mContext,
                 com.android.internal.R.style.Theme_DeviceDefault_DayNight).getTheme();
         try (TypedArray ta = theme.obtainStyledAttributes(
-                new int[]{com.android.internal.R.attr.colorAccent})) {
+                new int[]{com.android.internal.R.attr.materialColorPrimary})) {
             color = ta.getColor(0, color);
         }
         mHybridGroupManager.setOverflowNumberColor(mOverflowNumber, color);
@@ -1396,7 +1538,9 @@ public class NotificationChildrenContainer extends ViewGroup
     public void setIsLowPriority(boolean isLowPriority) {
         mIsLowPriority = isLowPriority;
         if (mContainingNotification != null) { /* we're not yet set up yet otherwise */
-            recreateLowPriorityHeader(null /* existingBuilder */, mIsConversation);
+            if (!AsyncGroupHeaderViewInflation.isEnabled()) {
+                recreateLowPriorityHeader(null /* existingBuilder */, mIsConversation);
+            }
             updateHeaderVisibility(false /* animate */);
         }
         if (mUserLocked) {
@@ -1431,40 +1575,30 @@ public class NotificationChildrenContainer extends ViewGroup
     @Override
     public void applyRoundnessAndInvalidate() {
         boolean last = true;
-        if (mUseRoundnessSourceTypes) {
-            if (mNotificationHeaderWrapper != null) {
-                mNotificationHeaderWrapper.requestTopRoundness(
-                        /* value = */ getTopRoundness(),
-                        /* sourceType = */ FROM_PARENT,
-                        /* animate = */ false
-                );
-            }
-            if (mNotificationHeaderWrapperLowPriority != null) {
-                mNotificationHeaderWrapperLowPriority.requestTopRoundness(
-                        /* value = */ getTopRoundness(),
-                        /* sourceType = */ FROM_PARENT,
-                        /* animate = */ false
-                );
-            }
+        if (mNotificationHeaderWrapper != null) {
+            mNotificationHeaderWrapper.requestTopRoundness(
+                    /* value = */ getTopRoundness(),
+                    /* sourceType = */ FROM_PARENT,
+                    /* animate = */ false
+            );
+        }
+        if (mNotificationHeaderWrapperLowPriority != null) {
+            mNotificationHeaderWrapperLowPriority.requestTopRoundness(
+                    /* value = */ getTopRoundness(),
+                    /* sourceType = */ FROM_PARENT,
+                    /* animate = */ false
+            );
         }
         for (int i = mAttachedChildren.size() - 1; i >= 0; i--) {
             ExpandableNotificationRow child = mAttachedChildren.get(i);
             if (child.getVisibility() == View.GONE) {
                 continue;
             }
-            if (mUseRoundnessSourceTypes) {
-                child.requestRoundness(
-                        /* top = */ 0f,
-                        /* bottom = */ last ? getBottomRoundness() : 0f,
-                        /* sourceType = */ FROM_PARENT,
-                        /* animate = */ false);
-            } else {
-                child.requestRoundness(
-                        /* top = */ 0f,
-                        /* bottom = */ last ? getBottomRoundness() : 0f,
-                        LegacySourceType.DefaultValue,
-                        /* animate = */ isShown());
-            }
+            child.requestRoundness(
+                    /* top = */ 0f,
+                    /* bottom = */ last ? getBottomRoundness() : 0f,
+                    /* sourceType = */ FROM_PARENT,
+                    /* animate = */ false);
             last = false;
         }
         Roundable.super.applyRoundnessAndInvalidate();
@@ -1524,18 +1658,38 @@ public class NotificationChildrenContainer extends ViewGroup
         return mNotificationHeaderWrapper;
     }
 
-    /**
-     * Enable the support for rounded corner based on the SourceType
-     *
-     * @param enabled true if is supported
-     */
-    public void useRoundnessSourceTypes(boolean enabled) {
-        mUseRoundnessSourceTypes = enabled;
+    public void setLogger(NotificationChildrenContainerLogger logger) {
+        mLogger = logger;
     }
 
     @Override
-    public String toString() {
-        String roundableStateDebug = "RoundableState = " + getRoundableState().debugString();
-        return "NotificationChildrenContainer:" + hashCode() + " { " + roundableStateDebug + " }";
+    public void addTransientView(View view, int index) {
+        if (mLogger != null && view instanceof ExpandableNotificationRow) {
+            mLogger.addTransientRow(
+                    ((ExpandableNotificationRow) view).getEntry(),
+                    getContainingNotification().getEntry(),
+                    index
+            );
+        }
+        super.addTransientView(view, index);
+    }
+
+    @Override
+    public void removeTransientView(View view) {
+        if (mLogger != null && view instanceof ExpandableNotificationRow) {
+            mLogger.removeTransientRow(
+                    ((ExpandableNotificationRow) view).getEntry(),
+                    getContainingNotification().getEntry()
+            );
+        }
+        super.removeTransientView(view);
+    }
+
+    public String debugString() {
+        return TAG + " { "
+                + "visibility: " + getVisibility()
+                + ", alpha: " + getAlpha()
+                + ", translationY: " + getTranslationY()
+                + ", roundableState: " + getRoundableState().debugString() + "}";
     }
 }

@@ -17,13 +17,10 @@
 #ifndef RENDERTHREAD_H_
 #define RENDERTHREAD_H_
 
-#include <surface_control_private.h>
 #include <GrDirectContext.h>
 #include <SkBitmap.h>
 #include <cutils/compiler.h>
-#include <private/android/choreographer.h>
-#include <thread/ThreadBase.h>
-#include <utils/Looper.h>
+#include <surface_control_private.h>
 #include <utils/Thread.h>
 
 #include <memory>
@@ -31,6 +28,7 @@
 #include <set>
 
 #include "CacheManager.h"
+#include "MemoryPolicy.h"
 #include "ProfileDataContainer.h"
 #include "RenderTask.h"
 #include "TimeLord.h"
@@ -172,6 +170,9 @@ public:
         return mASurfaceControlFunctions;
     }
 
+    void trimMemory(TrimLevel level);
+    void trimCaches(CacheTrimLevel level);
+
     /**
      * isCurrent provides a way to query, if the caller is running on
      * the render thread.
@@ -232,7 +233,6 @@ private:
     bool mFrameCallbackTaskPending;
 
     TimeLord mTimeLord;
-    nsecs_t mDispatchFrameDelay = 4_ms;
     RenderState* mRenderState;
     EglManager* mEglManager;
     WebViewFunctorManager& mFunctorManager;

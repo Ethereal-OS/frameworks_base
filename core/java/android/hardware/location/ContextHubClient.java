@@ -15,11 +15,14 @@
  */
 package android.hardware.location;
 
+import android.annotation.FlaggedApi;
 import android.annotation.IntRange;
 import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.app.PendingIntent;
+import android.chre.flags.Flags;
 import android.os.RemoteException;
 import android.util.Log;
 
@@ -31,8 +34,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A class describing a client of the Context Hub Service.
- * <p>
- * Clients can send messages to nanoapps at a Context Hub through this object. The APIs supported
+ *
+ * <p>Clients can send messages to nanoapps at a Context Hub through this object. The APIs supported
  * by this object are thread-safe and can be used without external synchronization.
  *
  * @hide
@@ -75,13 +78,13 @@ public class ContextHubClient implements Closeable {
     }
 
     /**
-     * Sets the proxy interface of the client at the service. This method should always be called
-     * by the ContextHubManager after the client is registered at the service, and should only be
+     * Sets the proxy interface of the client at the service. This method should always be called by
+     * the ContextHubManager after the client is registered at the service, and should only be
      * called once.
      *
      * @param clientProxy the proxy of the client at the service
      */
-    /* package */ void setClientProxy(IContextHubClient clientProxy) {
+    /* package */ synchronized void setClientProxy(IContextHubClient clientProxy) {
         Objects.requireNonNull(clientProxy, "IContextHubClient cannot be null");
         if (mClientProxy != null) {
             throw new IllegalStateException("Cannot change client proxy multiple times");
@@ -89,10 +92,11 @@ public class ContextHubClient implements Closeable {
 
         mClientProxy = clientProxy;
         try {
-            mId = Integer.valueOf(mClientProxy.getId());
+            mId = mClientProxy.getId();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+        this.notifyAll();
     }
 
     /**
@@ -108,16 +112,16 @@ public class ContextHubClient implements Closeable {
     /**
      * Returns the system-wide unique identifier for this ContextHubClient.
      *
-     * This value can be used as an identifier for the messaging channel between a
-     * ContextHubClient and the Context Hub. This may be used as a routing mechanism
-     * between various ContextHubClient objects within an application.
-     * <p>
-     * The value returned by this method will remain the same if it is associated with
-     * the same client reference at the ContextHubService (for instance, the ID of a
-     * PendingIntent ContextHubClient will remain the same even if the local object
-     * has been regenerated with the equivalent PendingIntent). If the ContextHubClient
-     * is newly generated (e.g. any regeneration of a callback client, or generation
-     * of a non-equal PendingIntent client), the ID will not be the same.
+     * <p>This value can be used as an identifier for the messaging channel between a
+     * ContextHubClient and the Context Hub. This may be used as a routing mechanism between various
+     * ContextHubClient objects within an application.
+     *
+     * <p>The value returned by this method will remain the same if it is associated with the same
+     * client reference at the ContextHubService (for instance, the ID of a PendingIntent
+     * ContextHubClient will remain the same even if the local object has been regenerated with the
+     * equivalent PendingIntent). If the ContextHubClient is newly generated (e.g. any regeneration
+     * of a callback client, or generation of a non-equal PendingIntent client), the ID will not be
+     * the same.
      *
      * @return The ID of this ContextHubClient, in the range [0, 65535].
      */
@@ -132,13 +136,13 @@ public class ContextHubClient implements Closeable {
     /**
      * Closes the connection for this client and the Context Hub Service.
      *
-     * When this function is invoked, the messaging associated with this client is invalidated.
+     * <p>When this function is invoked, the messaging associated with this client is invalidated.
      * All futures messages targeted for this client are dropped at the service, and the
      * ContextHubClient is unregistered from the service.
-     * <p>
-     * If this object has a PendingIntent, i.e. the object was generated via
-     * {@link ContextHubManager.createClient(PendingIntent, ContextHubInfo, long)}, then the
-     * Intent events corresponding to the PendingIntent will no longer be triggered.
+     *
+     * <p>If this object has a PendingIntent, i.e. the object was generated via {@link
+     * ContextHubManager#createClient(ContextHubInfo, PendingIntent, long)}, then the Intent events
+     * corresponding to the PendingIntent will no longer be triggered.
      */
     public void close() {
         if (!mIsClosed.getAndSet(true)) {
@@ -174,31 +178,85 @@ public class ContextHubClient implements Closeable {
      *    have sent it a message.
      *
      * @param message the message object to send
-     *
      * @return the result of sending the message defined as in ContextHubTransaction.Result
-     *
      * @throws NullPointerException if NanoAppMessage is null
      * @throws SecurityException if this client doesn't have permissions to send a message to the
-     * nanoapp.
-     *
+     *     nanoapp.
      * @see NanoAppMessage
      * @see ContextHubTransaction.Result
      */
     @RequiresPermission(android.Manifest.permission.ACCESS_CONTEXT_HUB)
     @ContextHubTransaction.Result
     public int sendMessageToNanoApp(@NonNull NanoAppMessage message) {
+        return doSendMessageToNanoApp(message, null);
+    }
+
+    /**
+     * Sends a reliable message to a nanoapp.
+     *
+     * This method is similar to {@link ContextHubClient#sendMessageToNanoApp} with the
+     * difference that it expects the message to be acknowledged by CHRE.
+     *
+     * The transaction succeeds after we received an ACK from CHRE without error.
+     * In all other cases the transaction will fail.
+     */
+    @RequiresPermission(android.Manifest.permission.ACCESS_CONTEXT_HUB)
+    @NonNull
+    @FlaggedApi(Flags.FLAG_RELIABLE_MESSAGE)
+    public ContextHubTransaction<Void> sendReliableMessageToNanoApp(
+            @NonNull NanoAppMessage message) {
+        if (!Flags.reliableMessageImplementation()) {
+            return null;
+        }
+
+        ContextHubTransaction<Void> transaction =
+                new ContextHubTransaction<>(ContextHubTransaction.TYPE_RELIABLE_MESSAGE);
+
+        if (!mAttachedHub.supportsReliableMessages()) {
+            transaction.setResponse(new ContextHubTransaction.Response<Void>(
+                    ContextHubTransaction.RESULT_FAILED_NOT_SUPPORTED, null));
+            return transaction;
+        }
+
+        IContextHubTransactionCallback callback =
+                ContextHubTransactionHelper.createTransactionCallback(transaction);
+
+        @ContextHubTransaction.Result int result = doSendMessageToNanoApp(message, callback);
+        if (result != ContextHubTransaction.RESULT_SUCCESS) {
+            transaction.setResponse(new ContextHubTransaction.Response<Void>(result, null));
+        }
+
+        return transaction;
+    }
+
+    /**
+     * Sends a message to a nanoapp.
+     *
+     * @param message The message to send.
+     * @param transactionCallback The callback to use when the message is reliable. null for regular
+     *         messages.
+     * @return A {@link ContextHubTransaction.Result} error code.
+     */
+    @ContextHubTransaction.Result
+    private int doSendMessageToNanoApp(@NonNull NanoAppMessage message,
+            @Nullable IContextHubTransactionCallback transactionCallback) {
         Objects.requireNonNull(message, "NanoAppMessage cannot be null");
 
         int maxPayloadBytes = mAttachedHub.getMaxPacketLengthBytes();
+
         byte[] payload = message.getMessageBody();
         if (payload != null && payload.length > maxPayloadBytes) {
-            Log.e(TAG, "Message (" + payload.length + " bytes) exceeds max payload length ("
-                    + maxPayloadBytes + " bytes)");
+            Log.e(TAG,
+                    "Message (%d bytes) exceeds max payload length (%d bytes)".formatted(
+                            payload.length, maxPayloadBytes));
             return ContextHubTransaction.RESULT_FAILED_BAD_PARAMS;
         }
 
         try {
-            return mClientProxy.sendMessageToNanoApp(message);
+            if (transactionCallback == null) {
+                return mClientProxy.sendMessageToNanoApp(message);
+            }
+            return mClientProxy.sendReliableMessageToNanoApp(message, transactionCallback);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -215,6 +273,38 @@ public class ContextHubClient implements Closeable {
             }
         } finally {
             super.finalize();
+        }
+    }
+
+    /** @hide */
+    public synchronized void callbackFinished() {
+        try {
+            waitForClientProxy();
+            mClientProxy.callbackFinished();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /** @hide */
+    public synchronized void reliableMessageCallbackFinished(int messageSequenceNumber,
+            byte errorCode) {
+        try {
+            waitForClientProxy();
+            mClientProxy.reliableMessageCallbackFinished(messageSequenceNumber, errorCode);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /** @hide */
+    private void waitForClientProxy() {
+        while (mClientProxy == null) {
+            try {
+                this.wait();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 }

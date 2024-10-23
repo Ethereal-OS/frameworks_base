@@ -17,7 +17,6 @@ package com.android.internal.notification;
 import static android.app.admin.DevicePolicyResources.Strings.Core.NOTIFICATION_CHANNEL_DEVICE_ADMIN;
 
 import android.app.INotificationManager;
-import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.admin.DevicePolicyManager;
@@ -25,7 +24,6 @@ import android.content.Context;
 import android.content.pm.ParceledListSlice;
 import android.media.AudioAttributes;
 import android.os.RemoteException;
-import android.provider.Settings;
 
 import com.android.internal.R;
 
@@ -35,7 +33,10 @@ import java.util.List;
 
 // Manages the NotificationChannels used by the frameworks itself.
 public class SystemNotificationChannels {
-    public static String VIRTUAL_KEYBOARD  = "VIRTUAL_KEYBOARD";
+    /**
+     * @deprecated Legacy system channel, which is no longer used,
+     */
+    @Deprecated public static String VIRTUAL_KEYBOARD  = "VIRTUAL_KEYBOARD";
     public static String PHYSICAL_KEYBOARD = "PHYSICAL_KEYBOARD";
     public static String SECURITY = "SECURITY";
     public static String CAR_MODE = "CAR_MODE";
@@ -65,28 +66,17 @@ public class SystemNotificationChannels {
     @Deprecated public static String SYSTEM_CHANGES_DEPRECATED = "SYSTEM_CHANGES";
     public static String SYSTEM_CHANGES = "SYSTEM_CHANGES_ALERTS";
     public static String DO_NOT_DISTURB = "DO_NOT_DISTURB";
-    public static String OTHER_USERS = "OTHER_USERS";
     public static String ACCESSIBILITY_MAGNIFICATION = "ACCESSIBILITY_MAGNIFICATION";
     public static String ACCESSIBILITY_SECURITY_POLICY = "ACCESSIBILITY_SECURITY_POLICY";
     public static String ABUSIVE_BACKGROUND_APPS = "ABUSIVE_BACKGROUND_APPS";
-    public static String SLEEP = "SLEEP";
 
     public static void createAll(Context context) {
         final NotificationManager nm = context.getSystemService(NotificationManager.class);
         List<NotificationChannel> channelsList = new ArrayList<NotificationChannel>();
-        final NotificationChannel keyboard = new NotificationChannel(
-                VIRTUAL_KEYBOARD,
-                context.getString(R.string.notification_channel_virtual_keyboard),
-                NotificationManager.IMPORTANCE_LOW);
-        keyboard.setBlockable(true);
-        channelsList.add(keyboard);
-
         final NotificationChannel physicalKeyboardChannel = new NotificationChannel(
                 PHYSICAL_KEYBOARD,
                 context.getString(R.string.notification_channel_physical_keyboard),
-                NotificationManager.IMPORTANCE_DEFAULT);
-        physicalKeyboardChannel.setSound(Settings.System.DEFAULT_NOTIFICATION_URI,
-                Notification.AUDIO_ATTRIBUTES_DEFAULT);
+                NotificationManager.IMPORTANCE_LOW);
         physicalKeyboardChannel.setBlockable(true);
         channelsList.add(physicalKeyboardChannel);
 
@@ -150,7 +140,6 @@ public class SystemNotificationChannels {
                 VPN,
                 context.getString(R.string.notification_channel_vpn),
                 NotificationManager.IMPORTANCE_LOW);
-        vpn.setBlockable(true);
         channelsList.add(vpn);
 
         final NotificationChannel deviceAdmin = new NotificationChannel(
@@ -210,18 +199,6 @@ public class SystemNotificationChannels {
                 NotificationManager.IMPORTANCE_LOW);
         channelsList.add(dndChanges);
 
-        NotificationChannel otherUsers = new NotificationChannel(OTHER_USERS,
-                context.getString(R.string.notification_channel_other_users),
-                NotificationManager.IMPORTANCE_DEFAULT);
-        otherUsers.setDescription(context.getString(R.string.notification_channel_other_users_description));
-        otherUsers.setBlockable(true);
-        channelsList.add(otherUsers);
-
-        NotificationChannel sleepModeChanges = new NotificationChannel(SLEEP,
-                context.getString(R.string.notification_channel_sleep),
-                NotificationManager.IMPORTANCE_LOW);
-        channelsList.add(sleepModeChanges);
-
         final NotificationChannel newFeaturePrompt = new NotificationChannel(
                 ACCESSIBILITY_MAGNIFICATION,
                 context.getString(R.string.notification_channel_accessibility_magnification),
@@ -241,8 +218,6 @@ public class SystemNotificationChannels {
                 NotificationManager.IMPORTANCE_LOW);
         channelsList.add(abusiveBackgroundAppsChannel);
 
-        extraChannels(context, channelsList);
-
         nm.createNotificationChannels(channelsList);
     }
 
@@ -255,6 +230,7 @@ public class SystemNotificationChannels {
     /** Remove notification channels which are no longer used */
     public static void removeDeprecated(Context context) {
         final NotificationManager nm = context.getSystemService(NotificationManager.class);
+        nm.deleteNotificationChannel(VIRTUAL_KEYBOARD);
         nm.deleteNotificationChannel(DEVICE_ADMIN_DEPRECATED);
         nm.deleteNotificationChannel(SYSTEM_CHANGES_DEPRECATED);
     }
@@ -277,22 +253,4 @@ public class SystemNotificationChannels {
     }
 
     private SystemNotificationChannels() {}
-
-    public static final String MISSING_PERMISSION = "MISSING_PERMISSION";
-
-    private static void extraChannels(Context ctx, List<NotificationChannel> dest) {
-        channel(ctx, MISSING_PERMISSION,
-                    R.string.notification_channel_missing_permission,
-                    NotificationManager.IMPORTANCE_HIGH, true, dest);
-    }
-
-    private static NotificationChannel channel(Context ctx, String id, int nameRes, int importance, boolean silent, List<NotificationChannel> dest) {
-        var c = new NotificationChannel(id, ctx.getText(nameRes), importance);
-        if (silent) {
-            c.setSound(null, null);
-            c.enableVibration(false);
-        }
-        dest.add(c);
-        return c;
-    }
 }

@@ -29,6 +29,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.display.AmbientDisplayConfiguration;
 import android.os.SystemClock;
+import android.os.UserHandle;
 import android.text.format.Formatter;
 import android.util.IndentingPrintWriter;
 import android.util.Log;
@@ -50,6 +51,7 @@ import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.phone.DozeParameters;
 import com.android.systemui.statusbar.policy.DevicePostureController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
+import com.android.systemui.user.domain.interactor.SelectedUserInteractor;
 import com.android.systemui.util.Assert;
 import com.android.systemui.util.sensors.AsyncSensorManager;
 import com.android.systemui.util.sensors.ProximityCheck;
@@ -102,6 +104,7 @@ public class DozeTriggers implements DozeMachine.Part {
     private final AuthController mAuthController;
     private final KeyguardStateController mKeyguardStateController;
     private final UserTracker mUserTracker;
+    private final SelectedUserInteractor mSelectedUserInteractor;
     private final UiEventLogger mUiEventLogger;
 
     private long mNotificationPulseTime;
@@ -201,7 +204,8 @@ public class DozeTriggers implements DozeMachine.Part {
             SessionTracker sessionTracker,
             KeyguardStateController keyguardStateController,
             DevicePostureController devicePostureController,
-            UserTracker userTracker) {
+            UserTracker userTracker,
+            SelectedUserInteractor selectedUserInteractor) {
         mContext = context;
         mDozeHost = dozeHost;
         mConfig = config;
@@ -213,7 +217,7 @@ public class DozeTriggers implements DozeMachine.Part {
 
         mDozeSensors = new DozeSensors(mContext.getResources(), mSensorManager, dozeParameters,
                 config, wakeLock, this::onSensor, this::onProximityFar, dozeLog, proximitySensor,
-                secureSettings, authController, devicePostureController, userTracker);
+                secureSettings, authController, devicePostureController, selectedUserInteractor);
         mDockManager = dockManager;
         mProxCheck = proxCheck;
         mDozeLog = dozeLog;
@@ -222,6 +226,7 @@ public class DozeTriggers implements DozeMachine.Part {
         mUiEventLogger = uiEventLogger;
         mKeyguardStateController = keyguardStateController;
         mUserTracker = userTracker;
+        mSelectedUserInteractor = selectedUserInteractor;
     }
 
     @Override
@@ -246,7 +251,7 @@ public class DozeTriggers implements DozeMachine.Part {
             return;
         }
         mNotificationPulseTime = SystemClock.elapsedRealtime();
-        if (!mConfig.pulseOnNotificationEnabled(mUserTracker.getUserId())) {
+        if (!mConfig.pulseOnNotificationEnabled(mSelectedUserInteractor.getSelectedUserId(true))) {
             runIfNotNull(onPulseSuppressedListener);
             mDozeLog.tracePulseDropped("pulseOnNotificationsDisabled");
             return;
@@ -259,6 +264,10 @@ public class DozeTriggers implements DozeMachine.Part {
         requestPulse(DozeLog.PULSE_REASON_NOTIFICATION, false /* performedProxCheck */,
                 onPulseSuppressedListener);
         mDozeLog.traceNotificationPulse();
+    }
+
+    private void onSideFingerprintAcquisitionStarted() {
+        requestPulse(DozeLog.PULSE_REASON_FINGERPRINT_ACTIVATED, false, null);
     }
 
     private static void runIfNotNull(Runnable runnable) {
@@ -324,9 +333,7 @@ public class DozeTriggers implements DozeMachine.Part {
                     return;
                 }
                 if (isDoubleTap || isTap) {
-                    if (screenX != -1 && screenY != -1) {
-                        mDozeHost.onSlpiTap(screenX, screenY);
-                    }
+                    mDozeHost.onSlpiTap(screenX, screenY);
                     gentleWakeUp(pulseReason);
                 } else if (isPickup) {
                     if (shouldDropPickupEvent())  {
@@ -368,6 +375,15 @@ public class DozeTriggers implements DozeMachine.Part {
     }
 
     private void gentleWakeUp(@DozeLog.Reason int reason) {
+        if (reason == DozeLog.REASON_SENSOR_PICKUP &&
+            mConfig.pickupGestureAmbient(UserHandle.USER_CURRENT) ||
+            reason == DozeLog.REASON_SENSOR_DOUBLE_TAP
+            && mConfig.doubleTapGestureAmbient(UserHandle.USER_CURRENT) ||
+            reason == DozeLog.REASON_SENSOR_TAP
+            && mConfig.singleTapGestureAmbient(UserHandle.USER_CURRENT)) {
+            requestPulse(reason, true, null);
+            return;
+        }
         // Log screen wake up reason (lift/pickup, tap, double-tap)
         Optional.ofNullable(DozingUpdateUiEvent.fromReason(reason))
                 .ifPresent(uiEventEnum -> mUiEventLogger.log(uiEventEnum, getKeyguardSessionId()));
@@ -688,6 +704,11 @@ public class DozeTriggers implements DozeMachine.Part {
         @Override
         public void onNotificationAlerted(Runnable onPulseSuppressedListener) {
             onNotification(onPulseSuppressedListener);
+        }
+
+        @Override
+        public void onSideFingerprintAcquisitionStarted() {
+            DozeTriggers.this.onSideFingerprintAcquisitionStarted();
         }
     };
 }

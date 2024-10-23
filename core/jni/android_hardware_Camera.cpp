@@ -17,22 +17,21 @@
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "Camera-JNI"
-#include <utils/Log.h>
-
-#include "jni.h"
-#include <nativehelper/JNIHelp.h>
-#include "core_jni_helpers.h"
 #include <android_runtime/android_graphics_SurfaceTexture.h>
 #include <android_runtime/android_view_Surface.h>
-
+#include <binder/IMemory.h>
+#include <camera/Camera.h>
+#include <camera/StringUtils.h>
 #include <cutils/properties.h>
-#include <utils/Vector.h>
-#include <utils/Errors.h>
-
 #include <gui/GLConsumer.h>
 #include <gui/Surface.h>
-#include <camera/Camera.h>
-#include <binder/IMemory.h>
+#include <nativehelper/JNIHelp.h>
+#include <utils/Errors.h>
+#include <utils/Log.h>
+#include <utils/Vector.h>
+
+#include "core_jni_helpers.h"
+#include "jni.h"
 
 using namespace android;
 
@@ -647,7 +646,7 @@ static jint android_hardware_Camera_native_setup(JNIEnv *env, jobject thiz, jobj
     const char16_t *rawClientName = reinterpret_cast<const char16_t*>(
         env->GetStringChars(clientPackageName, NULL));
     jsize rawClientNameLen = env->GetStringLength(clientPackageName);
-    String16 clientName(rawClientName, rawClientNameLen);
+    std::string clientName = toStdString(rawClientName, rawClientNameLen);
     env->ReleaseStringChars(clientPackageName,
                             reinterpret_cast<const jchar*>(rawClientName));
 
@@ -978,11 +977,11 @@ static jstring android_hardware_Camera_getParameters(JNIEnv *env, jobject thiz)
     if (camera == 0) return 0;
 
     String8 params8 = camera->getParameters();
-    if (params8.isEmpty()) {
+    if (params8.empty()) {
         jniThrowRuntimeException(env, "getParameters failed (empty parameters)");
         return 0;
     }
-    return env->NewStringUTF(params8.string());
+    return env->NewStringUTF(params8.c_str());
 }
 
 static void android_hardware_Camera_reconnect(JNIEnv *env, jobject thiz)
@@ -1187,10 +1186,10 @@ static const JNINativeMethod camMethods[] = {
         {"native_autoFocus", "()V", (void *)android_hardware_Camera_autoFocus},
         {"native_cancelAutoFocus", "()V", (void *)android_hardware_Camera_cancelAutoFocus},
         {"native_takePicture", "(I)V", (void *)android_hardware_Camera_takePicture},
-        {"native_setHistogramMode", "(Z)V", (void *)android_hardware_Camera_setHistogramMode },
-        {"native_setMetadataCb", "(Z)V", (void *)android_hardware_Camera_setMetadataCb },
-        {"native_sendHistogramData", "()V", (void *)android_hardware_Camera_sendHistogramData },
-        {"native_setLongshot", "(Z)V", (void *)android_hardware_Camera_setLongshot },
+        {"native_setHistogramMode", "(Z)V", (void *)android_hardware_Camera_setHistogramMode},
+        {"native_setMetadataCb", "(Z)V", (void *)android_hardware_Camera_setMetadataCb},
+        {"native_sendHistogramData", "()V", (void *)android_hardware_Camera_sendHistogramData},
+        {"native_setLongshot", "(Z)V", (void *)android_hardware_Camera_setLongshot},
         {"native_setParameters", "(Ljava/lang/String;)V",
          (void *)android_hardware_Camera_setParameters},
         {"native_getParameters", "()Ljava/lang/String;",
@@ -1208,7 +1207,7 @@ static const JNINativeMethod camMethods[] = {
          (void *)android_hardware_Camera_enableFocusMoveCallback},
         {"setAudioRestriction", "(I)V", (void *)android_hardware_Camera_setAudioRestriction},
         {"getAudioRestriction", "()I", (void *)android_hardware_Camera_getAudioRestriction},
-        { "_sendVendorCommand", "(III)V", (void *)android_hardware_Camera_sendVendorCommand },
+        { "_sendVendorCommand","(III)V", (void *)android_hardware_Camera_sendVendorCommand },
 };
 
 struct field {

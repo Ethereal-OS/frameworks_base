@@ -17,19 +17,24 @@
 package android.accessibilityservice;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.accessibilityservice.IBrailleDisplayController;
 import android.accessibilityservice.MagnificationConfig;
 import android.content.pm.ParceledListSlice;
 import android.graphics.Bitmap;
 import android.graphics.Region;
+import android.hardware.usb.UsbDevice;
 import android.os.Bundle;
 import android.os.RemoteCallback;
 import android.view.MagnificationSpec;
+import android.view.SurfaceControl;
 import android.view.MotionEvent;
+import android.view.SurfaceControl;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction;
 import android.view.accessibility.IAccessibilityInteractionConnectionCallback;
 import android.view.accessibility.AccessibilityWindowInfo;
 import java.util.List;
+import android.window.ScreenCapture;
 
 /**
  * Interface given to an AccessibilitySerivce to talk to the AccessibilityManagerService.
@@ -122,6 +127,10 @@ interface IAccessibilityServiceConnection {
 
     void takeScreenshot(int displayId, in RemoteCallback callback);
 
+    void takeScreenshotOfWindow(int accessibilityWindowId, int interactionId,
+        in ScreenCapture.ScreenCaptureListener listener,
+        IAccessibilityInteractionConnectionCallback callback);
+
     void setGestureDetectionPassthroughRegion(int displayId, in Region region);
 
     void setTouchExplorationPassthroughRegion(int displayId, in Region region);
@@ -146,4 +155,19 @@ interface IAccessibilityServiceConnection {
     void onDoubleTapAndHold(int displayId);
 
     void setAnimationScale(float scale);
+
+    void setInstalledAndEnabledServices(in List<AccessibilityServiceInfo> infos);
+
+    List<AccessibilityServiceInfo> getInstalledAndEnabledServices();
+    void attachAccessibilityOverlayToDisplay(int interactionId, int displayId, in SurfaceControl sc, IAccessibilityInteractionConnectionCallback callback);
+
+    void attachAccessibilityOverlayToWindow(int interactionId, int accessibilityWindowId, in SurfaceControl sc, IAccessibilityInteractionConnectionCallback callback);
+
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)")
+    void connectBluetoothBrailleDisplay(in String bluetoothAddress, in IBrailleDisplayController controller);
+
+    void connectUsbBrailleDisplay(in UsbDevice usbDevice, in IBrailleDisplayController controller);
+
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.MANAGE_ACCESSIBILITY)")
+    void setTestBrailleDisplayData(in List<Bundle> brailleDisplays);
 }

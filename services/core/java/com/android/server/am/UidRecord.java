@@ -51,6 +51,12 @@ public final class UidRecord {
     private boolean mProcAdjChanged;
 
     @CompositeRWLock({"mService", "mProcLock"})
+    private int mCurAdj;
+
+    @CompositeRWLock({"mService", "mProcLock"})
+    private int mSetAdj;
+
+    @CompositeRWLock({"mService", "mProcLock"})
     private int mCurCapability;
 
     @CompositeRWLock({"mService", "mProcLock"})
@@ -58,6 +64,9 @@ public final class UidRecord {
 
     @CompositeRWLock({"mService", "mProcLock"})
     private long mLastBackgroundTime;
+
+    @CompositeRWLock({"mService", "mProcLock"})
+    private long mLastIdleTime;
 
     @CompositeRWLock({"mService", "mProcLock"})
     private boolean mEphemeral;
@@ -151,6 +160,14 @@ public final class UidRecord {
     @GuardedBy("mService")
     private int mLastReportedChange;
 
+    /**
+     * This indicates whether the entire Uid is frozen or not.
+     * It is used by CachedAppOptimizer to avoid sending multiple
+     * UID_FROZEN_STATE_UNFROZEN messages on process unfreeze.
+     */
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
+    private boolean mUidIsFrozen;
+
     public UidRecord(int uid, ActivityManagerService service) {
         mUid = uid;
         mService = service;
@@ -193,9 +210,21 @@ public final class UidRecord {
         mProcAdjChanged = false;
     }
 
-    @GuardedBy({"mService", "mProcLock"})
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
     boolean getProcAdjChanged() {
         return mProcAdjChanged;
+    }
+
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
+    int getMinProcAdj() {
+        int minAdj = ProcessList.UNKNOWN_ADJ;
+        for (int i = mProcRecords.size() - 1; i >= 0; i--) {
+            int adj = mProcRecords.valueAt(i).getSetAdj();
+            if (adj < minAdj) {
+                minAdj = adj;
+            }
+        }
+        return minAdj;
     }
 
     @GuardedBy(anyOf = {"mService", "mProcLock"})
@@ -229,6 +258,16 @@ public final class UidRecord {
     }
 
     @GuardedBy(anyOf = {"mService", "mProcLock"})
+    long getLastIdleTime() {
+        return mLastIdleTime;
+    }
+
+    @GuardedBy({"mService", "mProcLock"})
+    void setLastIdleTime(long lastActiveTime) {
+        mLastIdleTime = lastActiveTime;
+    }
+
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
     boolean isEphemeral() {
         return mEphemeral;
     }
@@ -238,11 +277,13 @@ public final class UidRecord {
         mEphemeral = ephemeral;
     }
 
+    /** Returns whether the UID has any FGS of any type or not (including "short fgs") */
     @GuardedBy(anyOf = {"mService", "mProcLock"})
     boolean hasForegroundServices() {
         return mForegroundServices;
     }
 
+    /** Sets whether the UID has any FGS of any type or not (including "short fgs") */
     @GuardedBy({"mService", "mProcLock"})
     void setForegroundServices(boolean foregroundServices) {
         mForegroundServices = foregroundServices;
@@ -301,6 +342,11 @@ public final class UidRecord {
     }
 
     @GuardedBy(anyOf = {"mService", "mProcLock"})
+    ProcessRecord getProcessRecordByIndex(int idx) {
+        return mProcRecords.valueAt(idx);
+    }
+
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
     ProcessRecord getProcessInPackage(String packageName) {
         for (int i = mProcRecords.size() - 1; i >= 0; i--) {
             final ProcessRecord app = mProcRecords.valueAt(i);
@@ -309,6 +355,43 @@ public final class UidRecord {
             }
         }
         return null;
+    }
+
+    /**
+     * Check whether all processes in the Uid are frozen.
+     *
+     * @param excluding Skip this process record during the check.
+     * @return true if all processes in the Uid are frozen, false otherwise.
+     */
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
+    public boolean areAllProcessesFrozen(ProcessRecord excluding) {
+        for (int i = mProcRecords.size() - 1; i >= 0; i--) {
+            final ProcessRecord app = mProcRecords.valueAt(i);
+            final ProcessCachedOptimizerRecord opt = app.mOptRecord;
+
+            if (excluding != app && !opt.isFrozen()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @return true if all processes in the Uid are frozen, false otherwise.
+     */
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
+    public boolean areAllProcessesFrozen() {
+        return areAllProcessesFrozen(null);
+    }
+
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
+    public void setFrozen(boolean frozen) {
+        mUidIsFrozen = frozen;
+    }
+
+    @GuardedBy(anyOf = {"mService", "mProcLock"})
+    public boolean isFrozen() {
+        return mUidIsFrozen;
     }
 
     @GuardedBy({"mService", "mProcLock"})
@@ -441,6 +524,8 @@ public final class UidRecord {
         sb.append(",");
         sb.append(lastNetworkUpdatedProcStateSeq);
         sb.append(")}");
+        sb.append(" caps=");
+        ActivityManager.printCapabilitiesSummary(sb, mCurCapability);
         return sb.toString();
     }
 }

@@ -17,7 +17,7 @@
 package com.android.wm.shell.common;
 
 import static android.view.Display.DEFAULT_DISPLAY;
-import static android.view.InsetsState.ITYPE_IME;
+import static android.view.InsetsSource.ID_IME;
 import static android.view.Surface.ROTATION_0;
 import static android.view.WindowInsets.Type.ime;
 
@@ -38,10 +38,10 @@ import android.view.InsetsSource;
 import android.view.InsetsSourceControl;
 import android.view.InsetsState;
 import android.view.SurfaceControl;
+import android.view.inputmethod.ImeTracker;
 
 import androidx.test.filters.SmallTest;
 
-import com.android.internal.view.IInputMethodManager;
 import com.android.wm.shell.ShellTestCase;
 import com.android.wm.shell.sysui.ShellInit;
 
@@ -52,13 +52,17 @@ import org.mockito.MockitoAnnotations;
 
 import java.util.concurrent.Executor;
 
+/**
+ * Tests for the display IME controller.
+ *
+ * <p> Build/Install/Run:
+ *  atest WMShellUnitTests:DisplayImeControllerTest
+ */
 @SmallTest
 public class DisplayImeControllerTest extends ShellTestCase {
 
     @Mock
     private SurfaceControl.Transaction mT;
-    @Mock
-    private IInputMethodManager mMock;
     @Mock
     private ShellInit mShellInit;
     private DisplayImeController.PerDisplay mPerDisplay;
@@ -78,10 +82,6 @@ public class DisplayImeControllerTest extends ShellTestCase {
             public void release(SurfaceControl.Transaction t) {
             }
         }, mExecutor) {
-            @Override
-            public IInputMethodManager getImms() {
-                return mMock;
-            }
             @Override
             void removeImeSurface() { }
         }.new PerDisplay(DEFAULT_DISPLAY, ROTATION_0);
@@ -106,13 +106,13 @@ public class DisplayImeControllerTest extends ShellTestCase {
 
     @Test
     public void showInsets_schedulesNoWorkOnExecutor() {
-        mPerDisplay.showInsets(ime(), true);
+        mPerDisplay.showInsets(ime(), true /* fromIme */, ImeTracker.Token.empty());
         verifyZeroInteractions(mExecutor);
     }
 
     @Test
     public void hideInsets_schedulesNoWorkOnExecutor() {
-        mPerDisplay.hideInsets(ime(), true);
+        mPerDisplay.hideInsets(ime(), true /* fromIme */, ImeTracker.Token.empty());
         verifyZeroInteractions(mExecutor);
     }
 
@@ -145,14 +145,15 @@ public class DisplayImeControllerTest extends ShellTestCase {
     private InsetsSourceControl[] insetsSourceControl() {
         return new InsetsSourceControl[]{
                 new InsetsSourceControl(
-                        ITYPE_IME, mock(SurfaceControl.class), false, new Point(0, 0), Insets.NONE)
+                        ID_IME, ime(), mock(SurfaceControl.class), false, new Point(0, 0),
+                        Insets.NONE)
         };
     }
 
     private InsetsState insetsStateWithIme(boolean visible) {
         InsetsState state = new InsetsState();
-        state.addSource(new InsetsSource(ITYPE_IME));
-        state.setSourceVisible(ITYPE_IME, visible);
+        state.addSource(new InsetsSource(ID_IME, ime()));
+        state.setSourceVisible(ID_IME, visible);
         return state;
     }
 

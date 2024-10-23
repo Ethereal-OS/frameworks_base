@@ -179,6 +179,23 @@ public class StatusBarNotification implements Parcelable {
         return sbnKey;
     }
 
+    /**
+     * @return Whether the Entry is a group child by the app or system
+     * @hide
+     */
+    public boolean isAppOrSystemGroupChild() {
+        return isGroup() && !getNotification().isGroupSummary();
+    }
+
+
+    /**
+     * @return Whether the Entry is a group summary by the app or system
+     * @hide
+     */
+    public boolean isAppOrSystemGroupSummary() {
+        return isGroup() && getNotification().isGroupSummary();
+    }
+
     private String groupKey() {
         if (overrideGroupKey != null) {
             return user.getIdentifier() + "|" + pkg + "|" + "g:" + overrideGroupKey;
@@ -278,8 +295,10 @@ public class StatusBarNotification implements Parcelable {
     /**
      * @param notification Some kind of clone of this.notification.
      * @return A shallow copy of self, with notification in place of this.notification.
+     *
+     * @hide
      */
-    StatusBarNotification cloneShallow(Notification notification) {
+    public StatusBarNotification cloneShallow(Notification notification) {
         StatusBarNotification result = new StatusBarNotification(this.pkg, this.opPkg,
                 this.id, this.tag, this.uid, this.initialPid,
                 notification, this.user, this.overrideGroupKey,
@@ -302,6 +321,16 @@ public class StatusBarNotification implements Parcelable {
      */
     public boolean isOngoing() {
         return (notification.flags & Notification.FLAG_ONGOING_EVENT) != 0;
+    }
+
+    /**
+     * @hide
+     *
+     * Convenience method to check the notification's flags for
+     * {@link Notification#FLAG_NO_DISMISS}.
+     */
+    public boolean isNonDismissable() {
+        return (notification.flags & Notification.FLAG_NO_DISMISS) != 0;
     }
 
     /**
@@ -507,7 +536,7 @@ public class StatusBarNotification implements Parcelable {
                         template.hashCode());
             }
             ArrayList<Person> people = getNotification().extras.getParcelableArrayList(
-                    Notification.EXTRA_PEOPLE_LIST);
+                    Notification.EXTRA_PEOPLE_LIST, android.app.Person.class);
             if (people != null && !people.isEmpty()) {
                 logMaker.addTaggedData(MetricsEvent.FIELD_NOTIFICATION_PEOPLE, people.size());
             }

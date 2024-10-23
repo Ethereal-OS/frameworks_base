@@ -16,6 +16,8 @@
 
 package android.service.dreams;
 
+import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+
 import android.annotation.IdRes;
 import android.annotation.LayoutRes;
 import android.annotation.NonNull;
@@ -24,7 +26,6 @@ import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.annotation.TestApi;
 import android.app.Activity;
-import android.app.ActivityTaskManager;
 import android.app.AlarmManager;
 import android.app.Service;
 import android.compat.annotation.UnsupportedAppUsage;
@@ -243,20 +244,7 @@ public class DreamService extends Service implements Window.Callback {
 
     private DreamOverlayConnectionHandler mOverlayConnection;
 
-    private final IDreamOverlayCallback mOverlayCallback = new IDreamOverlayCallback.Stub() {
-        @Override
-        public void onExitRequested() {
-            // Simply finish dream when exit is requested.
-            mHandler.post(() -> finish());
-        }
-
-        @Override
-        public void onWakeUpComplete() {
-            // Finish the dream once overlay animations are complete. Execute on handler since
-            // this is coming in on the overlay binder.
-            mHandler.post(() -> finish());
-        }
-    };
+    private IDreamOverlayCallback mOverlayCallback;
 
 
     public DreamService() {
@@ -457,6 +445,19 @@ public class DreamService extends Service implements Window.Callback {
     }
 
     /**
+     * Retrieves the current {@link android.app.Activity} associated with the dream.
+     * This method behaves similarly to calling {@link android.app.Activity#getActivity()}.
+     *
+     * @return The current activity, or null if the dream is not associated with an activity
+     * or not started.
+     *
+     * @hide
+     */
+    public Activity getActivity() {
+        return mActivity;
+    }
+
+    /**
      * Inflates a layout resource and set it to be the content view for this Dream.
      * Behaves similarly to {@link android.app.Activity#setContentView(int)}.
      *
@@ -637,7 +638,7 @@ public class DreamService extends Service implements Window.Callback {
     }
 
     /**
-     * Marks this dream as windowless. Only available to doze dreams.
+     * Marks this dream as windowless. It should be called in {@link #onCreate} method.
      *
      * @hide
      *
@@ -647,7 +648,7 @@ public class DreamService extends Service implements Window.Callback {
     }
 
     /**
-     * Returns whether this dream is windowless. Only available to doze dreams.
+     * Returns whether this dream is windowless.
      *
      * @hide
      */
@@ -883,6 +884,13 @@ public class DreamService extends Service implements Window.Callback {
         mDreamComponent = new ComponentName(this, getClass());
         mShouldShowComplications = fetchShouldShowComplications(this /*context*/,
                 fetchServiceInfo(this /*context*/, mDreamComponent));
+        mOverlayCallback = new IDreamOverlayCallback.Stub() {
+            @Override
+            public void onExitRequested() {
+                // Simply finish dream when exit is requested.
+                mHandler.post(() -> finish());
+            }
+        };
 
         super.onCreate();
     }
@@ -923,6 +931,7 @@ public class DreamService extends Service implements Window.Callback {
                     overlay.wakeUp();
                 } catch (RemoteException e) {
                     Slog.e(TAG, "Error waking the overlay service", e);
+                } finally {
                     finish();
                 }
             });
@@ -1088,7 +1097,7 @@ public class DreamService extends Service implements Window.Callback {
 
         // Just in case destroy came in before detach, let's take care of that now
         detach();
-
+        mOverlayCallback = null;
         super.onDestroy();
     }
 
@@ -1236,8 +1245,10 @@ public class DreamService extends Service implements Window.Callback {
 
         mDreamToken = dreamToken;
         mCanDoze = canDoze;
-        if (mWindowless && !mCanDoze) {
-            throw new IllegalStateException("Only doze dreams can be windowless");
+        // This is not a security check to prevent malicious dreams but a guard rail to stop
+        // third-party dreams from being windowless and not working well as a result.
+        if (mWindowless && !mCanDoze && !isCallerSystemUi()) {
+            throw new IllegalStateException("Only doze or SystemUI dreams can be windowless.");
         }
 
         mDispatchAfterOnAttachedToWindow = () -> {
@@ -1270,9 +1281,7 @@ public class DreamService extends Service implements Window.Callback {
                     fetchDreamLabel(this, serviceInfo, isPreviewMode));
 
             try {
-                if (!ActivityTaskManager.getService().startDreamActivity(i)) {
-                    detach();
-                }
+                mDreamManager.startDreamActivity(i);
             } catch (SecurityException e) {
                 Log.w(mTag,
                         "Received SecurityException trying to start DreamActivity. "
@@ -1370,6 +1379,11 @@ public class DreamService extends Service implements Window.Callback {
             mWindow.setAttributes(lp);
             mWindow.getWindowManager().updateViewLayout(mWindow.getDecorView(), lp);
         }
+    }
+
+    private boolean isCallerSystemUi() {
+        return checkCallingOrSelfPermission(android.Manifest.permission.STATUS_BAR_SERVICE)
+                == PERMISSION_GRANTED;
     }
 
     private int applyFlags(int oldFlags, int flags, int mask) {
@@ -1508,7 +1522,8 @@ public class DreamService extends Service implements Window.Callback {
         // If DreamActivity is destroyed, wake up from Dream.
         void onActivityDestroyed() {
             mActivity = null;
-            onDestroy();
+            mWindow = null;
+            detach();
         }
     }
 

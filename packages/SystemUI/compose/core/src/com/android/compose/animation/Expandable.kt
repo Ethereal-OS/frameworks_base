@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.android.compose.animation
 
 import android.content.Context
@@ -21,9 +23,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewGroupOverlay
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -70,10 +74,12 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewTreeLifecycleOwner
-import androidx.lifecycle.ViewTreeViewModelStoreOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
+import androidx.lifecycle.findViewTreeViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import com.android.systemui.animation.Expandable
-import com.android.systemui.animation.LaunchAnimator
+import com.android.systemui.animation.TransitionAnimator
 import kotlin.math.max
 import kotlin.math.min
 
@@ -95,12 +101,12 @@ import kotlin.math.min
  *
  *      // For activities:
  *      onClick = { expandable ->
- *          activityStarter.startActivity(intent, expandable.activityLaunchController())
+ *          activityStarter.startActivity(intent, expandable.activityTransitionController())
  *      },
  *
  *      // For dialogs:
  *      onClick = { expandable ->
- *          dialogLaunchAnimator.show(dialog, controller.dialogLaunchController())
+ *          dialogTransitionAnimator.show(dialog, controller.dialogTransitionController())
  *      },
  *    ) {
  *      ...
@@ -118,6 +124,7 @@ fun Expandable(
     contentColor: Color = contentColorFor(color),
     borderStroke: BorderStroke? = null,
     onClick: ((Expandable) -> Unit)? = null,
+    onLongClick: ((Expandable) -> Unit)? = null,
     interactionSource: MutableInteractionSource? = null,
     content: @Composable (Expandable) -> Unit,
 ) {
@@ -125,6 +132,7 @@ fun Expandable(
         rememberExpandableController(color, shape, contentColor, borderStroke),
         modifier,
         onClick,
+        onLongClick,
         interactionSource,
         content,
     )
@@ -160,6 +168,7 @@ fun Expandable(
     controller: ExpandableController,
     modifier: Modifier = Modifier,
     onClick: ((Expandable) -> Unit)? = null,
+    onLongClick: ((Expandable) -> Unit)? = null,
     interactionSource: MutableInteractionSource? = null,
     content: @Composable (Expandable) -> Unit,
 ) {
@@ -216,7 +225,7 @@ fun Expandable(
     // If this expandable is expanded when it's being directly clicked on, let's ensure that it has
     // the minimum interactive size followed by all M3 components (48.dp).
     val minInteractiveSizeModifier =
-        if (onClick != null) {
+        if (onClick != null || onLongClick != null) {
             Modifier.minimumInteractiveComponentSize()
         } else {
             Modifier
@@ -261,7 +270,7 @@ fun Expandable(
         }
         else -> {
             val clickModifier =
-                if (onClick != null) {
+                if (onClick != null && onLongClick == null) {
                     if (interactionSource != null) {
                         // If the caller provided an interaction source, then that means that they
                         // will draw the click indication themselves.
@@ -272,6 +281,23 @@ fun Expandable(
                         // If no interaction source is provided, we draw the default indication (a
                         // ripple) and make sure it's clipped by the expandable shape.
                         Modifier.clip(shape).clickable { onClick(controller.expandable) }
+                    }
+                } else if (onLongClick != null) {
+                    if (interactionSource != null) {
+                        // If the caller provided an interaction source, then that means that they
+                        // will draw the click indication themselves.
+                        Modifier.combinedClickable(
+                            interactionSource, indication = null,
+                            onLongClick = { onLongClick(controller.expandable) },
+                            onClick = { onClick?.invoke(controller.expandable) }
+                        )
+                    } else {
+                        // If no interaction source is provided, we draw the default indication (a
+                        // ripple) and make sure it's clipped by the expandable shape.
+                        Modifier.clip(shape).combinedClickable(
+                            onLongClick = { onLongClick(controller.expandable) },
+                            onClick = { onClick?.invoke(controller.expandable) }
+                        )
                     }
                 } else {
                     Modifier
@@ -299,7 +325,7 @@ fun Expandable(
 private fun AnimatedContentInOverlay(
     color: Color,
     sizeInOriginalLayout: Size,
-    animatorState: State<LaunchAnimator.State?>,
+    animatorState: State<TransitionAnimator.State?>,
     overlay: ViewGroupOverlay,
     controller: ExpandableControllerImpl,
     content: @Composable (Expandable) -> Unit,
@@ -368,13 +394,10 @@ private fun AnimatedContentInOverlay(
                     context,
                     overlay,
                 )
-            ViewTreeLifecycleOwner.set(
-                overlayViewGroup,
-                ViewTreeLifecycleOwner.get(composeViewRoot),
-            )
-            ViewTreeViewModelStoreOwner.set(
-                overlayViewGroup,
-                ViewTreeViewModelStoreOwner.get(composeViewRoot),
+
+            overlayViewGroup.setViewTreeLifecycleOwner(composeViewRoot.findViewTreeLifecycleOwner())
+            overlayViewGroup.setViewTreeViewModelStoreOwner(
+                composeViewRoot.findViewTreeViewModelStoreOwner()
             )
             ViewTreeSavedStateRegistryOwner.set(
                 overlayViewGroup,
@@ -408,7 +431,7 @@ private fun AnimatedContentInOverlay(
 
 internal fun measureAndLayoutComposeViewInOverlay(
     view: View,
-    state: LaunchAnimator.State,
+    state: TransitionAnimator.State,
 ) {
     val exactWidth = state.width
     val exactHeight = state.height
@@ -450,7 +473,7 @@ private fun Modifier.border(controller: ExpandableControllerImpl): Modifier {
 }
 
 private fun ContentDrawScope.drawBackground(
-    animatorState: LaunchAnimator.State,
+    animatorState: TransitionAnimator.State,
     color: Color,
     border: BorderStroke?,
 ) {

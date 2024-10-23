@@ -18,46 +18,80 @@ import static android.app.StatusBarManager.DISABLE2_QUICK_SETTINGS;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
 import android.content.Context;
+import android.content.ContentResolver;
 import android.content.res.Configuration;
 import android.content.res.Resources;
-import android.graphics.Color;
-import android.graphics.PorterDuff;
-import android.util.AttributeSet;
+import android.database.ContentObserver;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.TransitionDrawable;
+import android.os.Handler;
+import android.os.UserHandle;
 import android.provider.Settings;
+import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
-import com.android.internal.graphics.ColorUtils;
-import com.android.systemui.Dependency;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
+import com.android.systemui.euclid.header.StatusBarHeaderMachine;
 import com.android.systemui.util.LargeScreenUtils;
-import com.android.systemui.tuner.TunerService;
+
+import com.bosphere.fadingedgelayout.FadingEdgeLayout;
+
+import java.lang.Math;
 
 /**
  * View that contains the top-most bits of the QS panel (primarily the status bar with date, time,
  * battery, carrier info and privacy icons) and also contains the {@link QuickQSPanel}.
  */
-public class QuickStatusBarHeader extends FrameLayout implements TunerService.Tunable {
+public class QuickStatusBarHeader extends FrameLayout
+            implements StatusBarHeaderMachine.IStatusBarHeaderMachineObserver {
 
     private boolean mExpanded;
     private boolean mQsDisabled;
 
-    private static final String QS_HEADER_IMAGE =
-            "system:" + Settings.System.QS_HEADER_IMAGE;
-
     protected QuickQSPanel mHeaderQsPanel;
+
+    private boolean mSceneContainerEnabled;
 
     // QS Header
     private ImageView mQsHeaderImageView;
-    private View mQsHeaderLayout;
+    private FadingEdgeLayout mQsHeaderLayout;
     private boolean mHeaderImageEnabled;
-    private int mHeaderImageValue;
+    private StatusBarHeaderMachine mStatusBarHeaderMachine;
+    private Drawable mCurrentBackground;
+    private int mHeaderImageHeight;
+    private final Handler mHandler = new Handler();
+
+    private class OmniSettingsObserver extends ContentObserver {
+        OmniSettingsObserver(Handler handler) {
+            super(handler);
+        }
+
+        void observe() {
+            ContentResolver resolver = getContext().getContentResolver();
+            resolver.registerContentObserver(Settings.System
+                    .getUriFor(Settings.System.STATUS_BAR_CUSTOM_HEADER), false,
+                    this, UserHandle.USER_ALL);
+            resolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.STATUS_BAR_CUSTOM_HEADER_HEIGHT), false,
+                    this, UserHandle.USER_ALL);
+            }
+
+        @Override
+        public void onChange(boolean selfChange) {
+            updateSettings();
+        }
+    }
+    private OmniSettingsObserver mOmniSettingsObserver = new OmniSettingsObserver(mHandler);
 
     public QuickStatusBarHeader(Context context, AttributeSet attrs) {
         super(context, attrs);
+        mStatusBarHeaderMachine = new StatusBarHeaderMachine(context);
+        mOmniSettingsObserver.observe();
     }
 
     @Override
@@ -69,50 +103,33 @@ public class QuickStatusBarHeader extends FrameLayout implements TunerService.Tu
         mQsHeaderImageView = findViewById(R.id.qs_header_image_view);
         mQsHeaderImageView.setClipToOutline(true);
 
-        updateResources();
-
-        Dependency.get(TunerService.class).addTunable(this, QS_HEADER_IMAGE);
+        updateSettings();
     }
 
-    @Override
-    public void onTuningChanged(String key, String newValue) {
-        switch (key) {
-            case QS_HEADER_IMAGE:
-                mHeaderImageValue =
-                       TunerService.parseInteger(newValue, 0);
-                mHeaderImageEnabled = mHeaderImageValue != 0;
-                updateResources();
-                break;
-            default:
-                break;
-        }
-    }
-
-    private void updateQSHeaderImage() {
-        if (!mHeaderImageEnabled) {
-            mQsHeaderLayout.setVisibility(View.GONE);
-            return;
-        }
-        Configuration config = mContext.getResources().getConfiguration();
-        if (config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
-            boolean mIsNightMode = (mContext.getResources().getConfiguration().uiMode &
-                Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-            int fadeFilter = ColorUtils.blendARGB(Color.TRANSPARENT, mIsNightMode ?
-                Color.BLACK : Color.WHITE, 30 / 100f);
-            int resId = getResources().getIdentifier("qs_header_image_" +
-                String.valueOf(mHeaderImageValue), "drawable", "com.android.systemui");
-            mQsHeaderImageView.setImageResource(resId);
-            mQsHeaderImageView.setColorFilter(fadeFilter, PorterDuff.Mode.SRC_ATOP);
-            mQsHeaderLayout.setVisibility(View.VISIBLE);
-        } else {
-            mQsHeaderLayout.setVisibility(View.GONE);
+    void setSceneContainerEnabled(boolean enabled) {
+        mSceneContainerEnabled = enabled;
+        if (mSceneContainerEnabled) {
+            updateResources();
         }
     }
 
     @Override
     protected void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        updateResources();
+        updateSettings();
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        mStatusBarHeaderMachine.addObserver(this);
+        mStatusBarHeaderMachine.updateEnablement();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        mStatusBarHeaderMachine.removeObserver(this);
     }
 
     @Override
@@ -129,6 +146,7 @@ public class QuickStatusBarHeader extends FrameLayout implements TunerService.Tu
         Resources resources = mContext.getResources();
         boolean largeScreenHeaderActive =
                 LargeScreenUtils.shouldUseLargeScreenShadeHeader(resources);
+        int orientation = getResources().getConfiguration().orientation;
 
         ViewGroup.LayoutParams lp = getLayoutParams();
         if (mQsDisabled) {
@@ -139,15 +157,24 @@ public class QuickStatusBarHeader extends FrameLayout implements TunerService.Tu
         setLayoutParams(lp);
 
         MarginLayoutParams qqsLP = (MarginLayoutParams) mHeaderQsPanel.getLayoutParams();
-        if (largeScreenHeaderActive) {
+        if (mSceneContainerEnabled) {
+            qqsLP.topMargin = 0;
+        } else if (largeScreenHeaderActive) {
             qqsLP.topMargin = mContext.getResources()
                     .getDimensionPixelSize(R.dimen.qqs_layout_margin_top);
         } else {
             qqsLP.topMargin = mContext.getResources()
                     .getDimensionPixelSize(R.dimen.large_screen_shade_header_min_height);
         }
+
         mHeaderQsPanel.setLayoutParams(qqsLP);
-        updateQSHeaderImage();
+
+        Configuration config = mContext.getResources().getConfiguration();
+        if (config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
+            mQsHeaderLayout.setVisibility(mHeaderImageEnabled ? View.VISIBLE : View.GONE);
+        } else {
+            mQsHeaderLayout.setVisibility(View.GONE);
+        }
     }
 
     public void setExpanded(boolean expanded, QuickQSPanelController quickQSPanelController) {
@@ -164,10 +191,110 @@ public class QuickStatusBarHeader extends FrameLayout implements TunerService.Tu
         updateResources();
     }
 
+    private void updateSettings() {
+        mHeaderImageEnabled = Settings.System.getIntForUser(getContext().getContentResolver(),
+                Settings.System.STATUS_BAR_CUSTOM_HEADER, 0,
+                UserHandle.USER_CURRENT) == 1;
+        updateHeaderImage();
+        updateResources();
+    }
+
     private void setContentMargins(View view, int marginStart, int marginEnd) {
         MarginLayoutParams lp = (MarginLayoutParams) view.getLayoutParams();
         lp.setMarginStart(marginStart);
         lp.setMarginEnd(marginEnd);
         view.setLayoutParams(lp);
+    }
+
+    @Override
+    public void updateHeader(final Drawable headerImage, final boolean force) {
+        post(new Runnable() {
+            public void run() {
+                doUpdateStatusBarCustomHeader(headerImage, force);
+            }
+        });
+    }
+
+    @Override
+    public void disableHeader() {
+        post(new Runnable() {
+            public void run() {
+                mCurrentBackground = null;
+                mQsHeaderImageView.setVisibility(View.GONE);
+                mHeaderImageEnabled = false;
+                updateResources();
+            }
+        });
+    }
+
+    @Override
+    public void refreshHeader() {
+        post(new Runnable() {
+            public void run() {
+                doUpdateStatusBarCustomHeader(mCurrentBackground, true);
+            }
+        });
+    }
+
+    private void doUpdateStatusBarCustomHeader(final Drawable next, final boolean force) {
+        if (next != null) {
+            mQsHeaderImageView.setVisibility(View.VISIBLE);
+            mCurrentBackground = next;
+            setNotificationPanelHeaderBackground(next, force);
+            mHeaderImageEnabled = true;
+            updateResources();
+        } else {
+            mCurrentBackground = null;
+            mQsHeaderImageView.setVisibility(View.GONE);
+            mHeaderImageEnabled = false;
+            updateResources();
+        }
+    }
+
+    private void setNotificationPanelHeaderBackground(final Drawable dw, final boolean force) {
+        if (mQsHeaderImageView.getDrawable() != null && !force) {
+            Drawable[] arrayDrawable = new Drawable[2];
+            arrayDrawable[0] = mQsHeaderImageView.getDrawable();
+            arrayDrawable[1] = dw;
+
+            TransitionDrawable transitionDrawable = new TransitionDrawable(arrayDrawable);
+            transitionDrawable.setCrossFadeEnabled(true);
+            mQsHeaderImageView.setImageDrawable(transitionDrawable);
+            transitionDrawable.startTransition(1000);
+        } else {
+            mQsHeaderImageView.setImageDrawable(dw);
+        }
+        applyHeaderBackgroundShadow();
+    }
+
+    private void applyHeaderBackgroundShadow() {
+        final int headerShadow = Settings.System.getIntForUser(mContext.getContentResolver(),
+                Settings.System.STATUS_BAR_CUSTOM_HEADER_SHADOW, 0,
+                UserHandle.USER_CURRENT);
+        if (mCurrentBackground != null && mQsHeaderImageView.getDrawable() != null) {
+            mQsHeaderImageView.setImageAlpha(255 - headerShadow);
+        }
+    }
+
+    private void updateHeaderImage() {
+        mHeaderImageEnabled = Settings.System.getIntForUser(getContext().getContentResolver(),
+                Settings.System.STATUS_BAR_CUSTOM_HEADER, 0,
+                UserHandle.USER_CURRENT) == 1;
+        int headerHeight = Settings.System.getIntForUser(getContext().getContentResolver(),
+                Settings.System.STATUS_BAR_CUSTOM_HEADER_HEIGHT, 142,
+                UserHandle.USER_CURRENT);
+        int bottomFadeSize = (int) Math.round(headerHeight * 0.555);
+
+        // Set the image header size
+        mHeaderImageHeight = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 
+            headerHeight, getContext().getResources().getDisplayMetrics());
+        ViewGroup.MarginLayoutParams qsHeaderParams = 
+            (ViewGroup.MarginLayoutParams) mQsHeaderLayout.getLayoutParams();
+        qsHeaderParams.height = mHeaderImageHeight;
+        mQsHeaderLayout.setLayoutParams(qsHeaderParams);
+
+        // Set the image fade size (it has to be a 55,5% related to the main size)
+        mQsHeaderLayout.setFadeSizes(0,0,(int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 
+            bottomFadeSize, getContext().getResources().getDisplayMetrics()), 0);
     }
 }

@@ -19,6 +19,7 @@ package com.android.systemui.statusbar.phone;
 import android.graphics.Color;
 
 import com.android.systemui.dock.DockManager;
+import com.android.systemui.res.R;
 import com.android.systemui.scrim.ScrimView;
 import com.android.systemui.statusbar.notification.stack.StackStateAnimator;
 
@@ -38,8 +39,8 @@ public enum ScrimState {
     OFF {
         @Override
         public void prepare(ScrimState previousState) {
-            mFrontTint = Color.BLACK;
-            mBehindTint = Color.BLACK;
+            mFrontTint = mBackgroundColor;
+            mBehindTint = mBackgroundColor;
 
             mFrontAlpha = 1f;
             mBehindAlpha = 1f;
@@ -73,15 +74,15 @@ public enum ScrimState {
             } else {
                 mAnimationDuration = ScrimController.ANIMATION_DURATION;
             }
-            mFrontTint = Color.BLACK;
-            mBehindTint = Color.BLACK;
-            mNotifTint = mClipQsScrim ? Color.BLACK : Color.TRANSPARENT;
+            mFrontTint = mBackgroundColor;
+            mBehindTint = mBackgroundColor;
+            mNotifTint = mClipQsScrim ? mBackgroundColor : Color.TRANSPARENT;
 
             mFrontAlpha = 0;
-            mBehindAlpha = mClipQsScrim ? 1 : mScrimBehindAlphaKeyguard;
+            mBehindAlpha = mClipQsScrim ? mCustomScrimAlpha : mScrimBehindAlphaKeyguard;
             mNotifAlpha = mClipQsScrim ? mScrimBehindAlphaKeyguard : 0;
             if (mClipQsScrim) {
-                updateScrimColor(mScrimBehind, 1f /* alpha */, Color.TRANSPARENT);
+                updateScrimColor(mScrimBehind, mCustomScrimAlpha, Color.TRANSPARENT);
             }
         }
     },
@@ -92,11 +93,11 @@ public enum ScrimState {
             // notif scrim alpha values are determined by ScrimController#applyState
             // based on the shade expansion
 
-            mFrontTint = Color.BLACK;
+            mFrontTint = mBackgroundColor;
             mFrontAlpha = .66f;
 
-            mBehindTint = Color.BLACK;
-            mBehindAlpha = 1f;
+            mBehindTint = Color.TRANSPARENT;
+            mBehindAlpha = mCustomScrimAlpha;
         }
     },
 
@@ -109,7 +110,7 @@ public enum ScrimState {
             mBehindTint = previousState.mBehindTint;
             mBehindAlpha = previousState.mBehindAlpha;
 
-            mFrontTint = Color.BLACK;
+            mFrontTint = mBackgroundColor;
             mFrontAlpha = .66f;
         }
     },
@@ -126,6 +127,14 @@ public enum ScrimState {
             mNotifTint = Color.TRANSPARENT;
             mFrontAlpha = 0f;
         }
+
+        @Override
+        public void setSurfaceColor(int surfaceColor) {
+            super.setSurfaceColor(surfaceColor);
+            if (!mClipQsScrim) {
+                mBehindTint = mSurfaceColor;
+            }
+        }
     },
 
     /**
@@ -134,28 +143,26 @@ public enum ScrimState {
     BOUNCER_SCRIMMED {
         @Override
         public void prepare(ScrimState previousState) {
-            mBehindAlpha = 0;
-            mFrontAlpha = mDefaultScrimAlpha;
+            // Using previousState values makes SHADE_LOCKED -> BOUNCER_SCRIMMED smoother with no visual breakage
+            mBehindTint = previousState.mBehindTint;
+            mBehindAlpha = previousState.mBehindAlpha;
+            mFrontAlpha = 1f;
+            mNotifTint = previousState.mNotifTint;
+            mNotifAlpha = previousState.mNotifAlpha;
         }
     },
 
     SHADE_LOCKED {
         @Override
         public void prepare(ScrimState previousState) {
-            mBehindAlpha = mClipQsScrim ? 1 : mDefaultScrimAlpha;
-            mNotifAlpha = 1f;
+            mBehindAlpha = mClipQsScrim ? mCustomScrimAlpha : mDefaultScrimAlpha;
+            mNotifAlpha = mCustomScrimAlpha;
             mFrontAlpha = 0f;
-            mBehindTint = Color.TRANSPARENT;
+            mBehindTint = mClipQsScrim ? Color.TRANSPARENT : mBackgroundColor;
 
             if (mClipQsScrim) {
-                updateScrimColor(mScrimBehind, 1f /* alpha */, Color.TRANSPARENT);
+                updateScrimColor(mScrimBehind, mCustomScrimAlpha, Color.TRANSPARENT);
             }
-        }
-        
-        // to make sure correct color is returned before "prepare" is called
-        @Override
-        public int getBehindTint() {
-            return Color.TRANSPARENT;
         }
     },
 
@@ -228,7 +235,7 @@ public enum ScrimState {
         @Override
         public float getMaxLightRevealScrimAlpha() {
             return mWakeLockScreenSensorActive ? ScrimController.WAKE_SENSOR_SCRIM_ALPHA
-                : AOD.getMaxLightRevealScrimAlpha();
+                    : AOD.getMaxLightRevealScrimAlpha();
         }
     },
 
@@ -239,10 +246,9 @@ public enum ScrimState {
         @Override
         public void prepare(ScrimState previousState) {
             // State that UI will sync to.
-            mBehindAlpha = mClipQsScrim ? 1 : 0;
+            mBehindAlpha = mClipQsScrim ? mCustomScrimAlpha : 0;
             mNotifAlpha = 0;
             mFrontAlpha = 0;
-
             mAnimationDuration = mKeyguardFadingAway
                     ? mKeyguardFadingAwayDuration
                     : CentralSurfaces.FADE_KEYGUARD_DURATION;
@@ -256,22 +262,22 @@ public enum ScrimState {
                     && !fromAod;
 
             mFrontTint = Color.TRANSPARENT;
-            mBehindTint = Color.TRANSPARENT;
+            mBehindTint = mBackgroundColor;
             mBlankScreen = false;
 
             if (mDisplayRequiresBlanking && previousState == ScrimState.AOD) {
                 // Set all scrims black, before they fade transparent.
                 updateScrimColor(mScrimInFront, 1f /* alpha */, Color.BLACK /* tint */);
-                updateScrimColor(mScrimBehind, 1f /* alpha */, Color.TRANSPARENT /* tint */);
+                updateScrimColor(mScrimBehind, 1f /* alpha */, Color.BLACK /* tint */);
 
                 // Scrims should still be black at the end of the transition.
                 mFrontTint = Color.BLACK;
-                mBehindTint = Color.TRANSPARENT;
+                mBehindTint = Color.BLACK;
                 mBlankScreen = true;
             }
 
             if (mClipQsScrim) {
-                updateScrimColor(mScrimBehind, 1f /* alpha */, Color.TRANSPARENT);
+                updateScrimColor(mScrimBehind, mCustomScrimAlpha, Color.TRANSPARENT);
             }
         }
     },
@@ -280,18 +286,33 @@ public enum ScrimState {
         @Override
         public void prepare(ScrimState previousState) {
             mFrontTint = Color.TRANSPARENT;
-            mBehindTint = Color.BLACK;
-            mNotifTint = mClipQsScrim ? Color.BLACK : Color.TRANSPARENT;
+            mBehindTint = mBackgroundColor;
+            mNotifTint = mClipQsScrim ? mBackgroundColor : Color.TRANSPARENT;
 
             mFrontAlpha = 0;
-            mBehindAlpha = mClipQsScrim ? 1 : 0;
+            mBehindAlpha = mClipQsScrim ? mCustomScrimAlpha : 0;
             mNotifAlpha = 0;
 
             mBlankScreen = false;
 
             if (mClipQsScrim) {
-                updateScrimColor(mScrimBehind, 1f /* alpha */, Color.BLACK);
+                updateScrimColor(mScrimBehind, 1f /* alpha */, mBackgroundColor);
             }
+        }
+    },
+
+    /**
+     * Device is locked or on dream and user has swiped from the right edge to enter the glanceable
+     * hub UI. From this state, the user can swipe from the left edge to go back to the lock screen
+     * or dream, as well as swipe down for the notifications and up for the bouncer.
+     */
+    GLANCEABLE_HUB {
+        @Override
+        public void prepare(ScrimState previousState) {
+            // No scrims should be visible by default in this state.
+            mBehindAlpha = 0;
+            mNotifAlpha = 0;
+            mFrontAlpha = 0;
         }
     };
 
@@ -300,12 +321,14 @@ public enum ScrimState {
     int mFrontTint = Color.TRANSPARENT;
     int mBehindTint = Color.TRANSPARENT;
     int mNotifTint = Color.TRANSPARENT;
+    int mSurfaceColor = Color.TRANSPARENT;
 
     boolean mAnimateChange = true;
     float mAodFrontScrimAlpha;
     float mFrontAlpha;
     float mBehindAlpha;
     float mNotifAlpha;
+    float mCustomScrimAlpha;
 
     float mScrimBehindAlphaKeyguard;
     float mDefaultScrimAlpha;
@@ -323,9 +346,11 @@ public enum ScrimState {
     boolean mKeyguardFadingAway;
     long mKeyguardFadingAwayDuration;
     boolean mClipQsScrim;
+    int mBackgroundColor;
 
     public void init(ScrimView scrimInFront, ScrimView scrimBehind, DozeParameters dozeParameters,
             DockManager dockManager) {
+        mBackgroundColor = scrimBehind.getContext().getColor(R.color.shade_scrim_background_dark);
         mScrimInFront = scrimInFront;
         mScrimBehind = scrimBehind;
 
@@ -406,6 +431,10 @@ public enum ScrimState {
         mDefaultScrimAlpha = defaultScrimAlpha;
     }
 
+    public void setSurfaceColor(int surfaceColor) {
+        mSurfaceColor = surfaceColor;
+    }
+
     public void setWallpaperSupportsAmbientMode(boolean wallpaperSupportsAmbientMode) {
         mWallpaperSupportsAmbientMode = wallpaperSupportsAmbientMode;
     }
@@ -437,5 +466,9 @@ public enum ScrimState {
 
     public void setClipQsScrim(boolean clipsQsScrim) {
         mClipQsScrim = clipsQsScrim;
+    }
+
+    public void setCustomScrimAlpha(float customScrimAlpha) {
+        mCustomScrimAlpha = customScrimAlpha;
     }
 }

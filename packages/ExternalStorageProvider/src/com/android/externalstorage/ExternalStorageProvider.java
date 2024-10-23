@@ -56,8 +56,7 @@ import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.content.FileSystemProvider;
 import com.android.internal.util.IndentingPrintWriter;
-
-import ink.kaleidoscope.ParallelSpaceManager;
+import com.android.internal.euclid.app.ParallelSpaceManager;
 
 import java.io.File;
 import java.io.FileDescriptor;
@@ -193,7 +192,7 @@ public class ExternalStorageProvider extends FileSystemProvider {
         final List<UserInfo> parallelUsers =
                 ParallelSpaceManager.getInstance().getParallelUsers();
         final int realUserId = UserHandle.myUserId();
-        // Convert to parallel owner so that we are going to have same dick view
+        // Convert to parallel owner so that we are going to have same disk view
         // across all parallel users.
         final int userId = parallelUserIds.contains(realUserId) ?
                 ParallelSpaceManager.getInstance().getParallelOwnerId() : realUserId;
@@ -354,6 +353,12 @@ public class ExternalStorageProvider extends FileSystemProvider {
     @Override
     protected boolean shouldBlockDirectoryFromTree(@NonNull String documentId)
             throws FileNotFoundException {
+        // Remove the restriction if user really want it.
+        if (Settings.Global.getInt(
+                getContext().getContentResolver(), Settings.Global.NO_STORAGE_RESTRICT, 0) == 1) {
+            return false;
+        }
+
         final File dir = getFileForDocId(documentId, false);
         // The file is null or it is not a directory
         if (dir == null || !dir.isDirectory()) {
@@ -794,24 +799,6 @@ public class ExternalStorageProvider extends FileSystemProvider {
                     } catch (FileNotFoundException e) {
                         throw new IllegalStateException(e);
                     }
-                }
-                case android.app.StorageScope.EXTERNAL_STORAGE_PROVIDER_METHOD_CONVERT_DOC_ID_TO_PATH: {
-                    // only PermissionController is expected to call this method
-                    getContext().enforceCallingPermission(
-                            android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS, null);
-
-                    String docId = arg;
-                    String path;
-                    try {
-                        path = getFileForDocId(docId, true).getAbsolutePath();
-                    } catch (Exception e) {
-                        Log.d(TAG, method + " failed", e);
-                        return null;
-                    }
-
-                    final Bundle out = new Bundle();
-                    out.putString(DocumentsContract.EXTRA_RESULT, path);
-                    return out;
                 }
                 default:
                     Log.w(TAG, "unknown method passed to call(): " + method);

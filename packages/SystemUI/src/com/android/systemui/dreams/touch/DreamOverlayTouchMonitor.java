@@ -41,6 +41,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
@@ -195,7 +196,14 @@ public class DreamOverlayTouchMonitor {
          * Called by the monitor when this session is removed.
          */
         private void onRemoved() {
-            mCallbacks.forEach(callback -> callback.onRemoved());
+            mEventListeners.clear();
+            mGestureListeners.clear();
+            final Iterator<Callback> iter = mCallbacks.iterator();
+            while (iter.hasNext()) {
+                final Callback callback = iter.next();
+                callback.onRemoved();
+                iter.remove();
+            }
         }
 
         @Override
@@ -284,6 +292,9 @@ public class DreamOverlayTouchMonitor {
                         new HashMap<>();
 
                 for (DreamTouchHandler handler : mHandlers) {
+                            if (!handler.isEnabled()) {
+                                continue;
+                            }
                     final Rect maxBounds = mDisplayHelper.getMaxBounds(ev.getDisplayId(),
                             TYPE_APPLICATION_OVERLAY);
 

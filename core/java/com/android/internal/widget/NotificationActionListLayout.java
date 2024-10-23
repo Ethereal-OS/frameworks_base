@@ -16,12 +16,16 @@
 
 package com.android.internal.widget;
 
+import static android.app.Notification.CallStyle.DEBUG_NEW_ACTION_LAYOUT;
+import static android.app.Flags.evenlyDividedCallStyleActionLayout;
+
 import android.annotation.DimenRes;
 import android.app.Notification;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.drawable.RippleDrawable;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.RemotableViewMethod;
 import android.view.View;
@@ -41,15 +45,17 @@ import java.util.Comparator;
  */
 @RemoteViews.RemoteView
 public class NotificationActionListLayout extends LinearLayout {
-
     private final int mGravity;
     private int mTotalWidth = 0;
     private int mExtraStartPadding = 0;
     private ArrayList<TextViewInfo> mMeasureOrderTextViews = new ArrayList<>();
     private ArrayList<View> mMeasureOrderOther = new ArrayList<>();
     private boolean mEmphasizedMode;
+    private boolean mEvenlyDividedMode;
     private int mDefaultPaddingBottom;
     private int mDefaultPaddingTop;
+    private int mEmphasizedPaddingTop;
+    private int mEmphasizedPaddingBottom;
     private int mEmphasizedHeight;
     private int mRegularHeight;
     @DimenRes private int mCollapsibleIndentDimen = R.dimen.notification_actions_padding_start;
@@ -120,6 +126,42 @@ public class NotificationActionListLayout extends LinearLayout {
         if (needRebuild) {
             rebuildMeasureOrder(textViews, otherViews);
         }
+    }
+
+    private int measureAndReturnEvenlyDividedWidth(int heightMeasureSpec, int innerWidth) {
+        final int numChildren = getChildCount();
+        int childMarginSum = 0;
+        for (int i = 0; i < numChildren; i++) {
+            final View child = getChildAt(i);
+            if (child.getVisibility() != GONE) {
+                final MarginLayoutParams lp = (MarginLayoutParams) child.getLayoutParams();
+                childMarginSum += lp.leftMargin + lp.rightMargin;
+            }
+        }
+
+        final int innerWidthMinusChildMargins = innerWidth - childMarginSum;
+        final int childWidth = innerWidthMinusChildMargins / mNumNotGoneChildren;
+        final int childWidthMeasureSpec =
+                MeasureSpec.makeMeasureSpec(childWidth, MeasureSpec.EXACTLY);
+
+        if (DEBUG_NEW_ACTION_LAYOUT) {
+            Log.v(TAG, "measuring evenly divided width: "
+                    + "numChildren = " + numChildren + ", "
+                    + "innerWidth = " + innerWidth + "px, "
+                    + "childMarginSum = " + childMarginSum + "px, "
+                    + "innerWidthMinusChildMargins = " + innerWidthMinusChildMargins + "px, "
+                    + "childWidth = " + childWidth + "px, "
+                    + "childWidthMeasureSpec = " + MeasureSpec.toString(childWidthMeasureSpec));
+        }
+
+        for (int i = 0; i < numChildren; i++) {
+            final View child = getChildAt(i);
+            if (child.getVisibility() != GONE) {
+                child.measure(childWidthMeasureSpec, heightMeasureSpec);
+            }
+        }
+
+        return innerWidth;
     }
 
     private int measureAndGetUsedWidth(int widthMeasureSpec, int heightMeasureSpec, int innerWidth,
@@ -206,11 +248,16 @@ public class NotificationActionListLayout extends LinearLayout {
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         countAndRebuildMeasureOrder();
         final int innerWidth = MeasureSpec.getSize(widthMeasureSpec) - mPaddingLeft - mPaddingRight;
-        int usedWidth = measureAndGetUsedWidth(widthMeasureSpec, heightMeasureSpec, innerWidth,
-                false /* collapsePriorityButtons */);
-        if (mNumPriorityChildren != 0 && usedWidth >= innerWidth) {
+        int usedWidth;
+        if (mEvenlyDividedMode) {
+            usedWidth = measureAndReturnEvenlyDividedWidth(heightMeasureSpec, innerWidth);
+        } else {
             usedWidth = measureAndGetUsedWidth(widthMeasureSpec, heightMeasureSpec, innerWidth,
-                    true /* collapsePriorityButtons */);
+                    false /* collapsePriorityButtons */);
+            if (mNumPriorityChildren != 0 && usedWidth >= innerWidth) {
+                usedWidth = measureAndGetUsedWidth(widthMeasureSpec, heightMeasureSpec, innerWidth,
+                        true /* collapsePriorityButtons */);
+            }
         }
 
         mTotalWidth = usedWidth + mPaddingRight + mPaddingLeft + mExtraStartPadding;
@@ -322,13 +369,16 @@ public class NotificationActionListLayout extends LinearLayout {
     }
 
     private void updateHeights() {
-        int paddingTop = getResources().getDimensionPixelSize(
-                com.android.internal.R.dimen.notification_content_margin);
+        int inset = getResources().getDimensionPixelSize(
+                com.android.internal.R.dimen.button_inset_vertical_material);
+        mEmphasizedPaddingTop = getResources().getDimensionPixelSize(
+                com.android.internal.R.dimen.notification_content_margin) - inset;
         // same padding on bottom and at end
-        int paddingBottom = getResources().getDimensionPixelSize(
-                com.android.internal.R.dimen.notification_content_margin_end);
-        mEmphasizedHeight = paddingBottom + paddingTop + getResources().getDimensionPixelSize(
-                com.android.internal.R.dimen.notification_action_emphasized_height);
+        mEmphasizedPaddingBottom = getResources().getDimensionPixelSize(
+                com.android.internal.R.dimen.notification_content_margin_end) - inset;
+        mEmphasizedHeight = mEmphasizedPaddingTop + mEmphasizedPaddingBottom
+                + getResources().getDimensionPixelSize(
+                        com.android.internal.R.dimen.notification_action_emphasized_height);
         mRegularHeight = getResources().getDimensionPixelSize(
                 com.android.internal.R.dimen.notification_action_list_height);
     }
@@ -347,6 +397,38 @@ public class NotificationActionListLayout extends LinearLayout {
     }
 
     /**
+     * Sets whether the available width should be distributed evenly among the action buttons.
+     *
+     * When enabled, the available width (after subtracting this layout's padding and all of the
+     * buttons' margins) is divided by the number of (not-GONE) buttons, and each button is forced
+     * to that exact width, even if it is less <em>or more</em> width than they need.
+     *
+     * When disabled, the available width is allocated as buttons need; if that exceeds the
+     * available width, priority buttons are collapsed to just their icon to save space.
+     *
+     * @param evenlyDividedMode whether to enable evenly divided mode
+     */
+    @RemotableViewMethod
+    public void setEvenlyDividedMode(boolean evenlyDividedMode) {
+        if (evenlyDividedMode && !evenlyDividedCallStyleActionLayout()) {
+            Log.e(TAG, "setEvenlyDividedMode(true) called with new action layout disabled; "
+                    + "leaving evenly divided mode disabled");
+            return;
+        }
+
+        if (evenlyDividedMode == mEvenlyDividedMode) {
+            return;
+        }
+
+        if (DEBUG_NEW_ACTION_LAYOUT) {
+            Log.v(TAG, "evenlyDividedMode changed to " + evenlyDividedMode + "; "
+                    + "requesting layout");
+        }
+        mEvenlyDividedMode = evenlyDividedMode;
+        requestLayout();
+    }
+
+    /**
      * Set whether the list is in a mode where some actions are emphasized. This will trigger an
      * equal measuring where all actions are full height and change a few parameters like
      * the padding.
@@ -356,18 +438,12 @@ public class NotificationActionListLayout extends LinearLayout {
         mEmphasizedMode = emphasizedMode;
         int height;
         if (emphasizedMode) {
-            int paddingTop = getResources().getDimensionPixelSize(
-                    com.android.internal.R.dimen.notification_content_margin);
-            // same padding on bottom and at end
-            int paddingBottom = getResources().getDimensionPixelSize(
-                    com.android.internal.R.dimen.notification_content_margin_end);
-            height = mEmphasizedHeight;
-            int buttonPaddingInternal = getResources().getDimensionPixelSize(
-                    com.android.internal.R.dimen.button_inset_vertical_material);
             setPaddingRelative(getPaddingStart(),
-                    paddingTop - buttonPaddingInternal,
+                    mEmphasizedPaddingTop,
                     getPaddingEnd(),
-                    paddingBottom - buttonPaddingInternal);
+                    mEmphasizedPaddingBottom);
+            setMinimumHeight(mEmphasizedHeight);
+            height = ViewGroup.LayoutParams.WRAP_CONTENT;
         } else {
             setPaddingRelative(getPaddingStart(),
                     mDefaultPaddingTop,
@@ -411,4 +487,5 @@ public class NotificationActionListLayout extends LinearLayout {
         }
     }
 
+    private static final String TAG = "NotificationActionListLayout";
 }

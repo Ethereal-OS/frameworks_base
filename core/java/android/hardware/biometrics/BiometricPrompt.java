@@ -16,12 +16,19 @@
 
 package android.hardware.biometrics;
 
+import static android.Manifest.permission.SET_BIOMETRIC_DIALOG_LOGO;
 import static android.Manifest.permission.TEST_BIOMETRIC;
 import static android.Manifest.permission.USE_BIOMETRIC;
 import static android.Manifest.permission.USE_BIOMETRIC_INTERNAL;
 import static android.hardware.biometrics.BiometricManager.Authenticators;
+import static android.hardware.biometrics.Flags.FLAG_ADD_KEY_AGREEMENT_CRYPTO_OBJECT;
+import static android.hardware.biometrics.Flags.FLAG_CUSTOM_BIOMETRIC_PROMPT;
+import static android.hardware.biometrics.Flags.FLAG_GET_OP_ID_CRYPTO_OBJECT;
+import static android.multiuser.Flags.FLAG_ENABLE_BIOMETRICS_TO_UNLOCK_PRIVATE_SPACE;
 
 import android.annotation.CallbackExecutor;
+import android.annotation.DrawableRes;
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -29,6 +36,7 @@ import android.annotation.RequiresPermission;
 import android.annotation.TestApi;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.graphics.Bitmap;
 import android.hardware.face.FaceManager;
 import android.hardware.fingerprint.FingerprintManager;
 import android.os.Binder;
@@ -53,6 +61,7 @@ import java.util.List;
 import java.util.concurrent.Executor;
 
 import javax.crypto.Cipher;
+import javax.crypto.KeyAgreement;
 import javax.crypto.Mac;
 
 /**
@@ -142,7 +151,9 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
         private PromptInfo mPromptInfo;
         private ButtonInfo mNegativeButtonInfo;
         private Context mContext;
+        private IAuthService mService;
 
+        // LINT.IfChange
         /**
          * Creates a builder for a {@link BiometricPrompt} dialog.
          * @param context The {@link Context} that will be used to build the prompt.
@@ -151,6 +162,64 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
             mPromptInfo = new PromptInfo();
             mContext = context;
         }
+
+        /**
+         * Optional: Sets the drawable resource of the logo that will be shown on the prompt.
+         *
+         * <p> Note that using this method is not recommended in most scenarios because the calling
+         * application's icon will be used by default. Setting the logo is intended for large
+         * bundled applications that perform a wide range of functions and need to show distinct
+         * icons for each function.
+         *
+         * @param logoRes A drawable resource of the logo that will be shown on the prompt.
+         * @return This builder.
+         */
+        @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+        @RequiresPermission(SET_BIOMETRIC_DIALOG_LOGO)
+        @NonNull
+        public BiometricPrompt.Builder setLogoRes(@DrawableRes int logoRes) {
+            mPromptInfo.setLogoRes(logoRes);
+            return this;
+        }
+
+        /**
+         * Optional: Sets the bitmap drawable of the logo that will be shown on the prompt.
+         *
+         * <p> Note that using this method is not recommended in most scenarios because the calling
+         * application's icon will be used by default. Setting the logo is intended for large
+         * bundled applications that perform a wide range of functions and need to show distinct
+         * icons for each function.
+         *
+         * @param logoBitmap A bitmap drawable of the logo that will be shown on the prompt.
+         * @return This builder.
+         */
+        @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+        @RequiresPermission(SET_BIOMETRIC_DIALOG_LOGO)
+        @NonNull
+        public BiometricPrompt.Builder setLogoBitmap(@NonNull Bitmap logoBitmap) {
+            mPromptInfo.setLogoBitmap(logoBitmap);
+            return this;
+        }
+
+        /**
+         * Optional: Sets logo description text that will be shown on the prompt.
+         *
+         * <p> Note that using this method is not recommended in most scenarios because the calling
+         * application's name will be used by default. Setting the logo description is intended for
+         * large bundled applications that perform a wide range of functions and need to show
+         * distinct description for each function.
+         *
+         * @param logoDescription The logo description text that will be shown on the prompt.
+         * @return This builder.
+         */
+        @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+        @RequiresPermission(SET_BIOMETRIC_DIALOG_LOGO)
+        @NonNull
+        public BiometricPrompt.Builder setLogoDescription(@NonNull String logoDescription) {
+            mPromptInfo.setLogoDescription(logoDescription);
+            return this;
+        }
+
 
         /**
          * Required: Sets the title that will be shown on the prompt.
@@ -188,13 +257,62 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
         }
 
         /**
+         * Shows a default subtitle for the prompt if the subtitle would otherwise be
+         * null or empty. Currently for internal use only.
+         * @return This builder.
+         * @hide
+         */
+        @RequiresPermission(USE_BIOMETRIC_INTERNAL)
+        @NonNull
+        public Builder setUseDefaultSubtitle() {
+            mPromptInfo.setUseDefaultSubtitle(true);
+            return this;
+        }
+
+        /**
          * Optional: Sets a description that will be shown on the prompt.
+         *
+         * <p> Note that the description set by {@link Builder#setDescription(CharSequence)} will be
+         * overridden by {@link Builder#setContentView(PromptContentView)}. The view provided to
+         * {@link Builder#setContentView(PromptContentView)} will be used if both methods are
+         * called.
+         *
          * @param description The description to display.
          * @return This builder.
          */
         @NonNull
         public Builder setDescription(@NonNull CharSequence description) {
             mPromptInfo.setDescription(description);
+            return this;
+        }
+
+        /**
+         * Optional: Sets application customized content view that will be shown on the prompt.
+         *
+         * <p> Note that the description set by {@link Builder#setDescription(CharSequence)} will be
+         * overridden by {@link Builder#setContentView(PromptContentView)}. The view provided to
+         * {@link Builder#setContentView(PromptContentView)} will be used if both methods are
+         * called.
+         *
+         * @param view The customized view information.
+         * @return This builder.re
+         */
+        @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+        @NonNull
+        public BiometricPrompt.Builder setContentView(@NonNull PromptContentView view) {
+            mPromptInfo.setContentView(view);
+            return this;
+        }
+
+        /**
+         * @param service
+         * @return This builder.
+         * @hide
+         */
+        @RequiresPermission(TEST_BIOMETRIC)
+        @NonNull
+        public Builder setService(@NonNull IAuthService service) {
+            mService = service;
             return this;
         }
 
@@ -384,6 +502,28 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
         }
 
         /**
+         * Remove {@link Builder#setAllowBackgroundAuthentication(boolean)} once
+         * FLAG_ENABLE_BIOMETRICS_TO_UNLOCK_PRIVATE_SPACE is enabled.
+         *
+         * @param allow If true, allows authentication when the calling package is not in the
+         *              foreground. This is set to false by default.
+         * @param useParentProfileForDeviceCredential If true, uses parent profile for device
+         *                                            credential IME request
+         * @return This builder
+         * @hide
+         */
+        @FlaggedApi(FLAG_ENABLE_BIOMETRICS_TO_UNLOCK_PRIVATE_SPACE)
+        @TestApi
+        @NonNull
+        @RequiresPermission(anyOf = {TEST_BIOMETRIC, USE_BIOMETRIC_INTERNAL})
+        public Builder setAllowBackgroundAuthentication(boolean allow,
+                boolean useParentProfileForDeviceCredential) {
+            mPromptInfo.setAllowBackgroundAuthentication(allow);
+            mPromptInfo.setUseParentProfileForDeviceCredential(useParentProfileForDeviceCredential);
+            return this;
+        }
+
+        /**
          * If set check the Device Policy Manager for disabled biometrics.
          *
          * @param checkDevicePolicyManager
@@ -391,6 +531,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
          * @hide
          */
         @NonNull
+        @RequiresPermission(anyOf = {USE_BIOMETRIC_INTERNAL})
         public Builder setDisallowBiometricsIfPolicyExists(boolean checkDevicePolicyManager) {
             mPromptInfo.setDisallowBiometricsIfPolicyExists(checkDevicePolicyManager);
             return this;
@@ -403,6 +544,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
          * @hide
          */
         @NonNull
+        @RequiresPermission(anyOf = {USE_BIOMETRIC_INTERNAL})
         public Builder setReceiveSystemEvents(boolean set) {
             mPromptInfo.setReceiveSystemEvents(set);
             return this;
@@ -416,6 +558,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
          * @hide
          */
         @NonNull
+        @RequiresPermission(anyOf = {TEST_BIOMETRIC, USE_BIOMETRIC_INTERNAL})
         public Builder setIgnoreEnrollmentState(boolean ignoreEnrollmentState) {
             mPromptInfo.setIgnoreEnrollmentState(ignoreEnrollmentState);
             return this;
@@ -428,8 +571,23 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
          * @hide
          */
         @NonNull
+        @RequiresPermission(anyOf = {TEST_BIOMETRIC, USE_BIOMETRIC_INTERNAL})
         public Builder setIsForLegacyFingerprintManager(int sensorId) {
             mPromptInfo.setIsForLegacyFingerprintManager(sensorId);
+            return this;
+        }
+        // LINT.ThenChange(frameworks/base/core/java/android/hardware/biometrics/PromptInfo.java)
+
+        /**
+         * Set if emergency call button should show, for example if biometrics are
+         * required to access the dialer app
+         * @param showEmergencyCallButton if true, shows emergency call button
+         * @return This builder.
+         * @hide
+         */
+        @NonNull
+        public Builder setShowEmergencyCallButton(boolean showEmergencyCallButton) {
+            mPromptInfo.setShowEmergencyCallButton(showEmergencyCallButton);
             return this;
         }
 
@@ -459,7 +617,9 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
                 throw new IllegalArgumentException("Can't have both negative button behavior"
                         + " and device credential enabled");
             }
-            return new BiometricPrompt(mContext, mPromptInfo, mNegativeButtonInfo);
+            mService = (mService == null) ? IAuthService.Stub.asInterface(
+                    ServiceManager.getService(Context.AUTH_SERVICE)) : mService;
+            return new BiometricPrompt(mContext, mPromptInfo, mNegativeButtonInfo, mService);
         }
     }
 
@@ -472,6 +632,10 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
 
         @Override
         public void onCancel() {
+            if (!mIsPromptShowing) {
+                Log.w(TAG, "BP is not showing");
+                return;
+            }
             Log.d(TAG, "Cancel BP authentication requested for: " + mAuthRequestId);
             cancelAuthentication(mAuthRequestId);
         }
@@ -496,6 +660,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
                 final AuthenticationResult result =
                         new AuthenticationResult(mCryptoObject, authenticationType);
                 mAuthenticationCallback.onAuthenticationSucceeded(result);
+                mIsPromptShowing = false;
             });
         }
 
@@ -550,6 +715,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
             final String stringToSend = errorMessage;
             mExecutor.execute(() -> {
                 mAuthenticationCallback.onAuthenticationError(error, stringToSend);
+                mIsPromptShowing = false;
             });
         }
 
@@ -566,8 +732,10 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
             if (reason == DISMISSED_REASON_NEGATIVE) {
                 mNegativeButtonInfo.executor.execute(() -> {
                     mNegativeButtonInfo.listener.onClick(null, DialogInterface.BUTTON_NEGATIVE);
+                    mIsPromptShowing = false;
                 });
             } else {
+                mIsPromptShowing = false;
                 Log.e(TAG, "Unknown reason: " + reason);
             }
         }
@@ -580,12 +748,56 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
         }
     };
 
-    private BiometricPrompt(Context context, PromptInfo promptInfo, ButtonInfo negativeButtonInfo) {
+    private boolean mIsPromptShowing;
+
+    private BiometricPrompt(Context context, PromptInfo promptInfo, ButtonInfo negativeButtonInfo,
+            IAuthService service) {
         mContext = context;
         mPromptInfo = promptInfo;
         mNegativeButtonInfo = negativeButtonInfo;
-        mService = IAuthService.Stub.asInterface(
-                ServiceManager.getService(Context.AUTH_SERVICE));
+        mService = service;
+        mIsPromptShowing = false;
+    }
+
+    /**
+     * Gets the drawable resource of the logo for the prompt, as set by
+     * {@link Builder#setLogoRes(int)}. Currently for system applications use only.
+     *
+     * @return The drawable resource of the logo, or -1 if the prompt has no logo resource set.
+     */
+    @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+    @RequiresPermission(SET_BIOMETRIC_DIALOG_LOGO)
+    @DrawableRes
+    public int getLogoRes() {
+        return mPromptInfo.getLogoRes();
+    }
+
+    /**
+     * Gets the logo bitmap for the prompt, as set by {@link Builder#setLogoBitmap(Bitmap)}.
+     * Currently for system applications use only.
+     *
+     * @return The logo bitmap of the prompt, or null if the prompt has no logo bitmap set.
+     */
+    @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+    @RequiresPermission(SET_BIOMETRIC_DIALOG_LOGO)
+    @Nullable
+    public Bitmap getLogoBitmap() {
+        return mPromptInfo.getLogoBitmap();
+    }
+
+    /**
+     * Gets the logo description for the prompt, as set by
+     * {@link Builder#setDescription(CharSequence)}.
+     * Currently for system applications use only.
+     *
+     * @return The logo description of the prompt, or null if the prompt has no logo description
+     * set.
+     */
+    @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+    @RequiresPermission(SET_BIOMETRIC_DIALOG_LOGO)
+    @Nullable
+    public String getLogoDescription() {
+        return mPromptInfo.getLogoDescription();
     }
 
     /**
@@ -617,12 +829,34 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
     }
 
     /**
+     * Whether to use a default subtitle. For internal use only.
+     * @return See {@link Builder#setUseDefaultSubtitle()}.
+     * @hide
+     */
+    @RequiresPermission(USE_BIOMETRIC_INTERNAL)
+    public boolean shouldUseDefaultSubtitle() {
+        return mPromptInfo.isUseDefaultSubtitle();
+    }
+
+    /**
      * Gets the description for the prompt, as set by {@link Builder#setDescription(CharSequence)}.
      * @return The description for the prompt, or null if the prompt has no description.
      */
     @Nullable
     public CharSequence getDescription() {
         return mPromptInfo.getDescription();
+    }
+
+    /**
+     * Gets the content view for the prompt, as set by
+     * {@link Builder#setContentView(PromptContentView)}.
+     *
+     * @return The content view for the prompt, or null if the prompt has no content view.
+     */
+    @FlaggedApi(FLAG_CUSTOM_BIOMETRIC_PROMPT)
+    @Nullable
+    public PromptContentView getContentView() {
+        return mPromptInfo.getContentView();
     }
 
     /**
@@ -680,7 +914,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
      * A wrapper class for the cryptographic operations supported by BiometricPrompt.
      *
      * <p>Currently the framework supports {@link Signature}, {@link Cipher}, {@link Mac},
-     * {@link IdentityCredential}, and {@link PresentationSession}.
+     * {@link IdentityCredential}, {@link PresentationSession} and {@link KeyAgreement}.
      *
      * <p>Cryptographic operations in Android can be split into two categories: auth-per-use and
      * time-based. This is specified during key creation via the timeout parameter of the
@@ -725,11 +959,16 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
             super(session);
         }
 
+        @FlaggedApi(FLAG_ADD_KEY_AGREEMENT_CRYPTO_OBJECT)
+        public CryptoObject(@NonNull KeyAgreement keyAgreement) {
+            super(keyAgreement);
+        }
+
         /**
          * Get {@link Signature} object.
          * @return {@link Signature} object or null if this doesn't contain one.
          */
-        public Signature getSignature() {
+        public @Nullable Signature getSignature() {
             return super.getSignature();
         }
 
@@ -737,7 +976,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
          * Get {@link Cipher} object.
          * @return {@link Cipher} object or null if this doesn't contain one.
          */
-        public Cipher getCipher() {
+        public @Nullable Cipher getCipher() {
             return super.getCipher();
         }
 
@@ -745,7 +984,7 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
          * Get {@link Mac} object.
          * @return {@link Mac} object or null if this doesn't contain one.
          */
-        public Mac getMac() {
+        public @Nullable Mac getMac() {
             return super.getMac();
         }
 
@@ -765,6 +1004,23 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
          */
         public @Nullable PresentationSession getPresentationSession() {
             return super.getPresentationSession();
+        }
+
+        /**
+         * Get {@link KeyAgreement} object.
+         * @return {@link KeyAgreement} object or null if this doesn't contain one.
+         */
+        @FlaggedApi(FLAG_ADD_KEY_AGREEMENT_CRYPTO_OBJECT)
+        public @Nullable KeyAgreement getKeyAgreement() {
+            return super.getKeyAgreement();
+        }
+
+        /**
+         * Get the operation handle associated with this object or 0 if none.
+         */
+        @FlaggedApi(FLAG_GET_OP_ID_CRYPTO_OBJECT)
+        public long getOperationHandle() {
+            return super.getOpId();
         }
     }
 
@@ -1095,7 +1351,6 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
             @NonNull @CallbackExecutor Executor executor,
             @NonNull AuthenticationCallback callback,
             int userId) {
-
         // Ensure we don't return the wrong crypto object as an auth result.
         if (mCryptoObject != null && mCryptoObject.getOpId() != operationId) {
             Log.w(TAG, "CryptoObject operation ID does not match argument; setting field to null");
@@ -1110,6 +1365,14 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
 
             mExecutor = executor;
             mAuthenticationCallback = callback;
+            if (mIsPromptShowing) {
+                final String stringToSend = mContext.getString(R.string.biometric_error_canceled);
+                mExecutor.execute(() -> {
+                    mAuthenticationCallback.onAuthenticationError(BIOMETRIC_ERROR_CANCELED,
+                            stringToSend);
+                });
+                return -1;
+            }
 
             final PromptInfo promptInfo;
             if (operationId != 0L) {
@@ -1131,6 +1394,8 @@ public class BiometricPrompt implements BiometricAuthenticator, BiometricConstan
             final long authId = mService.authenticate(mToken, operationId, userId,
                     mBiometricServiceReceiver, mContext.getPackageName(), promptInfo);
             cancel.setOnCancelListener(new OnAuthenticationCancelListener(authId));
+            mIsPromptShowing = true;
+
             return authId;
         } catch (RemoteException e) {
             Log.e(TAG, "Remote exception while authenticating", e);

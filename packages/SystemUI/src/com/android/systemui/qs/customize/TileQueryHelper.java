@@ -23,7 +23,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
-import android.os.Build;
 import android.provider.Settings;
 import android.service.quicksettings.Tile;
 import android.service.quicksettings.TileService;
@@ -33,7 +32,6 @@ import android.widget.Button;
 
 import androidx.annotation.Nullable;
 
-import com.android.systemui.R;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.qs.QSTile;
@@ -42,8 +40,8 @@ import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.dagger.QSScope;
 import com.android.systemui.qs.external.CustomTile;
 import com.android.systemui.qs.tileimpl.QSTileImpl.DrawableIcon;
+import com.android.systemui.res.R;
 import com.android.systemui.settings.UserTracker;
-import com.android.systemui.util.leak.GarbageMonitor;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -65,6 +63,7 @@ public class TileQueryHelper {
     private final Context mContext;
     private final UserTracker mUserTracker;
     private TileStateListener mListener;
+    private String allQsTiles;
 
     private boolean mFinished;
 
@@ -89,6 +88,7 @@ public class TileQueryHelper {
         mTiles.clear();
         mSpecs.clear();
         mFinished = false;
+        allQsTiles = mContext.getString(R.string.quick_settings_tiles_stock) + "," + mContext.getString(R.string.quick_settings_extra_tiles);
         // Enqueue jobs to fetch every system tile and then ever package tile.
         addCurrentAndStockTiles(host);
     }
@@ -98,7 +98,6 @@ public class TileQueryHelper {
     }
 
     private void addCurrentAndStockTiles(QSHost host) {
-        String stock = mContext.getString(R.string.quick_settings_tiles_stock);
         String current = Settings.Secure.getString(mContext.getContentResolver(),
                 Settings.Secure.QS_TILES);
         final ArrayList<String> possibleTiles = new ArrayList<>();
@@ -108,14 +107,11 @@ public class TileQueryHelper {
         } else {
             current = "";
         }
-        String[] stockSplit =  stock.split(",");
+        String[] stockSplit =  allQsTiles.split(",");
         for (String spec : stockSplit) {
             if (!current.contains(spec)) {
                 possibleTiles.add(spec);
             }
-        }
-        if (Build.IS_ENG && !current.contains(GarbageMonitor.MemoryTile.TILE_SPEC)) {
-            possibleTiles.add(GarbageMonitor.MemoryTile.TILE_SPEC);
         }
 
         final ArrayList<QSTile> tilesToAdd = new ArrayList<>();
@@ -128,11 +124,9 @@ public class TileQueryHelper {
             if (tile == null) {
                 continue;
             } else if (!tile.isAvailable()) {
-                tile.setTileSpec(spec);
                 tile.destroy();
                 continue;
             }
-            tile.setTileSpec(spec);
             tilesToAdd.add(tile);
         }
 
@@ -211,14 +205,13 @@ public class TileQueryHelper {
             PackageManager pm = mContext.getPackageManager();
             List<ResolveInfo> services = pm.queryIntentServicesAsUser(
                     new Intent(TileService.ACTION_QS_TILE), 0, mUserTracker.getUserId());
-            String stockTiles = mContext.getString(R.string.quick_settings_tiles_stock);
 
             for (ResolveInfo info : services) {
                 String packageName = info.serviceInfo.packageName;
                 ComponentName componentName = new ComponentName(packageName, info.serviceInfo.name);
 
                 // Don't include apps that are a part of the default tile set.
-                if (stockTiles.contains(componentName.flattenToString())) {
+                if (allQsTiles.contains(componentName.flattenToString())) {
                     continue;
                 }
 
@@ -264,7 +257,11 @@ public class TileQueryHelper {
     private State getState(Collection<QSTile> tiles, String spec) {
         for (QSTile tile : tiles) {
             if (spec.equals(tile.getTileSpec())) {
-                return tile.getState().copy();
+                if (tile.isTileReady()) {
+                    return tile.getState().copy();
+                } else {
+                    return null;
+                }
             }
         }
         return null;

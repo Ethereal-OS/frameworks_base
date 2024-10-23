@@ -21,15 +21,17 @@ import android.graphics.Rect
 import android.os.LocaleList
 import android.view.View.LAYOUT_DIRECTION_RTL
 import com.android.systemui.dagger.SysUISingleton
+import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.statusbar.policy.ConfigurationController
-
-import java.util.ArrayList
+import com.android.systemui.statusbar.policy.ConfigurationController.ConfigurationListener
 import javax.inject.Inject
 
 @SysUISingleton
-class ConfigurationControllerImpl @Inject constructor(context: Context) : ConfigurationController {
+class ConfigurationControllerImpl @Inject constructor(
+        @Application context: Context,
+        ) : ConfigurationController {
 
-    private val listeners: MutableList<ConfigurationController.ConfigurationListener> = ArrayList()
+    private val listeners: MutableList<ConfigurationListener> = ArrayList()
     private val lastConfig = Configuration()
     private var density: Int = 0
     private var smallestScreenWidth: Int = 0
@@ -40,6 +42,7 @@ class ConfigurationControllerImpl @Inject constructor(context: Context) : Config
     private var localeList: LocaleList? = null
     private val context: Context
     private var layoutDirection: Int
+    private var orientation = Configuration.ORIENTATION_UNDEFINED
 
     init {
         val currentConfig = context.resources.configuration
@@ -134,19 +137,36 @@ class ConfigurationControllerImpl @Inject constructor(context: Context) : Config
                 it.onThemeChanged()
             }
         }
+
+        val newOrientation = newConfig.orientation
+        if (orientation != newOrientation) {
+            orientation = newOrientation
+            listeners.filterForEach({ this.listeners.contains(it) }) {
+                it.onOrientationChanged(orientation)
+            }
+        }
     }
 
-    override fun addCallback(listener: ConfigurationController.ConfigurationListener) {
+    override fun addCallback(listener: ConfigurationListener) {
         listeners.add(listener)
         listener.onDensityOrFontScaleChanged()
     }
 
-    override fun removeCallback(listener: ConfigurationController.ConfigurationListener) {
+    override fun removeCallback(listener: ConfigurationListener) {
         listeners.remove(listener)
     }
 
     override fun isLayoutRtl(): Boolean {
         return layoutDirection == LAYOUT_DIRECTION_RTL
+    }
+
+    override fun getNightModeName(): String {
+        return when (uiMode and Configuration.UI_MODE_NIGHT_MASK) {
+            Configuration.UI_MODE_NIGHT_YES -> "night"
+            Configuration.UI_MODE_NIGHT_NO -> "day"
+            Configuration.UI_MODE_NIGHT_UNDEFINED -> "undefined"
+            else -> "err"
+        }
     }
 }
 

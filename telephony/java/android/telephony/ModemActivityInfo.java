@@ -37,6 +37,7 @@ import java.util.Objects;
  * Contains information about the modem's activity. May be useful for power stats reporting.
  * @hide
  */
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
 @SystemApi
 public final class ModemActivityInfo implements Parcelable {
     private static final int TX_POWER_LEVELS = 5;
@@ -560,21 +561,21 @@ public final class ModemActivityInfo implements Parcelable {
             }
             return isTxPowerValid
                     && isRxPowerValid
-                    && ((getIdleTimeMillis() >= 0) && (getSleepTimeMillis() >= 0) && !isEmpty());
+                    && ((getIdleTimeMillis() >= 0) && (getSleepTimeMillis() >= 0));
         }
     }
 
     /** @hide */
     @TestApi
     public boolean isEmpty() {
-        boolean isTxPowerEmpty = false;
-        boolean isRxPowerEmpty = false;
+        boolean isTxPowerEmpty = true;
+        boolean isRxPowerEmpty = true;
         for (int i = 0; i < getSpecificInfoLength(); i++) {
-            if (mActivityStatsTechSpecificInfo[i].isTxPowerEmpty()) {
-                isTxPowerEmpty = true;
+            if (!mActivityStatsTechSpecificInfo[i].isTxPowerEmpty()) {
+                isTxPowerEmpty = false;
             }
-            if (mActivityStatsTechSpecificInfo[i].isRxPowerEmpty()) {
-                isRxPowerEmpty = true;
+            if (!mActivityStatsTechSpecificInfo[i].isRxPowerEmpty()) {
+                isRxPowerEmpty = false;
             }
         }
         return isTxPowerEmpty

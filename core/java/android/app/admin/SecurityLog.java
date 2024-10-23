@@ -16,7 +16,10 @@
 
 package android.app.admin;
 
+import static android.app.admin.flags.Flags.FLAG_BACKUP_SERVICE_SECURITY_LOG_EVENT_ENABLED;
+
 import android.Manifest;
+import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -96,6 +99,10 @@ public class SecurityLog {
             TAG_WIFI_DISCONNECTION,
             TAG_BLUETOOTH_CONNECTION,
             TAG_BLUETOOTH_DISCONNECTION,
+            TAG_PACKAGE_INSTALLED,
+            TAG_PACKAGE_UPDATED,
+            TAG_PACKAGE_UNINSTALLED,
+            TAG_BACKUP_SERVICE_TOGGLED,
     })
     public @interface SecurityLogTag {}
 
@@ -518,7 +525,7 @@ public class SecurityLog {
 
     /**
      * Indicates that an event occurred as the device attempted to connect to
-     * a WiFi network. The log entry contains the following information about the
+     * a managed WiFi network. The log entry contains the following information about the
      * event, encapsulated in an {@link Object} array and accessible via
      * {@link SecurityEvent#getData()}:
      * <li> [0] Last 2 octets of the network BSSID ({@code String}, in the form "xx:xx:xx:xx:AA:BB")
@@ -530,7 +537,7 @@ public class SecurityLog {
     public static final int TAG_WIFI_CONNECTION = SecurityLogTags.SECURITY_WIFI_CONNECTION;
 
     /**
-     * Indicates that the device disconnects from a connected WiFi network.
+     * Indicates that the device disconnects from a managed WiFi network.
      * The log entry contains the following information about the
      * event, encapsulated in an {@link Object} array and accessible via
      * {@link SecurityEvent#getData()}:
@@ -562,6 +569,51 @@ public class SecurityLog {
     public static final int TAG_BLUETOOTH_DISCONNECTION =
             SecurityLogTags.SECURITY_BLUETOOTH_DISCONNECTION;
 
+    /**
+     * Indicates that a package is installed.
+     * The log entry contains the following information about the
+     * event, encapsulated in an {@link Object} array and accessible via
+     * {@link SecurityEvent#getData()}:
+     * <li> [0] Name of the package being installed ({@code String})
+     * <li> [1] Package version code ({@code Long})
+     * <li> [2] UserId of the user that installed this package ({@code Integer})
+     */
+    public static final int TAG_PACKAGE_INSTALLED = SecurityLogTags.SECURITY_PACKAGE_INSTALLED;
+
+    /**
+     * Indicates that a package is updated.
+     * The log entry contains the following information about the
+     * event, encapsulated in an {@link Object} array and accessible via
+     * {@link SecurityEvent#getData()}:
+     * <li> [0] Name of the package being updated ({@code String})
+     * <li> [1] Package version code ({@code Long})
+     * <li> [2] UserId of the user that updated this package ({@code Integer})
+     */
+    public static final int TAG_PACKAGE_UPDATED = SecurityLogTags.SECURITY_PACKAGE_UPDATED;
+
+    /**
+     * Indicates that a package is uninstalled.
+     * The log entry contains the following information about the
+     * event, encapsulated in an {@link Object} array and accessible via
+     * {@link SecurityEvent#getData()}:
+     * <li> [0] Name of the package being uninstalled ({@code String})
+     * <li> [1] Package version code ({@code Long})
+     * <li> [2] UserId of the user that uninstalled this package ({@code Integer})
+     */
+    public static final int TAG_PACKAGE_UNINSTALLED = SecurityLogTags.SECURITY_PACKAGE_UNINSTALLED;
+
+    /**
+     * Indicates that an admin has enabled or disabled backup service. The log entry contains the
+     * following information about the event encapsulated in an {@link Object} array, accessible
+     * via {@link SecurityEvent#getData()}:
+     * <li> [0] admin package name ({@code String})
+     * <li> [1] admin user ID ({@code Integer})
+     * <li> [2] backup service state ({@code Integer}, 1 for enabled, 0 for disabled)
+     * @see DevicePolicyManager#setBackupServiceEnabled(ComponentName, boolean)
+     */
+    @FlaggedApi(FLAG_BACKUP_SERVICE_SECURITY_LOG_EVENT_ENABLED)
+    public static final int TAG_BACKUP_SERVICE_TOGGLED =
+            SecurityLogTags.SECURITY_BACKUP_SERVICE_TOGGLED;
     /**
      * Event severity level indicating that the event corresponds to normal workflow.
      */
@@ -772,6 +824,9 @@ public class SecurityLog {
                     break;
                 case SecurityLog.TAG_CERT_AUTHORITY_INSTALLED:
                 case SecurityLog.TAG_CERT_AUTHORITY_REMOVED:
+                case SecurityLog.TAG_PACKAGE_INSTALLED:
+                case SecurityLog.TAG_PACKAGE_UPDATED:
+                case SecurityLog.TAG_PACKAGE_UNINSTALLED:
                     try {
                         userId = getIntegerData(2);
                     } catch (Exception e) {

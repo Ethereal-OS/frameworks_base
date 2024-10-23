@@ -15,6 +15,9 @@
  */
 package android.media;
 
+import static android.media.audio.Flags.FLAG_SCO_MANAGED_BY_AUDIO;
+
+import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
 import android.annotation.SystemApi;
 import android.bluetooth.BluetoothProfile;
@@ -112,8 +115,10 @@ public final class BluetoothProfileConnectionInfo implements Parcelable {
     }
 
     /**
-     * constructor for le audio info
-     *
+     * Factory method for <code>BluetoothProfileConnectionInfo</code> for an LE device
+     * Use this method for an input device connection,
+     * or for an output device connection if the connection volume is unknown,
+     * otherwise use {@link #createLeAudioOutputInfo(boolean, int)}.
      * @param suppressNoisyIntent if true the {@link AudioManager.ACTION_AUDIO_BECOMING_NOISY}
      * intent will not be sent.
      *
@@ -126,8 +131,9 @@ public final class BluetoothProfileConnectionInfo implements Parcelable {
     }
 
     /**
-     * @hide
      * Factory method for <code>BluetoothProfileConnectionInfo</code> for an LE output device
+     * Use this method for an output device connection with a volume to be used at connection
+     * time.
      * @param suppressNoisyIntent if true the {@link AudioManager.ACTION_AUDIO_BECOMING_NOISY}
      *     intent will not be sent.
      * @param volume the volume index of the device, -1 if unknown or to be ignored
@@ -170,5 +176,14 @@ public final class BluetoothProfileConnectionInfo implements Parcelable {
      */
     public boolean isLeOutput() {
         return mIsLeOutput;
+    }
+
+    /**
+     * Factory method for <code>BluetoothProfileConnectionInfo</code> for an HFP device.
+     */
+    @FlaggedApi(FLAG_SCO_MANAGED_BY_AUDIO)
+    public static @NonNull BluetoothProfileConnectionInfo createHfpInfo() {
+        return new BluetoothProfileConnectionInfo(BluetoothProfile.HEADSET, false,
+                -1, false);
     }
 }

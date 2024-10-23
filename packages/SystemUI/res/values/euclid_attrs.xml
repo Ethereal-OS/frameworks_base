@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Copyright (C) 2024 euclidOS
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+
+     <!-- Screen Record -->
+     <dimen name="screenrecord_dot_size">48dp</dimen>
+
+</resources>

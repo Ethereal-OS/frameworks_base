@@ -26,8 +26,6 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.ComponentName;
 import android.content.Intent;
-import android.content.res.Resources;
-import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.Icon;
 import android.media.MediaRecorder;
@@ -35,9 +33,12 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.Process;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.os.UserHandle;
 import android.provider.Settings;
+import android.service.notification.StatusBarNotification;
 import android.util.Log;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
@@ -49,13 +50,13 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.Toast;
 
+import com.android.systemui.Prefs;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.UiEventLogger;
-import com.android.systemui.Prefs;
-import com.android.systemui.R;
 import com.android.systemui.dagger.qualifiers.LongRunning;
 import com.android.systemui.dagger.qualifiers.Main;
-import com.android.systemui.media.MediaProjectionCaptureTarget;
+import com.android.systemui.mediaprojection.MediaProjectionCaptureTarget;
+import com.android.systemui.res.R;
 import com.android.systemui.screenrecord.ScreenMediaRecorder.ScreenMediaRecorderListener;
 import com.android.systemui.settings.UserContextProvider;
 import com.android.systemui.statusbar.phone.KeyguardDismissUtil;
@@ -73,13 +74,15 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
     public static final int REQUEST_CODE = 2;
 
     private static final int USER_ID_NOT_SPECIFIED = -1;
-    private static final int NOTIFICATION_RECORDING_ID = 4274;
-    private static final int NOTIFICATION_PROCESSING_ID = 4275;
-    private static final int NOTIFICATION_VIEW_ID = 4273;
+    private static final int NOTIF_BASE_ID = 4273;
+    private static final int PROGRESS_NOTIF_ID = 4274;
+    private static final int ERROR_NOTIF_ID = 4275;
     private static final String TAG = "RecordingService";
     private static final String CHANNEL_ID = "screen_record";
+    private static final String GROUP_KEY = "screen_record_saved";
     private static final String EXTRA_RESULT_CODE = "extra_resultCode";
     private static final String EXTRA_PATH = "extra_path";
+    private static final String EXTRA_ID = "extra_id";
     private static final String EXTRA_AUDIO_SOURCE = "extra_useAudio";
     private static final String EXTRA_SHOW_TAPS = "extra_showTaps";
     private static final String EXTRA_CAPTURE_TARGET = "extra_captureTarget";
@@ -88,8 +91,8 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
     private static final String EXTRA_LONGER_DURATION = "extra_longerDuration";
     private final static String EXTRA_HEVC = "extra_HEVC";
 
-    private static final String ACTION_START = "com.android.systemui.screenrecord.START";
-    private static final String ACTION_STOP = "com.android.systemui.screenrecord.STOP";
+    protected static final String ACTION_START = "com.android.systemui.screenrecord.START";
+    protected static final String ACTION_STOP = "com.android.systemui.screenrecord.STOP";
     private static final String ACTION_STOP_NOTIF =
             "com.android.systemui.screenrecord.STOP_FROM_NOTIF";
     private static final String ACTION_SHOW_DIALOG = "com.android.systemui.screenrecord.SHOW_DIALOG";
@@ -110,6 +113,8 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
     private final UiEventLogger mUiEventLogger;
     private final NotificationManager mNotificationManager;
     private final UserContextProvider mUserContextTracker;
+    private int mNotificationId = NOTIF_BASE_ID;
+    private RecordingServiceStrings mStrings;
 
     private boolean mLowQuality;
     private boolean mLongerDuration;
@@ -165,20 +170,31 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 .putExtra(EXTRA_HEVC, hevc);
     }
 
-    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) {
             return Service.START_NOT_STICKY;
         }
         String action = intent.getAction();
-        Log.d(TAG, "onStartCommand " + action);
+        Log.d(getTag(), "onStartCommand " + action);
+        NotificationChannel channel = new NotificationChannel(
+                getChannelId(),
+                getString(R.string.screenrecord_title),
+                NotificationManager.IMPORTANCE_DEFAULT);
+        channel.setDescription(getString(R.string.screenrecord_channel_description));
+        channel.enableVibration(true);
+        mNotificationManager.createNotificationChannel(channel);
 
+        int currentUid = Process.myUid();
         int currentUserId = mUserContextTracker.getUserContext().getUserId();
         UserHandle currentUser = new UserHandle(currentUserId);
         switch (action) {
             case ACTION_START:
+                // Get a unique ID for this recording's notifications
+                mNotificationId = NOTIF_BASE_ID + (int) SystemClock.uptimeMillis();
                 mAudioSource = ScreenRecordingAudioSource
                         .values()[intent.getIntExtra(EXTRA_AUDIO_SOURCE, 0)];
-                Log.d(TAG, "recording with audio source" + mAudioSource);
+                Log.d(getTag(), "recording with audio source " + mAudioSource);
                 mShowTaps = intent.getBooleanExtra(EXTRA_SHOW_TAPS, false);
                 mShowStopDot = intent.getBooleanExtra(EXTRA_SHOW_STOP_DOT, false);
                 mLowQuality = intent.getBooleanExtra(EXTRA_LOW_QUALITY, false);
@@ -199,7 +215,7 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 mRecorder = new ScreenMediaRecorder(
                         mUserContextTracker.getUserContext(),
                         mMainHandler,
-                        currentUserId,
+                        currentUid,
                         mAudioSource,
                         captureTarget,
                         this
@@ -215,7 +231,7 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 } else {
                     updateState(false);
                     createErrorNotification();
-                    stopForeground(true);
+                    stopForeground(STOP_FOREGROUND_DETACH);
                     stopSelf();
                     return Service.START_NOT_STICKY;
                 }
@@ -233,7 +249,7 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 // we want to post the notifications for that user, which is NOT current user
                 int userId = intent.getIntExtra(Intent.EXTRA_USER_HANDLE, USER_ID_NOT_SPECIFIED);
                 stopService(userId);
-                stopForeground(true);
+                stopForeground(STOP_FOREGROUND_DETACH);
                 break;
 
             case ACTION_SHARE:
@@ -243,33 +259,35 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                         .setType("video/mp4")
                         .putExtra(Intent.EXTRA_STREAM, shareUri);
                 mKeyguardDismissUtil.executeWhenUnlocked(() -> {
-                    String shareLabel = getResources().getString(R.string.screenrecord_share_label);
+                    String shareLabel = strings().getShareLabel();
                     startActivity(Intent.createChooser(shareIntent, shareLabel)
                             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                     // Remove notification
-                    mNotificationManager.cancelAsUser(null, NOTIFICATION_VIEW_ID, currentUser);
+                    final int id = intent.getIntExtra(EXTRA_ID, mNotificationId);
+                    mNotificationManager.cancelAsUser(TAG, id, currentUser);
+                    maybeDismissGroup(currentUser);
                     return false;
                 }, false, false);
 
                 // Close quick shade
-                sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+                closeSystemDialogs();
                 break;
             case ACTION_DELETE:
-                // Close quick shade
-                sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
-
                 ContentResolver resolver = getContentResolver();
                 Uri uri = Uri.parse(intent.getStringExtra(EXTRA_PATH));
                 resolver.delete(uri, null, null);
-
                 Toast.makeText(
                         this,
                         R.string.screenrecord_delete_description,
                         Toast.LENGTH_LONG).show();
-
                 // Remove notification
-                mNotificationManager.cancelAsUser(null, NOTIFICATION_VIEW_ID, currentUser);
+                final int id = intent.getIntExtra(EXTRA_ID, mNotificationId);
+                mNotificationManager.cancelAsUser(TAG, id, currentUser);
+                maybeDismissGroup(currentUser);
                 Log.d(TAG, "Deleted recording " + uri);
+
+                // Close quick shade
+                maybeCloseSystemDialogs();
                 break;
             case ACTION_SHOW_DIALOG:
                 if (mController != null) {
@@ -335,25 +353,15 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
      */
     @VisibleForTesting
     protected void createErrorNotification() {
-        Resources res = getResources();
-        NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.screenrecord_name),
-                NotificationManager.IMPORTANCE_DEFAULT);
-        channel.setDescription(getString(R.string.screenrecord_channel_description));
-        channel.enableVibration(true);
-        mNotificationManager.createNotificationChannel(channel);
-
         Bundle extras = new Bundle();
-        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME,
-                res.getString(R.string.screenrecord_name));
-        String notificationTitle = res.getString(R.string.screenrecord_start_error);
+        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME, strings().getTitle());
+        String notificationTitle = strings().getStartError();
 
-        Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
+        Notification.Builder builder = new Notification.Builder(this, getChannelId())
                 .setSmallIcon(R.drawable.ic_screenrecord)
                 .setContentTitle(notificationTitle)
                 .addExtras(extras);
-        startForeground(NOTIFICATION_RECORDING_ID, builder.build());
+        startForeground(ERROR_NOTIF_ID, builder.build());
     }
 
     @VisibleForTesting
@@ -363,22 +371,12 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
 
     @VisibleForTesting
     protected void createRecordingNotification() {
-        Resources res = getResources();
-        NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.screenrecord_name),
-                NotificationManager.IMPORTANCE_DEFAULT);
-        channel.setDescription(getString(R.string.screenrecord_channel_description));
-        channel.enableVibration(true);
-        mNotificationManager.createNotificationChannel(channel);
-
         Bundle extras = new Bundle();
-        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME,
-                res.getString(R.string.screenrecord_name));
+        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME, strings().getTitle());
 
         String notificationTitle = mAudioSource == ScreenRecordingAudioSource.NONE
-                ? res.getString(R.string.screenrecord_ongoing_screen_only)
-                : res.getString(R.string.screenrecord_ongoing_screen_and_audio);
+                ? strings().getOngoingRecording()
+                : strings().getOngoingRecordingWithAudio();
 
         PendingIntent pendingIntent = PendingIntent.getService(
                 this,
@@ -387,9 +385,9 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Action stopAction = new Notification.Action.Builder(
                 Icon.createWithResource(this, R.drawable.ic_android),
-                getResources().getString(R.string.screenrecord_stop_label),
+                strings().getStopLabel(),
                 pendingIntent).build();
-        Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
+        Notification.Builder builder = new Notification.Builder(this, getChannelId())
                 .setSmallIcon(R.drawable.ic_screenrecord)
                 .setContentTitle(notificationTitle)
                 .setUsesChronometer(true)
@@ -399,25 +397,24 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
                 .addAction(stopAction)
                 .addExtras(extras);
-        startForeground(NOTIFICATION_RECORDING_ID, builder.build());
+        startForeground(PROGRESS_NOTIF_ID, builder.build());
     }
 
     @VisibleForTesting
     protected Notification createProcessingNotification() {
-        Resources res = getApplicationContext().getResources();
         String notificationTitle = mAudioSource == ScreenRecordingAudioSource.NONE
-                ? res.getString(R.string.screenrecord_ongoing_screen_only)
-                : res.getString(R.string.screenrecord_ongoing_screen_and_audio);
+                ? strings().getOngoingRecording()
+                : strings().getOngoingRecordingWithAudio();
 
         Bundle extras = new Bundle();
-        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME,
-                res.getString(R.string.screenrecord_name));
+        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME, strings().getTitle());
 
-        Notification.Builder builder = new Notification.Builder(getApplicationContext(), CHANNEL_ID)
+        Notification.Builder builder = new Notification.Builder(this, getChannelId())
                 .setContentTitle(notificationTitle)
                 .setContentText(
-                        getResources().getString(R.string.screenrecord_background_processing_label))
+                        strings().getBackgroundProcessingLabel())
                 .setSmallIcon(R.drawable.ic_screenrecord)
+                .setGroup(GROUP_KEY)
                 .addExtras(extras);
         return builder.build();
     }
@@ -431,10 +428,10 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
 
         Notification.Action shareAction = new Notification.Action.Builder(
                 Icon.createWithResource(this, R.drawable.ic_screenrecord),
-                getResources().getString(R.string.screenrecord_share_label),
+                strings().getShareLabel(),
                 PendingIntent.getService(
                         this,
-                        REQUEST_CODE,
+                        mNotificationId, /* unique request code */
                         getShareIntent(this, uri.toString()),
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
                 .build();
@@ -444,38 +441,82 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 getResources().getString(R.string.screenrecord_delete_label),
                 PendingIntent.getService(
                         this,
-                        REQUEST_CODE,
+                        mNotificationId, /* unique request code */
                         getDeleteIntent(this, uri.toString()),
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
                 .build();
 
         Bundle extras = new Bundle();
-        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME,
-                getResources().getString(R.string.screenrecord_name));
+        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME, strings().getTitle());
 
-        Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
+        Notification.Builder builder = new Notification.Builder(this, getChannelId())
                 .setSmallIcon(R.drawable.ic_screenrecord)
-                .setContentTitle(getResources().getString(R.string.screenrecord_save_title))
-                .setContentText(getResources().getString(R.string.screenrecord_save_text))
+                .setContentTitle(strings().getSaveTitle())
+                .setContentText(strings().getSaveText())
                 .setContentIntent(PendingIntent.getActivity(
                         this,
-                        REQUEST_CODE,
+                        mNotificationId, /* unique request code */
                         viewIntent,
                         PendingIntent.FLAG_IMMUTABLE))
                 .addAction(shareAction)
                 .addAction(deleteAction)
                 .setAutoCancel(true)
+                .setGroup(GROUP_KEY)
                 .addExtras(extras);
 
         // Add thumbnail if available
-        Bitmap thumbnailBitmap = recording.getThumbnail();
-        if (thumbnailBitmap != null) {
+        if (recording.getThumbnail() != null) {
             Notification.BigPictureStyle pictureStyle = new Notification.BigPictureStyle()
-                    .bigPicture(thumbnailBitmap)
+                    .bigPicture(recording.getThumbnail())
                     .showBigPictureWhenCollapsed(true);
             builder.setStyle(pictureStyle);
         }
         return builder.build();
+    }
+
+    /**
+     * Adds a group notification so that save notifications from multiple recordings are
+     * grouped together, and the foreground service recording notification is not
+     */
+    private void postGroupNotification(UserHandle currentUser) {
+        if (countGroupNotifications() < 1)
+            return; // only post after we show the 2nd notification
+        Bundle extras = new Bundle();
+        extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME,
+                strings().getTitle());
+        Notification groupNotif = new Notification.Builder(this, getChannelId())
+                .setSmallIcon(R.drawable.ic_screenrecord)
+                .setContentTitle(strings().getSaveTitle())
+                .setGroup(GROUP_KEY)
+                .setGroupSummary(true)
+                .setAutoCancel(true)
+                .setExtras(extras)
+                .build();
+        mNotificationManager.notifyAsUser(getTag(), NOTIF_BASE_ID, groupNotif, currentUser);
+    }
+
+    private void maybeDismissGroup(UserHandle currentUser) {
+        if (countGroupNotifications() >= 1)
+            return; // dismiss only when we have one notification left
+        mNotificationManager.cancelAsUser(TAG, NOTIF_BASE_ID, currentUser);
+    }
+
+    private void maybeCloseSystemDialogs() {
+        if (countGroupNotifications() > 0)
+            return; // only dismiss when we cancel the last group notification
+        closeSystemDialogs();
+    }
+
+    private int countGroupNotifications() {
+        StatusBarNotification[] notifications = mNotificationManager.getActiveNotifications();
+        int count = 0;
+        for (StatusBarNotification notification : notifications) {
+            final String tag = notification.getTag();
+            if (tag == null || !tag.equals(TAG)) continue;
+            final int id = notification.getId();
+            if (id != NOTIF_BASE_ID) count++;
+        }
+        return count;
     }
 
     private void stopService() {
@@ -486,7 +527,7 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
         if (userId == USER_ID_NOT_SPECIFIED) {
             userId = mUserContextTracker.getUserContext().getUserId();
         }
-        Log.d(TAG, "notifying for user " + userId);
+        Log.d(getTag(), "notifying for user " + userId);
         setTapsVisible(mOriginalShowTaps);
         setStopDotVisible(false);
         if (getRecorder() != null) {
@@ -498,9 +539,10 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 // let's release the recorder and delete all temporary files in this case
                 getRecorder().release();
                 showErrorToast(R.string.screenrecord_start_error);
-                Log.e(TAG, "stopRecording called, but there was an error when ending"
+                Log.e(getTag(), "stopRecording called, but there was an error when ending"
                         + "recording");
                 exception.printStackTrace();
+                createErrorNotification();
             } catch (Throwable throwable) {
                 // Something unexpected happen, SystemUI will crash but let's delete
                 // the temporary files anyway
@@ -508,30 +550,32 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
                 throw new RuntimeException(throwable);
             }
         } else {
-            Log.e(TAG, "stopRecording called, but recorder was null");
+            Log.e(getTag(), "stopRecording called, but recorder was null");
         }
         updateState(false);
+        stopForeground(STOP_FOREGROUND_DETACH);
         stopSelf();
     }
 
     private void saveRecording(int userId) {
         UserHandle currentUser = new UserHandle(userId);
-        mNotificationManager.notifyAsUser(null, NOTIFICATION_PROCESSING_ID,
+        mNotificationManager.notifyAsUser(null, PROGRESS_NOTIF_ID,
                 createProcessingNotification(), currentUser);
 
         mLongExecutor.execute(() -> {
             try {
-                Log.d(TAG, "saving recording");
+                Log.d(getTag(), "saving recording");
+                postGroupNotification(currentUser);
                 Notification notification = createSaveNotification(getRecorder().save());
-                if (!mController.isRecording()) {
-                    mNotificationManager.notifyAsUser(null, NOTIFICATION_VIEW_ID, notification,
-                            currentUser);
-                }
-            } catch (IOException e) {
-                Log.e(TAG, "Error saving screen recording: " + e.getMessage());
-                showErrorToast(R.string.screenrecord_delete_error);
-            } finally {
-                mNotificationManager.cancelAsUser(null, NOTIFICATION_PROCESSING_ID, currentUser);
+                mNotificationManager.cancelAsUser(null, PROGRESS_NOTIF_ID, currentUser);
+                mNotificationManager.notifyAsUser(TAG, mNotificationId, notification,
+                        currentUser);
+            } catch (IOException | IllegalStateException e) {
+                Log.e(getTag(), "Error saving screen recording: " + e.getMessage());
+                e.printStackTrace();
+                showErrorToast(R.string.screenrecord_save_error);
+                mNotificationManager.cancelAsUser(null, PROGRESS_NOTIF_ID, currentUser);
+                maybeDismissGroup(currentUser);
             }
         });
     }
@@ -539,6 +583,25 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
     private void setTapsVisible(boolean turnOn) {
         int value = turnOn ? 1 : 0;
         Settings.System.putInt(getContentResolver(), Settings.System.SHOW_TOUCHES, value);
+    }
+
+    protected String getTag() {
+        return TAG;
+    }
+
+    protected String getChannelId() {
+        return CHANNEL_ID;
+    }
+
+    private RecordingServiceStrings strings() {
+        if (mStrings == null) {
+            mStrings = provideRecordingServiceStrings();
+        }
+        return mStrings;
+    }
+
+    protected RecordingServiceStrings provideRecordingServiceStrings() {
+        return new RecordingServiceStrings(getResources());
     }
 
     private void setLowQuality(boolean turnOn) {
@@ -640,6 +703,7 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
         return anim;
     }
 
+
     /**
      * Get an intent to stop the recording service.
      * @param context Context from the requesting activity
@@ -656,30 +720,40 @@ public class RecordingService extends Service implements ScreenMediaRecorderList
      * @param context
      * @return
      */
-    protected static Intent getNotificationIntent(Context context) {
-        return new Intent(context, RecordingService.class).setAction(ACTION_STOP_NOTIF);
+    protected Intent getNotificationIntent(Context context) {
+        return new Intent(context, this.getClass()).setAction(ACTION_STOP_NOTIF);
     }
 
-    private static Intent getShareIntent(Context context, String path) {
+    private Intent getShareIntent(Context context, String path) {
+        return getShareIntent(context, path, mNotificationId);
+    }
+
+    private static Intent getShareIntent(Context context, String path, int id) {
         return new Intent(context, RecordingService.class).setAction(ACTION_SHARE)
-                .putExtra(EXTRA_PATH, path);
+                .putExtra(EXTRA_PATH, path)
+                .putExtra(EXTRA_ID, id);
     }
 
-    private static Intent getDeleteIntent(Context context, String path) {
+    private Intent getDeleteIntent(Context context, String path) {
+        return getDeleteIntent(context, path, mNotificationId);
+    }
+
+    private static Intent getDeleteIntent(Context context, String path, int id) {
         return new Intent(context, RecordingService.class).setAction(ACTION_DELETE)
-                .putExtra(EXTRA_PATH, path);
+                .putExtra(EXTRA_PATH, path)
+                .putExtra(EXTRA_ID, id);
     }
 
     @Override
     public void onInfo(MediaRecorder mr, int what, int extra) {
-        Log.d(TAG, "Media recorder info: " + what);
+        Log.d(getTag(), "Media recorder info: " + what);
         onStartCommand(getStopIntent(this), 0, 0);
     }
 
     @Override
     public void onStopped() {
         if (mController.isRecording()) {
-            Log.d(TAG, "Stopping recording because the system requested the stop");
+            Log.d(getTag(), "Stopping recording because the system requested the stop");
             stopService();
         }
     }

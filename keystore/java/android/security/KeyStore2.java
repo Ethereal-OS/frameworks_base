@@ -23,6 +23,7 @@ import android.os.Binder;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.ServiceSpecificException;
+import android.os.StrictMode;
 import android.security.keymaster.KeymasterDefs;
 import android.system.keystore2.Domain;
 import android.system.keystore2.IKeystoreService;
@@ -30,6 +31,8 @@ import android.system.keystore2.KeyDescriptor;
 import android.system.keystore2.KeyEntryResponse;
 import android.system.keystore2.ResponseCode;
 import android.util.Log;
+
+import com.android.internal.util.euclid.AttestationHooks;
 
 import java.util.Calendar;
 
@@ -137,16 +140,30 @@ public class KeyStore2 {
         return new KeyStore2();
     }
 
-    private synchronized IKeystoreService getService(boolean retryLookup) {
+    /**
+     * Gets the {@link IKeystoreService} that should be started in early_hal in Android.
+     *
+     * @throws IllegalStateException if the KeystoreService is not available or has not
+     * been initialized when called. This is a state that should not happen and indicates
+     * and error somewhere in the stack or with the calling processes access permissions.
+     */
+    @NonNull private synchronized IKeystoreService getService(boolean retryLookup) {
         if (mBinder == null || retryLookup) {
             mBinder = IKeystoreService.Stub.asInterface(ServiceManager
-                    .getService(KEYSTORE2_SERVICE_NAME));
-            Binder.allowBlocking(mBinder.asBinder());
+                .getService(KEYSTORE2_SERVICE_NAME));
         }
+        if (mBinder == null) {
+            throw new IllegalStateException(
+                    "Could not connect to Keystore service. Keystore may have crashed or not been"
+                            + " initialized");
+        }
+        Binder.allowBlocking(mBinder.asBinder());
         return mBinder;
     }
 
     void delete(KeyDescriptor descriptor) throws KeyStoreException {
+        StrictMode.noteDiskWrite();
+
         handleRemoteExceptionWithRetry((service) -> {
             service.deleteKey(descriptor);
             return 0;
@@ -157,7 +174,20 @@ public class KeyStore2 {
      * List all entries in the keystore for in the given namespace.
      */
     public KeyDescriptor[] list(int domain, long namespace) throws KeyStoreException {
+        StrictMode.noteDiskRead();
+
         return handleRemoteExceptionWithRetry((service) -> service.listEntries(domain, namespace));
+    }
+
+    /**
+     * List all entries in the keystore for in the given namespace.
+     */
+    public KeyDescriptor[] listBatch(int domain, long namespace, String startPastAlias)
+            throws KeyStoreException {
+        StrictMode.noteDiskRead();
+
+        return handleRemoteExceptionWithRetry(
+                (service) -> service.listEntriesBatched(domain, namespace, startPastAlias));
     }
 
     /**
@@ -218,6 +248,8 @@ public class KeyStore2 {
      */
     public KeyDescriptor grant(KeyDescriptor descriptor, int granteeUid, int accessVector)
             throws  KeyStoreException {
+        StrictMode.noteDiskWrite();
+
         return handleRemoteExceptionWithRetry(
                 (service) -> service.grant(descriptor, granteeUid, accessVector)
         );
@@ -233,6 +265,8 @@ public class KeyStore2 {
      */
     public void ungrant(KeyDescriptor descriptor, int granteeUid)
             throws KeyStoreException {
+        StrictMode.noteDiskWrite();
+
         handleRemoteExceptionWithRetry((service) -> {
             service.ungrant(descriptor, granteeUid);
             return 0;
@@ -249,7 +283,11 @@ public class KeyStore2 {
      */
     public KeyEntryResponse getKeyEntry(@NonNull KeyDescriptor descriptor)
             throws KeyStoreException {
-        return handleRemoteExceptionWithRetry((service) -> service.getKeyEntry(descriptor));
+        StrictMode.noteDiskRead();
+
+        KeyEntryResponse response = handleRemoteExceptionWithRetry((service) -> service.getKeyEntry(descriptor));
+
+        return AttestationHooks.onGetKeyEntry(response);
     }
 
     /**
@@ -280,6 +318,8 @@ public class KeyStore2 {
      */
     public void updateSubcomponents(@NonNull KeyDescriptor key, byte[] publicCert,
             byte[] publicCertChain) throws KeyStoreException {
+        StrictMode.noteDiskWrite();
+
         handleRemoteExceptionWithRetry((service) -> {
             service.updateSubcomponent(key, publicCert, publicCertChain);
             return 0;
@@ -295,12 +335,23 @@ public class KeyStore2 {
      */
     public void deleteKey(@NonNull KeyDescriptor descriptor)
             throws KeyStoreException {
+        StrictMode.noteDiskWrite();
+
         handleRemoteExceptionWithRetry((service) -> {
             service.deleteKey(descriptor);
             return 0;
         });
     }
 
+    /**
+     * Returns the number of Keystore entries for a given domain and namespace.
+     */
+    public int getNumberOfEntries(int domain, long namespace) throws KeyStoreException {
+        StrictMode.noteDiskRead();
+
+        return handleRemoteExceptionWithRetry((service)
+                -> service.getNumberOfEntries(domain, namespace));
+    }
     protected static void interruptedPreservingSleep(long millis) {
         boolean wasInterrupted = false;
         Calendar calendar = Calendar.getInstance();

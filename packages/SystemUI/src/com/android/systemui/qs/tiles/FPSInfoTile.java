@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2019 The OmniROM Project
- *           (C) 2017-2023 crDroidAndroid Project
+ *           (C) 2017-2024 crDroidAndroid Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
@@ -36,6 +36,7 @@ import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.SettingObserver;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.systemui.util.settings.SecureSettings;
@@ -59,6 +60,7 @@ public class FPSInfoTile extends QSTileImpl<BooleanState> {
     @Inject
     public FPSInfoTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -67,12 +69,14 @@ public class FPSInfoTile extends QSTileImpl<BooleanState> {
             ActivityStarter activityStarter,
             QSLogger qsLogger,
             SecureSettings secureSettings) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
 
         final String fpsInfoSysNode = mContext.getResources().getString(
                 R.string.config_fpsInfoSysNode);
-        isAvailable = fpsInfoSysNode != null && (new File(fpsInfoSysNode).isFile());
+
+        File file = new File(fpsInfoSysNode);
+        isAvailable = fpsInfoSysNode != null && file.exists() && file.canRead();
 
         mSetting = new SettingObserver(secureSettings, mHandler, Secure.SHOW_FPS_OVERLAY, getHost().getUserId()) {
             @Override
@@ -136,7 +140,7 @@ public class FPSInfoTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.ETHEREAL;
+        return MetricsEvent.GEOMETRICS;
     }
 
     @Override

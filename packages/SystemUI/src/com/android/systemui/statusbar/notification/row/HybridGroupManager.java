@@ -22,6 +22,7 @@ import android.annotation.Nullable;
 import android.app.Notification;
 import android.content.Context;
 import android.content.res.Resources;
+import android.os.Trace;
 import android.service.notification.StatusBarNotification;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
@@ -30,7 +31,8 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 
 import com.android.internal.widget.ConversationLayout;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
+import com.android.systemui.statusbar.notification.row.shared.AsyncHybridViewInflation;
 
 /**
  * A class managing hybrid groups that include {@link HybridNotificationView} and the notification
@@ -39,6 +41,8 @@ import com.android.systemui.R;
 public class HybridGroupManager {
 
     private final Context mContext;
+
+    private static final String TAG = "HybridGroupManager";
 
     private float mOverflowNumberSize;
     private int mOverflowNumberPadding;
@@ -57,6 +61,7 @@ public class HybridGroupManager {
     }
 
     private HybridNotificationView inflateHybridView(View contentView, ViewGroup parent) {
+        Trace.beginSection("HybridGroupManager#inflateHybridView");
         LayoutInflater inflater = LayoutInflater.from(mContext);
         int layout = contentView instanceof ConversationLayout
                 ? R.layout.hybrid_conversation_notification
@@ -64,6 +69,7 @@ public class HybridGroupManager {
         HybridNotificationView hybrid = (HybridNotificationView)
                 inflater.inflate(layout, parent, false);
         parent.addView(hybrid);
+        Trace.endSection();
         return hybrid;
     }
 
@@ -90,13 +96,32 @@ public class HybridGroupManager {
     public HybridNotificationView bindFromNotification(HybridNotificationView reusableView,
             View contentView, StatusBarNotification notification,
             ViewGroup parent) {
+        AsyncHybridViewInflation.assertInLegacyMode();
+        boolean isNewView = false;
         if (reusableView == null) {
+            Trace.beginSection("HybridGroupManager#bindFromNotification");
             reusableView = inflateHybridView(contentView, parent);
+            isNewView = true;
         }
-        CharSequence titleText = resolveTitle(notification.getNotification());
-        CharSequence contentText = resolveText(notification.getNotification());
-        reusableView.bind(titleText, contentText, contentView);
+
+        updateReusableView(reusableView, notification, contentView);
+        if (isNewView) {
+            Trace.endSection();
+        }
         return reusableView;
+    }
+
+    /**
+     * Update the HybridNotificationView (single-line view)'s appearance
+     */
+    public void updateReusableView(HybridNotificationView reusableView,
+            StatusBarNotification notification, View contentView) {
+        AsyncHybridViewInflation.assertInLegacyMode();
+        final CharSequence titleText = resolveTitle(notification.getNotification());
+        final CharSequence contentText = resolveText(notification.getNotification());
+        if (reusableView != null) {
+            reusableView.bind(titleText, contentText, contentView);
+        }
     }
 
     @Nullable

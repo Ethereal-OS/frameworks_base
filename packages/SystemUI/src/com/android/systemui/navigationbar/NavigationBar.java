@@ -25,10 +25,11 @@ import static android.app.StatusBarManager.WindowType;
 import static android.app.StatusBarManager.WindowVisibleState;
 import static android.app.StatusBarManager.windowStateToString;
 import static android.app.WindowConfiguration.ROTATION_UNDEFINED;
-import static android.view.InsetsState.ITYPE_NAVIGATION_BAR;
-import static android.view.InsetsState.containsType;
+import static android.inputmethodservice.InputMethodService.ENABLE_HIDE_IME_CAPTION_BAR;
+import static android.view.InsetsSource.FLAG_SUPPRESS_SCRIM;
 import static android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE;
 import static android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD;
 import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_3BUTTON;
 import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL;
 
@@ -60,6 +61,7 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.graphics.Insets;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
@@ -70,10 +72,12 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.RemoteException;
+import android.os.Looper;
 import android.os.UserHandle;
-import android.provider.Settings;
+import android.os.RemoteException;
+import android.os.Trace;
 import android.provider.DeviceConfig;
+import android.provider.Settings;
 import android.telecom.TelecomManager;
 import android.text.TextUtils;
 import android.util.Log;
@@ -81,19 +85,15 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.InsetsFrameProvider;
-import android.view.InsetsState.InternalInsetsType;
-import android.view.InsetsVisibilities;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
-import android.view.SurfaceControl;
-import android.view.SurfaceControl.Transaction;
 import android.view.View;
-import android.view.ViewRootImpl;
-import android.view.ViewRootImpl.SurfaceChangedCallback;
 import android.view.ViewTreeObserver;
 import android.view.ViewTreeObserver.InternalInsetsInfo;
 import android.view.ViewTreeObserver.OnComputeInternalInsetsListener;
+import android.view.WindowInsets;
+import android.view.WindowInsets.Type.InsetsType;
 import android.view.WindowInsetsController.Appearance;
 import android.view.WindowInsetsController.Behavior;
 import android.view.WindowManager;
@@ -113,7 +113,6 @@ import com.android.internal.statusbar.LetterboxDetails;
 import com.android.internal.util.LatencyTracker;
 import com.android.internal.view.AppearanceRegion;
 import com.android.systemui.Gefingerpoken;
-import com.android.systemui.R;
 import com.android.systemui.assist.AssistManager;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.DisplayId;
@@ -130,10 +129,11 @@ import com.android.systemui.navigationbar.gestural.EdgeBackGestureHandler;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.recents.OverviewProxyService;
 import com.android.systemui.recents.Recents;
+import com.android.systemui.res.R;
 import com.android.systemui.settings.DisplayTracker;
 import com.android.systemui.settings.UserContextProvider;
 import com.android.systemui.settings.UserTracker;
-import com.android.systemui.shade.ShadeController;
+import com.android.systemui.shade.ShadeViewController;
 import com.android.systemui.shared.navigationbar.RegionSamplingHelper;
 import com.android.systemui.shared.recents.utilities.Utilities;
 import com.android.systemui.shared.rotation.RotationButton;
@@ -155,10 +155,13 @@ import com.android.systemui.statusbar.phone.CentralSurfaces;
 import com.android.systemui.statusbar.phone.LightBarController;
 import com.android.systemui.statusbar.phone.StatusBarKeyguardViewManager;
 import com.android.systemui.statusbar.policy.DeviceProvisionedController;
+import com.android.systemui.statusbar.policy.KeyguardStateController;
 import com.android.systemui.util.DeviceConfigProxy;
 import com.android.systemui.util.ViewController;
 import com.android.wm.shell.back.BackAnimation;
 import com.android.wm.shell.pip.Pip;
+
+import dagger.Lazy;
 
 import java.io.PrintWriter;
 import java.util.Locale;
@@ -167,8 +170,6 @@ import java.util.Optional;
 import java.util.concurrent.Executor;
 
 import javax.inject.Inject;
-
-import dagger.Lazy;
 
 /**
  * Contains logic for a navigation bar view.
@@ -185,7 +186,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     private static final String EXTRA_TRANSIENT_STATE = "transient_state";
 
     /** Allow some time inbetween the long press for back and recents. */
-    private static final int LOCK_TO_APP_GESTURE_TOLERENCE = 200;
+    private static final int LOCK_TO_APP_GESTURE_TOLERANCE = 200;
     private static final long AUTODIM_TIMEOUT_MS = 2250;
 
     private final Context mContext;
@@ -199,7 +200,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     private final StatusBarKeyguardViewManager mStatusBarKeyguardViewManager;
     private final SysUiState mSysUiFlagsContainer;
     private final Lazy<Optional<CentralSurfaces>> mCentralSurfacesOptionalLazy;
-    private final ShadeController mShadeController;
+    private final KeyguardStateController mKeyguardStateController;
+    private final ShadeViewController mShadeViewController;
     private final NotificationRemoteInputManager mNotificationRemoteInputManager;
     private final OverviewProxyService mOverviewProxyService;
     private final NavigationModeController mNavigationModeController;
@@ -236,6 +238,9 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     private Locale mLocale;
     private int mLayoutDirection;
 
+    private ContentObserver mNavBarOrderContentObserver;
+    private ContentResolver mContentResolver;
+
     private Optional<Long> mHomeButtonLongPressDurationMs;
 
     /** @see android.view.WindowInsetsController#setSystemBarsAppearance(int, int) */
@@ -260,11 +265,15 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     @VisibleForTesting
     public int mDisplayId;
     private boolean mIsOnDefaultDisplay;
-    public boolean mHomeBlockedThisTouch;
+    private boolean mHomeBlockedThisTouch;
 
+    private int mCurrentRotation;
     private final DeadZone mDeadZone;
     private boolean mImeVisible;
     private final Rect mSamplingBounds = new Rect();
+    private final Binder mInsetsSourceOwner = new Binder();
+    private final NavBarButtonClickLogger mNavBarButtonClickLogger;
+    private final NavbarOrientationTrackingLogger mNavbarOrientationTrackingLogger;
 
     @com.android.internal.annotations.VisibleForTesting
     public enum NavBarActionEvent implements UiEventLogger.UiEventEnum {
@@ -352,8 +361,22 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         }
 
         @Override
+        public void onPrioritizedRotation(@Surface.Rotation int rotation) {
+        }
+
+        @Override
         public void startAssistant(Bundle bundle) {
             mAssistManagerLazy.get().startAssist(bundle);
+        }
+
+        @Override
+        public void setAssistantOverridesRequested(int[] invocationTypes) {
+            mAssistManagerLazy.get().setAssistantOverridesRequested(invocationTypes);
+        }
+
+        @Override
+        public void animateNavBarLongPress(boolean isTouchDown, boolean shrink, long durationMs) {
+            mView.getHomeHandle().animateLongPress(isTouchDown, shrink, durationMs);
         }
 
         @Override
@@ -448,24 +471,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                 }
             };
 
-    private final ViewRootImpl.SurfaceChangedCallback mSurfaceChangedCallback =
-            new SurfaceChangedCallback() {
-            @Override
-            public void surfaceCreated(Transaction t) {
-                notifyNavigationBarSurface();
-            }
-
-            @Override
-            public void surfaceDestroyed() {
-                notifyNavigationBarSurface();
-            }
-
-            @Override
-            public void surfaceReplaced(Transaction t) {
-                notifyNavigationBarSurface();
-            }
-    };
-
     private boolean mScreenPinningActive = false;
     private final TaskStackChangeListener mTaskStackListener = new TaskStackChangeListener() {
         @Override
@@ -499,7 +504,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
             Optional<Pip> pipOptional,
             Optional<Recents> recentsOptional,
             Lazy<Optional<CentralSurfaces>> centralSurfacesOptionalLazy,
-            ShadeController shadeController,
+            KeyguardStateController keyguardStateController,
+            ShadeViewController shadeViewController,
             NotificationRemoteInputManager notificationRemoteInputManager,
             NotificationShadeDepthController notificationShadeDepthController,
             @Main Handler mainHandler,
@@ -520,7 +526,9 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
             UserContextProvider userContextProvider,
             WakefulnessLifecycle wakefulnessLifecycle,
             TaskStackChangeListeners taskStackChangeListeners,
-            DisplayTracker displayTracker) {
+            DisplayTracker displayTracker,
+            NavBarButtonClickLogger navBarButtonClickLogger,
+            NavbarOrientationTrackingLogger navbarOrientationTrackingLogger) {
         super(navigationBarView);
         mFrame = navigationBarFrame;
         mContext = context;
@@ -534,7 +542,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         mStatusBarKeyguardViewManager = statusBarKeyguardViewManager;
         mSysUiFlagsContainer = sysUiFlagsContainer;
         mCentralSurfacesOptionalLazy = centralSurfacesOptionalLazy;
-        mShadeController = shadeController;
+        mKeyguardStateController = keyguardStateController;
+        mShadeViewController = shadeViewController;
         mNotificationRemoteInputManager = notificationRemoteInputManager;
         mOverviewProxyService = overviewProxyService;
         mNavigationModeController = navigationModeController;
@@ -561,6 +570,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         mTaskStackChangeListeners = taskStackChangeListeners;
         mDisplayTracker = displayTracker;
         mEdgeBackGestureHandler = navBarHelper.getEdgeBackGestureHandler();
+        mNavBarButtonClickLogger = navBarButtonClickLogger;
+        mNavbarOrientationTrackingLogger = navbarOrientationTrackingLogger;
 
         mNavColorSampleMargin = getResources()
                 .getDimensionPixelSize(R.dimen.navigation_handle_sample_horizontal_margin);
@@ -627,6 +638,9 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         mView.setTouchHandler(mTouchHandler);
         setNavBarMode(mNavBarMode);
         mEdgeBackGestureHandler.setStateChangeCallback(mView::updateStates);
+        mEdgeBackGestureHandler.setButtonForcedVisibleChangeCallback((forceVisible) -> {
+            repositionNavigationBar(mCurrentRotation);
+        });
         mNavigationBarTransitions.addListener(this::onBarTransition);
         mView.updateRotationButton();
 
@@ -669,20 +683,43 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
 
         mNotificationShadeDepthController.addListener(mDepthListener);
         mTaskStackChangeListeners.registerTaskStackListener(mTaskStackListener);
+
+        // Navbar back/recents swap
+        mContentResolver = mContext.getContentResolver();
+        mNavBarOrderContentObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange) {
+                mView.updateStates();
+            }
+        };
+        mContentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.NAV_BAR_BUTTON_SWAP_ENABLED),
+                true, mNavBarOrderContentObserver, UserHandle.USER_ALL);
     }
 
     public void destroyView() {
-        setAutoHideController(/* autoHideController */ null);
-        mCommandQueue.removeCallback(this);
-        mWindowManager.removeViewImmediate(mView.getRootView());
-        mNavigationModeController.removeListener(mModeChangedListener);
-        mEdgeBackGestureHandler.setStateChangeCallback(null);
+        Trace.beginSection("NavigationBar#destroyView");
+        try {
+            setAutoHideController(/* autoHideController */ null);
+            mCommandQueue.removeCallback(this);
+            Trace.beginSection("NavigationBar#removeViewImmediate");
+            try {
+                mWindowManager.removeViewImmediate(mView.getRootView());
+            } finally {
+                Trace.endSection();
+            }
+            mNavigationModeController.removeListener(mModeChangedListener);
+            mEdgeBackGestureHandler.setStateChangeCallback(null);
 
-        mNavBarHelper.removeNavTaskStateUpdater(mNavbarTaskbarStateUpdater);
-        mNotificationShadeDepthController.removeListener(mDepthListener);
+            mNavBarHelper.removeNavTaskStateUpdater(mNavbarTaskbarStateUpdater);
+            mNotificationShadeDepthController.removeListener(mDepthListener);
 
-        mDeviceConfigProxy.removeOnPropertiesChangedListener(mOnPropertiesChangedListener);
-        mTaskStackChangeListeners.unregisterTaskStackListener(mTaskStackListener);
+            mDeviceConfigProxy.removeOnPropertiesChangedListener(mOnPropertiesChangedListener);
+            mTaskStackChangeListeners.unregisterTaskStackListener(mTaskStackListener);
+            mContentResolver.unregisterContentObserver(mNavBarOrderContentObserver);
+        } finally {
+            Trace.endSection();
+        }
     }
 
     @Override
@@ -690,8 +727,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         final Display display = mView.getDisplay();
         mView.setComponents(mRecentsOptional);
         if (mCentralSurfacesOptionalLazy.get().isPresent()) {
-            mView.setComponents(
-                    mCentralSurfacesOptionalLazy.get().get().getNotificationPanelViewController());
+            mView.setComponents(mShadeViewController);
         }
         mView.setDisabledFlags(mDisabledFlags1, mSysUiFlagsContainer);
         mView.setOnVerticalChangedListener(this::onVerticalChanged);
@@ -703,6 +739,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         setWindowVisible(isNavBarWindowVisible());
         mView.setBehavior(mBehavior);
         setNavBarMode(mNavBarMode);
+        repositionNavigationBar(mCurrentRotation);
         mView.setUpdateActiveTouchRegionsCallback(
                 () -> mOverviewProxyService.onActiveNavBarRegionChanges(
                         getButtonLocations(
@@ -712,8 +749,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
 
         mView.getViewTreeObserver().addOnComputeInternalInsetsListener(
                 mOnComputeInternalInsetsListener);
-        mView.getViewRootImpl().addSurfaceChangedCallback(mSurfaceChangedCallback);
-        notifyNavigationBarSurface();
 
         mPipOptional.ifPresent(mView::addPipExclusionBoundsChangeListener);
         mBackAnimation.ifPresent(mView::registerBackAnimation);
@@ -736,12 +771,14 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
             // Reset user rotation pref to match that of the WindowManager if starting in locked
             // mode. This will automatically happen when switching from auto-rotate to locked mode.
             if (display != null && rotationButtonController.isRotationLocked()) {
-                rotationButtonController.setRotationLockedAtAngle(display.getRotation());
+                rotationButtonController.setRotationLockedAtAngle(
+                        display.getRotation(), /* caller= */ "NavigationBar#onViewAttached");
             }
         } else {
             mDisabledFlags2 |= StatusBarManager.DISABLE2_ROTATE_SUGGESTIONS;
         }
         setDisabled2Flags(mDisabledFlags2);
+
         // Unfortunately, we still need it because status bar needs LightBarController
         // before notifications creation. We cannot directly use getLightBarController()
         // from NavigationBarFragment directly.
@@ -774,10 +811,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         mHandler.removeCallbacks(mEnableLayoutTransitions);
         mNavBarHelper.removeNavTaskStateUpdater(mNavbarTaskbarStateUpdater);
         mPipOptional.ifPresent(mView::removePipExclusionBoundsChangeListener);
-        ViewRootImpl viewRoot = mView.getViewRootImpl();
-        if (viewRoot != null) {
-            viewRoot.removeSurfaceChangedCallback(mSurfaceChangedCallback);
-        }
         mFrame = null;
     }
 
@@ -808,13 +841,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
             mLayoutDirection = ld;
             refreshLayout(ld);
         }
-
         repositionNavigationBar(rotation);
-        // NOTE(b/260220098): In some cases, the recreated nav bar will already have the right
-        // configuration, which means that NavBarView will not receive a configuration change to
-        // propagate to EdgeBackGestureHandler (which is injected into this and NBV). As such, we
-        // should also force-update the gesture handler to ensure it updates to the right bounds
-        mEdgeBackGestureHandler.onConfigurationChanged(newConfig);
     }
 
     private void parseCurrentSysuiState() {
@@ -839,12 +866,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         }
     }
 
-    private void notifyNavigationBarSurface() {
-        ViewRootImpl viewRoot = mView.getViewRootImpl();
-        SurfaceControl surface = viewRoot != null ? viewRoot.getSurfaceControl() : null;
-        mOverviewProxyService.onNavigationBarSurfaceChanged(surface);
-    }
-
     private int deltaRotation(int oldRotation, int newRotation) {
         int delta = newRotation - oldRotation;
         if (delta < 0) delta += 4;
@@ -853,6 +874,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
 
     public void dump(PrintWriter pw) {
         pw.println("NavigationBar (displayId=" + mDisplayId + "):");
+        pw.println("  mCurrentRotation=" + mCurrentRotation);
         pw.println("  mHomeButtonLongPressDurationMs=" + mHomeButtonLongPressDurationMs);
         pw.println("  mLongPressHomeEnabled=" + mLongPressHomeEnabled);
         pw.println("  mNavigationBarWindowState="
@@ -953,7 +975,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     @Override
     public void onSystemBarAttributesChanged(int displayId, @Appearance int appearance,
             AppearanceRegion[] appearanceRegions, boolean navbarColorManagedByIme,
-            @Behavior int behavior, InsetsVisibilities requestedVisibilities, String packageName,
+            @Behavior int behavior, @InsetsType int requestedVisibleTypes, String packageName,
             LetterboxDetails[] letterboxDetails) {
         if (displayId != mDisplayId) {
             return;
@@ -975,12 +997,11 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     }
 
     @Override
-    public void showTransient(int displayId, @InternalInsetsType int[] types,
-            boolean isGestureOnSystemBar) {
+    public void showTransient(int displayId, @InsetsType int types, boolean isGestureOnSystemBar) {
         if (displayId != mDisplayId) {
             return;
         }
-        if (!containsType(types, ITYPE_NAVIGATION_BAR)) {
+        if ((types & WindowInsets.Type.navigationBars()) == 0) {
             return;
         }
         if (!mTransientShown) {
@@ -991,11 +1012,11 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     }
 
     @Override
-    public void abortTransient(int displayId, @InternalInsetsType int[] types) {
+    public void abortTransient(int displayId, @InsetsType int types) {
         if (displayId != mDisplayId) {
             return;
         }
-        if (!containsType(types, ITYPE_NAVIGATION_BAR)) {
+        if ((types & WindowInsets.Type.navigationBars()) == 0) {
             return;
         }
         clearTransient();
@@ -1113,6 +1134,10 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
 
         ButtonDispatcher homeButton = mView.getHomeButton();
         homeButton.setOnTouchListener(this::onHomeTouch);
+        homeButton.setNavBarButtonClickLogger(mNavBarButtonClickLogger);
+
+        ButtonDispatcher backButton = mView.getBackButton();
+        backButton.setNavBarButtonClickLogger(mNavBarButtonClickLogger);
 
         reconfigureHomeLongClick();
 
@@ -1141,8 +1166,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                 mHomeBlockedThisTouch = false;
                 if (mTelecomManagerOptional.isPresent()
                         && mTelecomManagerOptional.get().isRinging()) {
-                    if (centralSurfacesOptional.map(CentralSurfaces::isKeyguardShowing)
-                            .orElse(false)) {
+                    if (mKeyguardStateController.isShowing()) {
                         Log.i(TAG, "Ignoring HOME; there's a ringing incoming call. " +
                                 "No heads up");
                         mHomeBlockedThisTouch = true;
@@ -1165,9 +1189,10 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     }
 
     private void onVerticalChanged(boolean isVertical) {
-        Optional<CentralSurfaces> cs = mCentralSurfacesOptionalLazy.get();
-        if (cs.isPresent() && cs.get().getNotificationPanelViewController() != null) {
-            cs.get().getNotificationPanelViewController().setQsScrimEnabled(!isVertical);
+        // This check can probably be safely removed. It only remained to reduce regression
+        // risk for a broad change that removed the CentralSurfaces reference in the if block
+        if (mCentralSurfacesOptionalLazy.get().isPresent()) {
+            mShadeViewController.setQsScrimEnabled(!isVertical);
         }
     }
 
@@ -1192,7 +1217,17 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         args.putInt(
                 AssistManager.INVOCATION_TYPE_KEY,
                 AssistManager.INVOCATION_TYPE_HOME_BUTTON_LONG_PRESS);
-        mAssistManagerLazy.get().startAssist(args);
+        // If Launcher has requested to override long press home, add a delay for the ripple.
+        // TODO(b/304146255): Remove this delay once we can exclude 3-button nav from screenshot.
+        boolean delayAssistInvocation = mAssistManagerLazy.get().shouldOverrideAssist(
+                AssistManager.INVOCATION_TYPE_HOME_BUTTON_LONG_PRESS);
+        // In practice, I think v should always be a KeyButtonView, but just being safe.
+        if (delayAssistInvocation && v instanceof KeyButtonView) {
+            ((KeyButtonView) v).setOnRippleInvisibleRunnable(
+                    () -> mAssistManagerLazy.get().startAssist(args));
+        } else {
+            mAssistManagerLazy.get().startAssist(args);
+        }
         mCentralSurfacesOptionalLazy.get().ifPresent(CentralSurfaces::awakenDreams);
         mView.abortCurrentGesture();
         return true;
@@ -1215,6 +1250,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     }
 
     private void onRecentsClick(View v) {
+        mNavBarButtonClickLogger.logRecentsButtonClick();
+
         if (LatencyTracker.isEnabled(mContext)) {
             LatencyTracker.getInstance(mContext).onActionStart(
                     LatencyTracker.ACTION_TOGGLE_RECENTS);
@@ -1224,6 +1261,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     }
 
     private void onImeSwitcherClick(View v) {
+        mNavBarButtonClickLogger.logImeSwitcherClick();
         mInputMethodManager.showInputMethodPickerFromSystem(
                 true /* showAuxiliarySubtypes */, mDisplayId);
         mUiEventLogger.log(KeyButtonView.NavBarButtonEvent.NAVBAR_IME_SWITCHER_BUTTON_TAP);
@@ -1264,7 +1302,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
 
                     // If we recently long-pressed the other button then they were
                     // long-pressed 'together'
-                    if ((time - mLastLockToAppLongPress) < LOCK_TO_APP_GESTURE_TOLERENCE) {
+                    if ((time - mLastLockToAppLongPress) < LOCK_TO_APP_GESTURE_TOLERANCE) {
                         stopLockTaskMode = true;
                         return true;
                     } else if (v.getId() == btnId1) {
@@ -1313,6 +1351,7 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
     }
 
     private void onAccessibilityClick(View v) {
+        mNavBarButtonClickLogger.logAccessibilityButtonClick();
         final Display display = v.getDisplay();
         mAccessibilityManager.notifyAccessibilityButtonClicked(
                 display != null ? display.getDisplayId() : mDisplayTracker.getDefaultDisplayId());
@@ -1473,8 +1512,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         int insetsHeight = -1;
         int gravity = Gravity.BOTTOM;
         boolean navBarCanMove = true;
-        boolean IsHideIMESpaceEnabled = Settings.System.getIntForUser(mContext.getContentResolver(),
-                Settings.System.HIDE_IME_SPACE_ENABLE , 0, UserHandle.USER_CURRENT) != 0;
         final Context userContext = mUserContextProvider.createCurrentUserContext(mContext);
         if (mWindowManager != null && mWindowManager.getCurrentWindowMetrics() != null) {
             Rect displaySize = mWindowManager.getCurrentWindowMetrics().getBounds();
@@ -1483,13 +1520,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                     com.android.internal.R.bool.config_navBarCanMove);
         }
         if (!navBarCanMove) {
-	    if (IsHideIMESpaceEnabled && isGesturalMode(mNavBarMode)) {
-              height = userContext.getResources().getDimensionPixelSize(
-                      com.android.internal.R.dimen.navigation_bar_frame_height_hide_ime);
-            } else {
-              height = userContext.getResources().getDimensionPixelSize(
-                      com.android.internal.R.dimen.navigation_bar_frame_height);
-	   }
+            height = userContext.getResources().getDimensionPixelSize(
+                    com.android.internal.R.dimen.navigation_bar_frame_height);
             insetsHeight = userContext.getResources().getDimensionPixelSize(
                     com.android.internal.R.dimen.navigation_bar_height);
         } else {
@@ -1497,13 +1529,8 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                 case ROTATION_UNDEFINED:
                 case Surface.ROTATION_0:
                 case Surface.ROTATION_180:
-                    if (IsHideIMESpaceEnabled && isGesturalMode(mNavBarMode)) {
-                      height = userContext.getResources().getDimensionPixelSize(
-                              com.android.internal.R.dimen.navigation_bar_frame_height_hide_ime);
-                    } else {
-                      height = userContext.getResources().getDimensionPixelSize(
-                              com.android.internal.R.dimen.navigation_bar_frame_height);
-                    }
+                    height = userContext.getResources().getDimensionPixelSize(
+                            com.android.internal.R.dimen.navigation_bar_frame_height);
                     insetsHeight = userContext.getResources().getDimensionPixelSize(
                             com.android.internal.R.dimen.navigation_bar_height);
                     break;
@@ -1523,23 +1550,15 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                 width,
                 height,
                 WindowManager.LayoutParams.TYPE_NAVIGATION_BAR,
-                WindowManager.LayoutParams.FLAG_TOUCHABLE_WHEN_WAKING
-                        | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                         | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
                         | WindowManager.LayoutParams.FLAG_SLIPPERY,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = gravity;
-        if (insetsHeight != -1) {
-            lp.providedInsets = new InsetsFrameProvider[] {
-                new InsetsFrameProvider(ITYPE_NAVIGATION_BAR, Insets.of(0, 0, 0, insetsHeight))
-            };
-        } else {
-            lp.providedInsets = new InsetsFrameProvider[] {
-                    new InsetsFrameProvider(ITYPE_NAVIGATION_BAR)
-            };
-        }
+        lp.providedInsets = getInsetsFrameProvider(insetsHeight, userContext);
+
         lp.token = new Binder();
         lp.accessibilityTitle = userContext.getString(R.string.nav_bar);
         lp.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC
@@ -1550,6 +1569,58 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
         lp.setFitInsetsTypes(0 /* types */);
         lp.setTrustedOverlay();
         return lp;
+    }
+
+    private InsetsFrameProvider[] getInsetsFrameProvider(int insetsHeight, Context userContext) {
+        final InsetsFrameProvider navBarProvider =
+                new InsetsFrameProvider(mInsetsSourceOwner, 0, WindowInsets.Type.navigationBars());
+        if (!ENABLE_HIDE_IME_CAPTION_BAR) {
+            navBarProvider.setInsetsSizeOverrides(new InsetsFrameProvider.InsetsSizeOverride[] {
+                    new InsetsFrameProvider.InsetsSizeOverride(TYPE_INPUT_METHOD, null)
+            });
+        }
+        if (insetsHeight != -1 && !mEdgeBackGestureHandler.isButtonForcedVisible()) {
+            navBarProvider.setInsetsSize(Insets.of(0, 0, 0, insetsHeight));
+        }
+        final boolean needsScrim = userContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_navBarNeedsScrim);
+        navBarProvider.setFlags(needsScrim ? 0 : FLAG_SUPPRESS_SCRIM, FLAG_SUPPRESS_SCRIM);
+
+        final InsetsFrameProvider tappableElementProvider = new InsetsFrameProvider(
+                mInsetsSourceOwner, 0, WindowInsets.Type.tappableElement());
+        final boolean tapThrough = userContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_navBarTapThrough);
+        if (tapThrough) {
+            tappableElementProvider.setInsetsSize(Insets.NONE);
+        }
+
+        final int gestureHeight = userContext.getResources().getDimensionPixelSize(
+                com.android.internal.R.dimen.navigation_bar_gesture_height);
+        final boolean handlingGesture = mEdgeBackGestureHandler.isHandlingGestures();
+        final InsetsFrameProvider mandatoryGestureProvider = new InsetsFrameProvider(
+                mInsetsSourceOwner, 0, WindowInsets.Type.mandatorySystemGestures());
+        if (handlingGesture) {
+            mandatoryGestureProvider.setInsetsSize(Insets.of(0, 0, 0, gestureHeight));
+        }
+        final int gestureInsetsLeft = handlingGesture
+                ? mEdgeBackGestureHandler.getEdgeWidthLeft() : 0;
+        final int gestureInsetsRight = handlingGesture
+                ? mEdgeBackGestureHandler.getEdgeWidthRight() : 0;
+        return new InsetsFrameProvider[] {
+                navBarProvider,
+                tappableElementProvider,
+                mandatoryGestureProvider,
+                new InsetsFrameProvider(mInsetsSourceOwner, 0, WindowInsets.Type.systemGestures())
+                        .setSource(InsetsFrameProvider.SOURCE_DISPLAY)
+                        .setInsetsSize(Insets.of(gestureInsetsLeft, 0, 0, 0))
+                        .setMinimalInsetsSizeInDisplayCutoutSafe(
+                                Insets.of(gestureInsetsLeft, 0, 0, 0)),
+                new InsetsFrameProvider(mInsetsSourceOwner, 1, WindowInsets.Type.systemGestures())
+                        .setSource(InsetsFrameProvider.SOURCE_DISPLAY)
+                        .setInsetsSize(Insets.of(0, 0, gestureInsetsRight, 0))
+                        .setMinimalInsetsSizeInDisplayCutoutSafe(
+                                Insets.of(0, 0, gestureInsetsRight, 0))
+        };
     }
 
     private final UserTracker.Callback mUserChangedCallback =
@@ -1613,6 +1684,10 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
                 useNearestRegion);
         updateButtonLocation(
                 region, touchRegionCache, mView.getAccessibilityButton(), inScreenSpace,
+                useNearestRegion);
+        updateButtonLocation(region, touchRegionCache, mView.getCursorLeftButton(), inScreenSpace,
+                useNearestRegion);
+        updateButtonLocation(region, touchRegionCache, mView.getCursorRightButton(), inScreenSpace,
                 useNearestRegion);
         if (includeFloatingButtons && mView.getFloatingRotationButton().isVisible()) {
             // Note: this button is floating so the nearest region doesn't apply
@@ -1725,11 +1800,6 @@ public class NavigationBar extends ViewController<NavigationBarView> implements 
 
             setNavBarMode(mode);
             mView.setShouldShowSwipeUpUi(mOverviewProxyService.shouldShowSwipeUpUI());
-        }
-
-        @Override
-        public void onSettingsChanged() {
-            mEdgeBackGestureHandler.onSettingsChanged();
         }
     };
 

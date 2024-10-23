@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#undef LOG_TAG
-#define LOG_TAG "Minikin"
-
 #include "Font.h"
 #include "SkData.h"
 #include "SkFont.h"
 #include "SkFontMetrics.h"
 #include "SkFontMgr.h"
+#include "SkRect.h"
 #include "SkRefCnt.h"
+#include "SkScalar.h"
+#include "SkStream.h"
 #include "SkTypeface.h"
 #include "GraphicsJNI.h"
 #include <nativehelper/ScopedUtfChars.h>
@@ -37,6 +37,7 @@
 #include <minikin/LocaleList.h>
 #include <minikin/SystemFonts.h>
 #include <ui/FatVector.h>
+#include <utils/TypefaceUtils.h>
 
 #include <memory>
 
@@ -124,7 +125,7 @@ static jlong Font_Builder_build(JNIEnv* env, jobject clazz, jlong builderPtr, jo
 static jlong Font_Builder_clone(JNIEnv* env, jobject clazz, jlong fontPtr, jlong builderPtr,
                                 jint weight, jboolean italic, jint ttcIndex) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
-    MinikinFontSkia* minikinSkia = static_cast<MinikinFontSkia*>(font->font->typeface().get());
+    MinikinFontSkia* minikinSkia = static_cast<MinikinFontSkia*>(font->font->baseTypeface().get());
     std::unique_ptr<NativeFontBuilder> builder(toBuilder(builderPtr));
 
     // Reconstruct SkTypeface with different arguments from existing SkTypeface.
@@ -156,7 +157,7 @@ static jlong Font_Builder_clone(JNIEnv* env, jobject clazz, jlong fontPtr, jlong
 static jfloat Font_getGlyphBounds(JNIEnv* env, jobject, jlong fontHandle, jint glyphId,
                                   jlong paintHandle, jobject rect) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontHandle);
-    MinikinFontSkia* minikinSkia = static_cast<MinikinFontSkia*>(font->font->typeface().get());
+    MinikinFontSkia* minikinSkia = static_cast<MinikinFontSkia*>(font->font->baseTypeface().get());
     Paint* paint = reinterpret_cast<Paint*>(paintHandle);
 
     SkFont* skFont = &paint->getSkFont();
@@ -176,7 +177,7 @@ static jfloat Font_getGlyphBounds(JNIEnv* env, jobject, jlong fontHandle, jint g
 static jfloat Font_getFontMetrics(JNIEnv* env, jobject, jlong fontHandle, jlong paintHandle,
                                   jobject metricsObj) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontHandle);
-    MinikinFontSkia* minikinSkia = static_cast<MinikinFontSkia*>(font->font->typeface().get());
+    MinikinFontSkia* minikinSkia = static_cast<MinikinFontSkia*>(font->font->baseTypeface().get());
     Paint* paint = reinterpret_cast<Paint*>(paintHandle);
 
     SkFont* skFont = &paint->getSkFont();
@@ -206,7 +207,7 @@ static jlong Font_cloneFont(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr) {
 // Fast Native
 static jobject Font_newByteBuffer(JNIEnv* env, jobject, jlong fontPtr) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
-    const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->typeface();
+    const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->baseTypeface();
     return env->NewDirectByteBuffer(const_cast<void*>(minikinFont->GetFontData()),
                                     minikinFont->GetFontSize());
 }
@@ -214,7 +215,7 @@ static jobject Font_newByteBuffer(JNIEnv* env, jobject, jlong fontPtr) {
 // Critical Native
 static jlong Font_getBufferAddress(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
-    return reinterpret_cast<jlong>(font->font->typeface()->GetFontData());
+    return reinterpret_cast<jlong>(font->font->baseTypeface()->GetFontData());
 }
 
 // Critical Native
@@ -226,14 +227,14 @@ static jlong Font_getReleaseNativeFontFunc(CRITICAL_JNI_PARAMS) {
 static jstring Font_getFontPath(JNIEnv* env, jobject, jlong fontPtr) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
     minikin::BufferReader reader = font->font->typefaceMetadataReader();
-    if (reader.data() != nullptr) {
+    if (reader.current() != nullptr) {
         std::string path = std::string(reader.readString());
         if (path.empty()) {
             return nullptr;
         }
         return env->NewStringUTF(path.c_str());
     } else {
-        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->typeface();
+        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->baseTypeface();
         const std::string& path = minikinFont->GetFontPath();
         if (path.empty()) {
             return nullptr;
@@ -268,11 +269,11 @@ static jint Font_getPackedStyle(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr) {
 static jint Font_getIndex(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
     minikin::BufferReader reader = font->font->typefaceMetadataReader();
-    if (reader.data() != nullptr) {
+    if (reader.current() != nullptr) {
         reader.skipString();  // fontPath
         return reader.read<int>();
     } else {
-        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->typeface();
+        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->baseTypeface();
         return minikinFont->GetFontIndex();
     }
 }
@@ -281,12 +282,12 @@ static jint Font_getIndex(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr) {
 static jint Font_getAxisCount(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
     minikin::BufferReader reader = font->font->typefaceMetadataReader();
-    if (reader.data() != nullptr) {
+    if (reader.current() != nullptr) {
         reader.skipString();  // fontPath
         reader.skip<int>();   // fontIndex
         return reader.readArray<minikin::FontVariation>().second;
     } else {
-        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->typeface();
+        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->baseTypeface();
         return minikinFont->GetAxes().size();
     }
 }
@@ -296,12 +297,12 @@ static jlong Font_getAxisInfo(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr, jint inde
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
     minikin::BufferReader reader = font->font->typefaceMetadataReader();
     minikin::FontVariation var;
-    if (reader.data() != nullptr) {
+    if (reader.current() != nullptr) {
         reader.skipString();  // fontPath
         reader.skip<int>();   // fontIndex
         var = reader.readArray<minikin::FontVariation>().first[index];
     } else {
-        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->typeface();
+        const std::shared_ptr<minikin::MinikinFont>& minikinFont = font->font->baseTypeface();
         var = minikinFont->GetAxes().at(index);
     }
     uint32_t floatBinary = *reinterpret_cast<const uint32_t*>(&var.value);
@@ -311,7 +312,7 @@ static jlong Font_getAxisInfo(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr, jint inde
 // Critical Native
 static jint Font_getSourceId(CRITICAL_JNI_PARAMS_COMMA jlong fontPtr) {
     FontWrapper* font = reinterpret_cast<FontWrapper*>(fontPtr);
-    return font->font->typeface()->GetSourceId();
+    return font->font->baseTypeface()->GetSourceId();
 }
 
 static jlongArray Font_getAvailableFontSet(JNIEnv* env, jobject) {
@@ -459,7 +460,7 @@ std::shared_ptr<minikin::MinikinFont> createMinikinFontSkia(
     args.setCollectionIndex(ttcIndex);
     args.setVariationDesignPosition({skVariation.data(), static_cast<int>(skVariation.size())});
 
-    sk_sp<SkFontMgr> fm(SkFontMgr::RefDefault());
+    sk_sp<SkFontMgr> fm = android::FreeTypeFontMgr();
     sk_sp<SkTypeface> face(fm->makeFromStream(std::move(fontData), args));
     if (face == nullptr) {
         return nullptr;

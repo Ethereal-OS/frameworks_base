@@ -16,6 +16,8 @@
 
 package com.android.systemui.keyguard;
 
+import static com.android.systemui.flags.Flags.KEYGUARD_TALKBACK_FIX;
+
 import android.annotation.Nullable;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -23,10 +25,12 @@ import android.os.SystemClock;
 import android.text.TextUtils;
 
 import androidx.annotation.IntDef;
+import androidx.annotation.VisibleForTesting;
 
 import com.android.keyguard.logging.KeyguardLogger;
 import com.android.systemui.Dumpable;
 import com.android.systemui.dagger.qualifiers.Main;
+import com.android.systemui.flags.FeatureFlags;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.statusbar.KeyguardIndicationController;
 import com.android.systemui.statusbar.phone.KeyguardIndicationTextView;
@@ -36,8 +40,8 @@ import com.android.systemui.util.concurrency.DelayableExecutor;
 import java.io.PrintWriter;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -74,10 +78,13 @@ public class KeyguardIndicationRotateTextViewController extends
 
     // Executor that will show the next message after a delay
     private final DelayableExecutor mExecutor;
-    @Nullable private ShowNextIndication mShowNextIndicationRunnable;
+    private final FeatureFlags mFeatureFlags;
+
+    @VisibleForTesting
+    @Nullable ShowNextIndication mShowNextIndicationRunnable;
 
     // List of indication types to show. The next indication to show is always at index 0
-    private final List<Integer> mIndicationQueue = new LinkedList<>();
+    private final List<Integer> mIndicationQueue = new ArrayList<>();
     private @IndicationType int mCurrIndicationType = INDICATION_TYPE_NONE;
     private CharSequence mCurrMessage;
     private long mLastIndicationSwitch;
@@ -88,7 +95,8 @@ public class KeyguardIndicationRotateTextViewController extends
             KeyguardIndicationTextView view,
             @Main DelayableExecutor executor,
             StatusBarStateController statusBarStateController,
-            KeyguardLogger logger
+            KeyguardLogger logger,
+            FeatureFlags flags
     ) {
         super(view);
         mMaxAlpha = view.getAlpha();
@@ -97,18 +105,26 @@ public class KeyguardIndicationRotateTextViewController extends
                 ? mView.getTextColors() : ColorStateList.valueOf(Color.WHITE);
         mStatusBarStateController = statusBarStateController;
         mLogger = logger;
+        mFeatureFlags = flags;
         init();
     }
 
     @Override
     protected void onViewAttached() {
         mStatusBarStateController.addCallback(mStatusBarStateListener);
+        mView.setAlwaysAnnounceEnabled(mFeatureFlags.isEnabled(KEYGUARD_TALKBACK_FIX));
     }
 
     @Override
     protected void onViewDetached() {
         mStatusBarStateController.removeCallback(mStatusBarStateListener);
         cancelScheduledIndication();
+    }
+
+    /** Destroy ViewController, removing any listeners. */
+    public void destroy() {
+        super.destroy();
+        onViewDetached();
     }
 
     /**
@@ -148,10 +164,10 @@ public class KeyguardIndicationRotateTextViewController extends
         boolean currMsgShownForMinTime = timeSinceLastIndicationSwitch >= minShowDuration;
         if (hasNewIndication) {
             if (mCurrIndicationType == INDICATION_TYPE_NONE || mCurrIndicationType == type) {
-                showIndication(type, showAsap);
+                showIndication(type);
             } else if (showAsap) {
                 if (currMsgShownForMinTime) {
-                    showIndication(type, showAsap);
+                    showIndication(type);
                 } else {
                     mIndicationQueue.removeIf(x -> x == type);
                     mIndicationQueue.add(0 /* index */, type /* type */);
@@ -162,7 +178,7 @@ public class KeyguardIndicationRotateTextViewController extends
                         getMinVisibilityMillis(mIndicationMessages.get(type)),
                         DEFAULT_INDICATION_SHOW_LENGTH);
                 if (timeSinceLastIndicationSwitch >= nextShowTime) {
-                    showIndication(type, showAsap);
+                    showIndication(type);
                 } else {
                     scheduleShowNextIndication(
                             nextShowTime - timeSinceLastIndicationSwitch);
@@ -179,7 +195,7 @@ public class KeyguardIndicationRotateTextViewController extends
                 if (mShowNextIndicationRunnable != null) {
                     mShowNextIndicationRunnable.runImmediately();
                 } else {
-                    showIndication(INDICATION_TYPE_NONE, true);
+                    showIndication(INDICATION_TYPE_NONE);
                 }
             } else {
                 scheduleShowNextIndication(minShowDuration - timeSinceLastIndicationSwitch);
@@ -245,7 +261,7 @@ public class KeyguardIndicationRotateTextViewController extends
      * Will re-add this indication to be re-shown after all other indications have been
      * rotated through.
      */
-    private void showIndication(@IndicationType int type, boolean showAsap) {
+    private void showIndication(@IndicationType int type) {
         cancelScheduledIndication();
 
         final CharSequence previousMessage = mCurrMessage;
@@ -265,7 +281,7 @@ public class KeyguardIndicationRotateTextViewController extends
                 || previousIndicationType != mCurrIndicationType) {
             mLogger.logKeyguardSwitchIndication(type,
                     mCurrMessage != null ? mCurrMessage.toString() : null);
-            mView.switchIndication(mIndicationMessages.get(type), showAsap);
+            mView.switchIndication(mIndicationMessages.get(type));
         }
 
         // only schedule next indication if there's more than just this indication in the queue
@@ -317,9 +333,9 @@ public class KeyguardIndicationRotateTextViewController extends
                     if (isDozing == mIsDozing) return;
                     mIsDozing = isDozing;
                     if (mIsDozing) {
-                        showIndication(INDICATION_TYPE_NONE, true);
+                        showIndication(INDICATION_TYPE_NONE);
                     } else if (mIndicationQueue.size() > 0) {
-                        showIndication(mIndicationQueue.remove(0), true);
+                        showIndication(mIndicationQueue.get(0));
                     }
                 }
             };
@@ -337,7 +353,7 @@ public class KeyguardIndicationRotateTextViewController extends
             mShowIndicationRunnable = () -> {
                 int type = mIndicationQueue.size() == 0
                         ? INDICATION_TYPE_NONE : mIndicationQueue.get(0);
-                showIndication(type, true);
+                showIndication(type);
             };
             mCancelDelayedRunnable = mExecutor.executeDelayed(mShowIndicationRunnable, delay);
         }
@@ -387,6 +403,8 @@ public class KeyguardIndicationRotateTextViewController extends
     public static final int INDICATION_TYPE_REVERSE_CHARGING = 10;
     public static final int INDICATION_TYPE_BIOMETRIC_MESSAGE = 11;
     public static final int INDICATION_TYPE_BIOMETRIC_MESSAGE_FOLLOW_UP = 12;
+    public static final int INDICATION_IS_DISMISSIBLE = 13;
+    public static final int INDICATION_TYPE_ADAPTIVE_AUTH = 14;
 
     @IntDef({
             INDICATION_TYPE_NONE,
@@ -401,7 +419,9 @@ public class KeyguardIndicationRotateTextViewController extends
             INDICATION_TYPE_USER_LOCKED,
             INDICATION_TYPE_REVERSE_CHARGING,
             INDICATION_TYPE_BIOMETRIC_MESSAGE,
-            INDICATION_TYPE_BIOMETRIC_MESSAGE_FOLLOW_UP
+            INDICATION_TYPE_BIOMETRIC_MESSAGE_FOLLOW_UP,
+            INDICATION_IS_DISMISSIBLE,
+            INDICATION_TYPE_ADAPTIVE_AUTH
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface IndicationType{}
@@ -437,6 +457,8 @@ public class KeyguardIndicationRotateTextViewController extends
                 return "biometric_message";
             case INDICATION_TYPE_BIOMETRIC_MESSAGE_FOLLOW_UP:
                 return "biometric_message_followup";
+            case INDICATION_TYPE_ADAPTIVE_AUTH:
+                return "adaptive_auth";
             default:
                 return "unknown[" + type + "]";
         }

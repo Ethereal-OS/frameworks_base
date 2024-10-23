@@ -17,23 +17,26 @@
 
 package android.companion;
 
+import android.annotation.FlaggedApi;
 import android.annotation.MainThread;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.TestApi;
 import android.app.Service;
+import android.bluetooth.BluetoothSocket;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.IBinder;
 import android.util.Log;
 
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Objects;
+import java.util.concurrent.Executor;
 
 /**
- * A service that receives calls from the system when the associated companion device appears
- * nearby or is connected, as well as when the device is no longer "present" or connected.
- * See {@link #onDeviceAppeared(AssociationInfo)}/{@link #onDeviceDisappeared(AssociationInfo)}.
+ * A service that receives calls from the system with device events.
  *
  * <p>
  * Companion applications must create a service that {@code extends}
@@ -95,7 +98,7 @@ import java.util.Objects;
  */
 public abstract class CompanionDeviceService extends Service {
 
-    private static final String LOG_TAG = "CompanionDeviceService";
+    private static final String LOG_TAG = "CDM_CompanionDeviceService";
 
     /**
      * An intent action for a service to be bound whenever this app's companion device(s)
@@ -116,6 +119,7 @@ public abstract class CompanionDeviceService extends Service {
      * {@link android.Manifest.permission#BIND_COMPANION_DEVICE_SERVICE}</p>
      */
     public static final String SERVICE_INTERFACE = "android.companion.CompanionDeviceService";
+
 
     private final Stub mRemote = new Stub();
 
@@ -152,11 +156,12 @@ public abstract class CompanionDeviceService extends Service {
      * @param messageId system assigned id of the message to be sent
      * @param associationId association id of the associated device
      * @param message message to be sent
-     *
      * @hide
      */
-    @MainThread
-    public void onDispatchMessage(int messageId, int associationId, @NonNull byte[] message) {
+    @Deprecated
+    public void onMessageDispatchedFromSystem(int messageId, int associationId,
+            @NonNull byte[] message) {
+        Log.w(LOG_TAG, "Replaced by attachSystemDataTransport");
         // do nothing. Companion apps can override this function for system to send messages.
     }
 
@@ -167,19 +172,82 @@ public abstract class CompanionDeviceService extends Service {
      * <p>Calling app must declare uses-permission
      * {@link android.Manifest.permission#DELIVER_COMPANION_MESSAGES}</p>
      *
+     * <p>You need to start the service before calling this method, otherwise the system can't
+     * get the context and the dispatch would fail.</p>
+     *
+     * <p>Note 1: messageId was assigned by the system, and sender should send the messageId along
+     * with the message to the receiver. messageId will later be used for verification purpose.
+     * Misusing the messageId will result in no action.</p>
+     *
+     * <p>Note 2: associationId should be local to your device which is calling this API. It's not
+     * the associationId on your remote device. If you don't have one, you can call
+     * {@link CompanionDeviceManager#associate(AssociationRequest, Executor,
+     * CompanionDeviceManager.Callback)} to create one. Misusing the associationId will result in
+     * {@link DeviceNotAssociatedException}.</p>
+     *
      * @param messageId id of the message
      * @param associationId id of the associated device
-     * @param message messaged received from the associated device
-     *
+     * @param message message received from the associated device
      * @hide
      */
+    @Deprecated
     @RequiresPermission(android.Manifest.permission.DELIVER_COMPANION_MESSAGES)
-    public final void dispatchMessage(int messageId, int associationId, @NonNull byte[] message) {
-        CompanionDeviceManager companionDeviceManager =
-                getSystemService(CompanionDeviceManager.class);
-        companionDeviceManager.dispatchMessage(messageId, associationId, message);
+    public final void dispatchMessageToSystem(int messageId, int associationId,
+            @NonNull byte[] message)
+            throws DeviceNotAssociatedException {
+        Log.w(LOG_TAG, "Replaced by attachSystemDataTransport");
     }
 
+    /**
+     * Attach the given bidirectional communication streams to be used for
+     * transporting system data between associated devices.
+     * <p>
+     * The companion service providing these streams is responsible for ensuring
+     * that all data is transported accurately and in-order between the two
+     * devices, including any fragmentation and re-assembly when carried over a
+     * size-limited transport.
+     * <p>
+     * As an example, it's valid to provide streams obtained from a
+     * {@link BluetoothSocket} to this method, since {@link BluetoothSocket}
+     * meets the API contract described above.
+     * <p>
+     * This method passes through to
+     * {@link CompanionDeviceManager#attachSystemDataTransport(int, InputStream, OutputStream)}
+     * for your convenience if you get callbacks in this class.
+     *
+     * @param associationId id of the associated device
+     * @param in already connected stream of data incoming from remote
+     *            associated device
+     * @param out already connected stream of data outgoing to remote associated
+     *            device
+     */
+    @RequiresPermission(android.Manifest.permission.DELIVER_COMPANION_MESSAGES)
+    public final void attachSystemDataTransport(int associationId, @NonNull InputStream in,
+            @NonNull OutputStream out) throws DeviceNotAssociatedException {
+        getSystemService(CompanionDeviceManager.class)
+                .attachSystemDataTransport(associationId,
+                        Objects.requireNonNull(in),
+                        Objects.requireNonNull(out));
+    }
+
+    /**
+     * Detach any bidirectional communication streams previously configured
+     * through {@link #attachSystemDataTransport}.
+     * <p>
+     * This method passes through to
+     * {@link CompanionDeviceManager#detachSystemDataTransport(int)}
+     * for your convenience if you get callbacks in this class.
+     *
+     * @param associationId id of the associated device
+     */
+    @RequiresPermission(android.Manifest.permission.DELIVER_COMPANION_MESSAGES)
+    public final void detachSystemDataTransport(int associationId)
+            throws DeviceNotAssociatedException {
+        getSystemService(CompanionDeviceManager.class)
+                .detachSystemDataTransport(associationId);
+    }
+
+    // TODO(b/315163162) Add @Deprecated keyword after 24Q2 cut.
     /**
      * Called by system whenever a device associated with this app is connected.
      *
@@ -192,6 +260,7 @@ public abstract class CompanionDeviceService extends Service {
         }
     }
 
+    // TODO(b/315163162) Add @Deprecated keyword after 24Q2 cut.
     /**
      * Called by system whenever a device associated with this app is disconnected.
      *
@@ -202,6 +271,17 @@ public abstract class CompanionDeviceService extends Service {
         if (!associationInfo.isSelfManaged()) {
             onDeviceDisappeared(associationInfo.getDeviceMacAddressAsString());
         }
+    }
+
+    /**
+     * Called by the system during device events.
+     *
+     * @see CompanionDeviceManager#startObservingDevicePresence(ObservingDevicePresenceRequest)
+     */
+    @FlaggedApi(Flags.FLAG_DEVICE_PRESENCE)
+    @MainThread
+    public void onDevicePresenceEvent(@NonNull DevicePresenceEvent event) {
+        // Do nothing. Companion apps can override this function.
     }
 
     @Nullable
@@ -239,9 +319,10 @@ public abstract class CompanionDeviceService extends Service {
         }
 
         @Override
-        public void onDispatchMessage(int messageId, int associationId, @NonNull byte[] message) {
-            mMainHandler.postAtFrontOfQueue(
-                    () -> mService.onDispatchMessage(messageId, associationId, message));
+        public void onDevicePresenceEvent(DevicePresenceEvent event) {
+            if (Flags.devicePresence()) {
+                mMainHandler.postAtFrontOfQueue(() -> mService.onDevicePresenceEvent(event));
+            }
         }
     }
 }

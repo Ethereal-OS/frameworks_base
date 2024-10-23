@@ -22,26 +22,19 @@ import android.annotation.Nullable;
 import android.app.ActivityTaskManager;
 import android.app.AlarmManager;
 import android.app.AlarmManager.AlarmClockInfo;
+import android.app.NotificationManager;
 import android.app.admin.DevicePolicyManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.media.AudioManager;
-import android.net.ConnectivityManager;
-import android.net.INetworkPolicyListener;
-import android.net.Network;
-import android.net.NetworkCapabilities;
-import android.net.NetworkPolicyManager;
 import android.nfc.NfcAdapter;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.RemoteException;
-import android.os.ServiceManager;
 import android.os.UserManager;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -53,15 +46,16 @@ import android.util.ArraySet;
 import android.util.Log;
 import android.view.View;
 
-import androidx.annotation.NonNull;
 import androidx.lifecycle.Observer;
 
 import com.android.systemui.Dependency;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
+import com.android.systemui.Dependency;
 import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.dagger.qualifiers.DisplayId;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.dagger.qualifiers.UiBackground;
+import com.android.systemui.display.domain.interactor.ConnectedDisplayInteractor;
 import com.android.systemui.qs.tiles.DndTile;
 import com.android.systemui.qs.tiles.RotationLockTile;
 import com.android.systemui.screenrecord.RecordingController;
@@ -84,6 +78,7 @@ import com.android.systemui.statusbar.policy.UserInfoController;
 import com.android.systemui.statusbar.policy.ZenModeController;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.util.RingerModeTracker;
+import com.android.systemui.util.kotlin.JavaAdapter;
 import com.android.systemui.util.time.DateFormatUtil;
 
 import java.io.PrintWriter;
@@ -111,10 +106,10 @@ public class PhoneStatusBarPolicy
     private static final String TAG = "PhoneStatusBarPolicy";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
-    private static final String BLUETOOTH_SHOW_BATTERY =
-            "system:" + Settings.System.BLUETOOTH_SHOW_BATTERY;
     private static final String NETWORK_TRAFFIC_LOCATION =
             "system:" + Settings.System.NETWORK_TRAFFIC_LOCATION;
+    private static final String BLUETOOTH_SHOW_BATTERY =
+            "system:" + Settings.System.BLUETOOTH_SHOW_BATTERY;
 
     private final String mSlotCast;
     private final String mSlotHotspot;
@@ -130,12 +125,14 @@ public class PhoneStatusBarPolicy
     private final String mSlotDataSaver;
     private final String mSlotSensorsOff;
     private final String mSlotScreenRecord;
+    private final String mSlotConnectedDisplay;
     private final String mSlotNfc;
     private final String mSlotNetworkTraffic;
-    private final String mSlotFirewall;
     private final int mDisplayId;
     private final SharedPreferences mSharedPreferences;
     private final DateFormatUtil mDateFormatUtil;
+    private final JavaAdapter mJavaAdapter;
+    private final ConnectedDisplayInteractor mConnectedDisplayInteractor;
     private final TelecomManager mTelecomManager;
 
     private final Handler mHandler;
@@ -161,18 +158,13 @@ public class PhoneStatusBarPolicy
     private final SensorPrivacyController mSensorPrivacyController;
     private final RecordingController mRecordingController;
     private final RingerModeTracker mRingerModeTracker;
-    private final ConnectivityManager mConnectivityManager;
-    private final NetworkPolicyManager mNetworkPolicyManager;
 
     private boolean mZenVisible;
     private boolean mVibrateVisible;
     private boolean mMuteVisible;
     private boolean mCurrentUserSetup;
 
-    private boolean mManagedProfileIconVisible = false;
-    private boolean mFirewallVisible = false;
-
-    private int mLastResumedActivityUid = -1;
+    private boolean mProfileIconVisible = false;
 
     private BluetoothController mBluetooth;
     private AlarmManager.AlarmClockInfo mNextAlarm;
@@ -180,10 +172,10 @@ public class PhoneStatusBarPolicy
     private NfcAdapter mAdapter;
     private final Context mContext;
 
-    private boolean mShowBluetoothBattery;
-    private boolean mHideBluetooth;
 
     private boolean mShowNetworkTraffic;
+    private boolean mShowBluetoothBattery;
+    private boolean mHideBluetooth;
 
     @Inject
     public PhoneStatusBarPolicy(Context context, StatusBarIconController iconController,
@@ -201,10 +193,14 @@ public class PhoneStatusBarPolicy
             DevicePolicyManager devicePolicyManager, RecordingController recordingController,
             @Nullable TelecomManager telecomManager, @DisplayId int displayId,
             @Main SharedPreferences sharedPreferences, DateFormatUtil dateFormatUtil,
-            RingerModeTracker ringerModeTracker) {
+            RingerModeTracker ringerModeTracker,
+            ConnectedDisplayInteractor connectedDisplayInteractor,
+            JavaAdapter javaAdapter
+    ) {
         mContext = context;
         mIconController = iconController;
         mCommandQueue = commandQueue;
+        mConnectedDisplayInteractor = connectedDisplayInteractor;
         mBroadcastDispatcher = broadcastDispatcher;
         mHandler = new Handler(looper);
         mResources = resources;
@@ -228,10 +224,11 @@ public class PhoneStatusBarPolicy
         mUiBgExecutor = uiBgExecutor;
         mTelecomManager = telecomManager;
         mRingerModeTracker = ringerModeTracker;
-        mConnectivityManager = context.getSystemService(ConnectivityManager.class);
-        mNetworkPolicyManager = context.getSystemService(NetworkPolicyManager.class);
+        mJavaAdapter = javaAdapter;
 
         mSlotCast = resources.getString(com.android.internal.R.string.status_bar_cast);
+        mSlotConnectedDisplay = resources.getString(
+                com.android.internal.R.string.status_bar_connected_display);
         mSlotHotspot = resources.getString(com.android.internal.R.string.status_bar_hotspot);
         mSlotBluetooth = resources.getString(com.android.internal.R.string.status_bar_bluetooth);
         mSlotTty = resources.getString(com.android.internal.R.string.status_bar_tty);
@@ -249,7 +246,6 @@ public class PhoneStatusBarPolicy
                 com.android.internal.R.string.status_bar_screen_record);
         mSlotNfc = resources.getString(com.android.internal.R.string.status_bar_nfc);
         mSlotNetworkTraffic = resources.getString(com.android.internal.R.string.status_bar_network_traffic);
-        mSlotFirewall = resources.getString(com.android.internal.R.string.status_bar_firewall);
         mCurrentUserSetup = mProvisionedController.isDeviceProvisioned();
 
         mDisplayId = displayId;
@@ -257,8 +253,8 @@ public class PhoneStatusBarPolicy
         mDateFormatUtil = dateFormatUtil;
 
         Dependency.get(TunerService.class).addTunable(this,
-                BLUETOOTH_SHOW_BATTERY,
                 NETWORK_TRAFFIC_LOCATION,
+                BLUETOOTH_SHOW_BATTERY,
                 StatusBarIconController.ICON_HIDE_LIST);
     }
 
@@ -272,7 +268,9 @@ public class PhoneStatusBarPolicy
         filter.addAction(TelecomManager.ACTION_CURRENT_TTY_MODE_CHANGED);
         filter.addAction(Intent.ACTION_MANAGED_PROFILE_AVAILABLE);
         filter.addAction(Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE);
-        filter.addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED);
+        filter.addAction(Intent.ACTION_PROFILE_REMOVED);
+        filter.addAction(Intent.ACTION_PROFILE_ACCESSIBLE);
+        filter.addAction(Intent.ACTION_PROFILE_INACCESSIBLE);
         filter.addAction(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED);
         mBroadcastDispatcher.registerReceiverWithHandler(mIntentReceiver, filter, mHandler);
         Observer<Integer> observer = ringer -> mHandler.post(this::updateVolumeZen);
@@ -282,8 +280,6 @@ public class PhoneStatusBarPolicy
 
         // listen for user / profile change.
         mUserTracker.addCallback(mUserSwitchListener, mMainExecutor);
-
-        mNetworkPolicyManager.registerListener(mNetworkPolicyListener);
 
         // TTY status
         updateTTY();
@@ -313,13 +309,18 @@ public class PhoneStatusBarPolicy
         mIconController.setIcon(mSlotCast, R.drawable.stat_sys_cast, null);
         mIconController.setIconVisibility(mSlotCast, false);
 
+        // connected display
+        mIconController.setIcon(mSlotConnectedDisplay, R.drawable.stat_sys_connected_display,
+                mResources.getString(R.string.connected_display_icon_desc));
+        mIconController.setIconVisibility(mSlotConnectedDisplay, false);
+
         // hotspot
         mIconController.setIcon(mSlotHotspot, R.drawable.stat_sys_hotspot,
                 mResources.getString(R.string.accessibility_status_bar_hotspot));
         mIconController.setIconVisibility(mSlotHotspot, mHotspot.isHotspotEnabled());
 
-        // managed profile
-        updateManagedProfile();
+        // profile
+        updateProfileIcon();
 
         // data saver
         mIconController.setIcon(mSlotDataSaver, R.drawable.stat_sys_data_saver,
@@ -348,10 +349,6 @@ public class PhoneStatusBarPolicy
             NETWORK_TRAFFIC_LOCATION, 0, UserHandle.USER_CURRENT) == 1;
         updateNetworkTraffic();
 
-        // firewall
-        mIconController.setIcon(mSlotFirewall, R.drawable.stat_sys_firewall, null);
-        mIconController.setIconVisibility(mSlotFirewall, mFirewallVisible);
-
         mRotationLockController.addCallback(this);
         mBluetooth.addCallback(this);
         mProvisionedController.addCallback(this);
@@ -364,11 +361,10 @@ public class PhoneStatusBarPolicy
         mKeyguardStateController.addCallback(this);
         mSensorPrivacyController.addCallback(mSensorPrivacyListener);
         mRecordingController.addCallback(this);
+        mJavaAdapter.alwaysCollectFlow(mConnectedDisplayInteractor.getConnectedDisplayState(),
+                this::onConnectedDisplayAvailabilityChanged);
 
         mCommandQueue.addCallback(this);
-
-        // Get initial user setup state
-        onUserSetupChanged();
     }
 
     private String getManagedProfileAccessibilityString() {
@@ -383,22 +379,21 @@ public class PhoneStatusBarPolicy
     }
 
     @Override
-    public void onConfigChanged(ZenModeConfig config) {
+    public void onConsolidatedPolicyChanged(NotificationManager.Policy policy) {
         updateVolumeZen();
     }
 
     @Override
     public void onTuningChanged(String key, String newValue) {
         switch (key) {
-            case BLUETOOTH_SHOW_BATTERY:
-                mShowBluetoothBattery =
-                        TunerService.parseIntegerSwitch(newValue, true);
-                updateBluetooth();
-                break;
             case NETWORK_TRAFFIC_LOCATION:
                 mShowNetworkTraffic =
                         TunerService.parseInteger(newValue, 0) == 1;
                 updateNetworkTraffic();
+            case BLUETOOTH_SHOW_BATTERY:
+                mShowBluetoothBattery =
+                        TunerService.parseIntegerSwitch(newValue, true);
+                updateBluetooth();
                 break;
             case StatusBarIconController.ICON_HIDE_LIST:
                 ArraySet<String> hideList = StatusBarIconController.getIconHideList(mContext, newValue);
@@ -438,7 +433,7 @@ public class PhoneStatusBarPolicy
     private NfcAdapter getAdapter() {
         if (mAdapter == null) {
             try {
-                mAdapter = NfcAdapter.getNfcAdapter(mContext);
+                mAdapter = NfcAdapter.getDefaultAdapter(mContext);
             } catch (UnsupportedOperationException e) {
                 mAdapter = null;
             }
@@ -521,11 +516,15 @@ public class PhoneStatusBarPolicy
                 mResources.getString(R.string.accessibility_quick_settings_bluetooth_on);
         boolean bluetoothVisible = false;
         int batteryLevel = -1;
-        if (mBluetooth != null && mBluetooth.isBluetoothConnected()) {
-            bluetoothVisible = mBluetooth.isBluetoothEnabled();
-            batteryLevel = mShowBluetoothBattery ? mBluetooth.getBatteryLevel() : -1;
-            contentDescription = mResources.getString(
-                    R.string.accessibility_bluetooth_connected);
+        if (mBluetooth != null) {
+            if (mBluetooth.isBluetoothConnected()
+                    && (mBluetooth.isBluetoothAudioActive()
+                    || !mBluetooth.isBluetoothAudioProfileOnly())) {
+                bluetoothVisible = mBluetooth.isBluetoothEnabled();
+                batteryLevel = mShowBluetoothBattery ? mBluetooth.getBatteryLevel() : -1;
+                contentDescription = mResources.getString(
+                        R.string.accessibility_bluetooth_connected);
+            }
         }
 
         mIconController.setBluetoothIcon(mSlotBluetooth,
@@ -586,103 +585,37 @@ public class PhoneStatusBarPolicy
         }
     }
 
-    private void updateManagedProfile() {
+    private void updateProfileIcon() {
         // getLastResumedActivityUserId needs to acquire the AM lock, which may be contended in
         // some cases. Since it doesn't really matter here whether it's updated in this frame
         // or in the next one, we call this method from our UI offload thread.
         mUiBgExecutor.execute(() -> {
-            final int userId;
             try {
-                userId = ActivityTaskManager.getService().getLastResumedActivityUserId();
-                boolean isManagedProfile = mUserManager.isManagedProfile(userId);
+                final int userId = ActivityTaskManager.getService().getLastResumedActivityUserId();
+                final int iconResId = mUserManager.getUserStatusBarIconResId(userId);
+                // TODO(b/170249807, b/230779281): Handle non-managed-profile String
                 String accessibilityString = getManagedProfileAccessibilityString();
-                mHandler.post(() -> {
+                mMainExecutor.execute(() -> {
                     final boolean showIcon;
-                    if (isManagedProfile && (!mKeyguardStateController.isShowing()
+                    if (iconResId != Resources.ID_NULL && (!mKeyguardStateController.isShowing()
                             || mKeyguardStateController.isOccluded())) {
                         showIcon = true;
                         mIconController.setIcon(mSlotManagedProfile,
-                                R.drawable.stat_sys_managed_profile_status,
+                                iconResId,
                                 accessibilityString);
                     } else {
                         showIcon = false;
                     }
-                    if (mManagedProfileIconVisible != showIcon) {
+                    if (mProfileIconVisible != showIcon) {
                         mIconController.setIconVisibility(mSlotManagedProfile, showIcon);
-                        mManagedProfileIconVisible = showIcon;
+                        mProfileIconVisible = showIcon;
                     }
                 });
             } catch (RemoteException e) {
-                Log.w(TAG, "updateManagedProfile: ", e);
+                Log.w(TAG, "updateProfileIcon: ", e);
             }
         });
     }
-
-    private void updateFirewall() {
-        mUiBgExecutor.execute(() -> {
-            try {
-                final int uid = ActivityTaskManager.getService().getLastResumedActivityUid();
-                if (mLastResumedActivityUid != uid) {
-                    mLastResumedActivityUid = uid;
-                    try {
-                        mConnectivityManager.unregisterNetworkCallback(mNetworkCallback);
-                        mConnectivityManager.registerDefaultNetworkCallbackForUid(uid,
-                                mNetworkCallback, mHandler);
-                    } catch (Exception e) {
-                        // Ignore
-                    }
-                }
-                final boolean isRestricted =
-                        mNetworkPolicyManager.isUidNetworkingBlocked(uid, false /*meteredNetwork*/);
-                boolean isLauncher = false;
-                List<ResolveInfo> homeActivities =
-                        mContext.getPackageManager().queryIntentActivitiesAsUser(
-                                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-                                        .addCategory(Intent.CATEGORY_DEFAULT),
-                                PackageManager.ResolveInfoFlags.of(0), UserHandle.getUserId(uid));
-                for (ResolveInfo homeActivity : homeActivities) {
-                    if (uid == homeActivity.activityInfo.applicationInfo.uid) {
-                        isLauncher = true;
-                        break;
-                    }
-                }
-                final boolean finalIsLauncher = isLauncher;
-                mHandler.post(() -> {
-                    final boolean showIcon;
-                    if (!finalIsLauncher && isRestricted && (!mKeyguardStateController.isShowing()
-                            || mKeyguardStateController.isOccluded())) {
-                        showIcon = true;
-                        mIconController.setIcon(mSlotFirewall, R.drawable.stat_sys_firewall, null);
-                    } else {
-                        showIcon = false;
-                    }
-                    if (mFirewallVisible != showIcon) {
-                        mIconController.setIconVisibility(mSlotFirewall, showIcon);
-                        mFirewallVisible = showIcon;
-                    }
-                });
-            } catch (RemoteException e) {
-                Log.w(TAG, "updateFirewall: ", e);
-            }
-        });
-    }
-
-    private final ConnectivityManager.NetworkCallback mNetworkCallback =
-            new ConnectivityManager.NetworkCallback() {
-                @Override
-                public void onCapabilitiesChanged(@NonNull Network network,
-                        @NonNull NetworkCapabilities networkCapabilities) {
-                    mHandler.post(() -> updateFirewall());
-                }
-            };
-
-    private final INetworkPolicyListener mNetworkPolicyListener =
-            new NetworkPolicyManager.Listener() {
-        @Override
-        public void onUidPoliciesChanged(int uid, int uidPolicies) {
-            mHandler.post(() -> updateFirewall());
-        }
-    };
 
     private final UserTracker.Callback mUserSwitchListener =
             new UserTracker.Callback() {
@@ -695,7 +628,7 @@ public class PhoneStatusBarPolicy
                 public void onUserChanged(int newUser, Context userContext) {
                     mHandler.post(() -> {
                         updateAlarm();
-                        updateManagedProfile();
+                        updateProfileIcon();
                         onUserSetupChanged();
                     });
                 }
@@ -738,15 +671,20 @@ public class PhoneStatusBarPolicy
     public void appTransitionStarting(int displayId, long startTime, long duration,
             boolean forced) {
         if (mDisplayId == displayId) {
-            updateManagedProfile();
-            updateFirewall();
+            updateProfileIcon();
+        }
+    }
+
+    @Override
+    public void appTransitionFinished(int displayId) {
+        if (mDisplayId == displayId) {
+            updateProfileIcon();
         }
     }
 
     @Override
     public void onKeyguardShowingChanged() {
-        updateManagedProfile();
-        updateFirewall();
+        updateProfileIcon();
     }
 
     @Override
@@ -812,8 +750,10 @@ public class PhoneStatusBarPolicy
                     break;
                 case Intent.ACTION_MANAGED_PROFILE_AVAILABLE:
                 case Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE:
-                case Intent.ACTION_MANAGED_PROFILE_REMOVED:
-                    updateManagedProfile();
+                case Intent.ACTION_PROFILE_REMOVED:
+                case Intent.ACTION_PROFILE_ACCESSIBLE:
+                case Intent.ACTION_PROFILE_INACCESSIBLE:
+                    updateProfileIcon();
                     break;
                 case AudioManager.ACTION_HEADSET_PLUG:
                     updateHeadsetPlug(intent);
@@ -881,6 +821,16 @@ public class PhoneStatusBarPolicy
         // Ensure this is on the main thread
         if (DEBUG) Log.d(TAG, "screenrecord: hiding icon");
         mHandler.post(() -> mIconController.setIconVisibility(mSlotScreenRecord, false));
+    }
+
+    private void onConnectedDisplayAvailabilityChanged(ConnectedDisplayInteractor.State state) {
+        boolean visible = state != ConnectedDisplayInteractor.State.DISCONNECTED;
+
+        if (DEBUG) {
+            Log.d(TAG, "connected_display: " + (visible ? "showing" : "hiding") + " icon");
+        }
+
+        mIconController.setIconVisibility(mSlotConnectedDisplay, visible);
     }
 
     public static class BluetoothIconState {

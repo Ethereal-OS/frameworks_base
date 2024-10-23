@@ -47,6 +47,7 @@ public final class NotificationRecordExtractorData {
     private final float mRankingScore;
     private final boolean mIsConversation;
     private final int mProposedImportance;
+    private final boolean mSensitiveContent;
 
     NotificationRecordExtractorData(int position, int visibility, boolean showBadge,
             boolean allowBubble, boolean isBubble, NotificationChannel channel, String groupKey,
@@ -54,7 +55,8 @@ public final class NotificationRecordExtractorData {
             Integer userSentiment, Integer suppressVisually,
             ArrayList<Notification.Action> systemSmartActions,
             ArrayList<CharSequence> smartReplies, int importance, float rankingScore,
-            boolean isConversation, int proposedImportance, boolean isBubbleUpSuppressedByAppLock) {
+            boolean isConversation, int proposedImportance, boolean sensitiveContent,
+            boolean isBubbleUpSuppressedByAppLock) {
         mPosition = position;
         mVisibility = visibility;
         mShowBadge = showBadge;
@@ -72,6 +74,7 @@ public final class NotificationRecordExtractorData {
         mRankingScore = rankingScore;
         mIsConversation = isConversation;
         mProposedImportance = proposedImportance;
+        mSensitiveContent = sensitiveContent;
         mIsBubbleUpSuppressedByAppLock = isBubbleUpSuppressedByAppLock;
     }
 
@@ -93,6 +96,7 @@ public final class NotificationRecordExtractorData {
                 || !Objects.equals(mSmartReplies, r.getSmartReplies())
                 || mImportance != r.getImportance()
                 || mProposedImportance != r.getProposedImportance()
+                || mSensitiveContent != r.hasSensitiveContent()
                 || mIsBubbleUpSuppressedByAppLock != r.isBubbleUpSuppressedByAppLock();
     }
 
@@ -117,6 +121,7 @@ public final class NotificationRecordExtractorData {
                 || !r.rankingScoreMatches(mRankingScore)
                 || mIsConversation != r.isConversation()
                 || mProposedImportance != r.getProposedImportance()
+                || mSensitiveContent != r.hasSensitiveContent()
                 || mIsBubbleUpSuppressedByAppLock != r.isBubbleUpSuppressedByAppLock();
     }
 }

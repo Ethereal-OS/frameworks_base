@@ -28,11 +28,9 @@ import android.util.AttributeSet
 import android.view.View
 import android.view.animation.PathInterpolator
 import com.android.internal.graphics.ColorUtils
+import com.android.app.animation.Interpolators
 import com.android.settingslib.Utils
-import com.android.systemui.animation.Interpolators
 import com.android.systemui.surfaceeffects.ripple.RippleShader
-
-import com.android.systemui.R
 
 private const val RIPPLE_SPARKLE_STRENGTH: Float = 0.3f
 
@@ -93,7 +91,7 @@ class AuthRippleView(context: Context?, attrs: AttributeSet?) : View(context, at
         updateRippleFadeParams()
         ripplePaint.shader = rippleShader
         setLockScreenColor(Utils.getColorAttr(context,
-                R.attr.wallpaperTextColorAccent).defaultColor) // default color
+                android.R.attr.colorAccent).defaultColor) // default color
 
         dwellShader.color = 0xffffffff.toInt() // default color
         dwellShader.progress = 0f
@@ -151,12 +149,12 @@ class AuthRippleView(context: Context?, attrs: AttributeSet?) : View(context, at
             retractDwellAnimator = AnimatorSet().apply {
                 playTogether(retractDwellRippleAnimator, retractAlphaAnimator)
                 addListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationStart(animation: Animator?) {
+                    override fun onAnimationStart(animation: Animator) {
                         dwellPulseOutAnimator?.cancel()
                         drawDwell = true
                     }
 
-                    override fun onAnimationEnd(animation: Animator?) {
+                    override fun onAnimationEnd(animation: Animator) {
                         drawDwell = false
                         resetDwellAlpha()
                     }
@@ -186,13 +184,13 @@ class AuthRippleView(context: Context?, attrs: AttributeSet?) : View(context, at
                     invalidate()
                 }
                 addListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationStart(animation: Animator?) {
+                    override fun onAnimationStart(animation: Animator) {
                         retractDwellAnimator?.cancel()
                         dwellPulseOutAnimator?.cancel()
                         drawDwell = true
                     }
 
-                    override fun onAnimationEnd(animation: Animator?) {
+                    override fun onAnimationEnd(animation: Animator) {
                         drawDwell = false
                         resetDwellAlpha()
                     }
@@ -243,14 +241,14 @@ class AuthRippleView(context: Context?, attrs: AttributeSet?) : View(context, at
                     expandDwellRippleAnimator
             )
             addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationStart(animation: Animator?) {
+                override fun onAnimationStart(animation: Animator) {
                     retractDwellAnimator?.cancel()
                     fadeDwellAnimator?.cancel()
                     visibility = VISIBLE
                     drawDwell = true
                 }
 
-                override fun onAnimationEnd(animation: Animator?) {
+                override fun onAnimationEnd(animation: Animator) {
                     drawDwell = false
                 }
             })
@@ -277,12 +275,12 @@ class AuthRippleView(context: Context?, attrs: AttributeSet?) : View(context, at
 
         unlockedRippleAnimator = rippleAnimator.apply {
             addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationStart(animation: Animator?) {
+                override fun onAnimationStart(animation: Animator) {
                     drawRipple = true
                     visibility = VISIBLE
                 }
 
-                override fun onAnimationEnd(animation: Animator?) {
+                override fun onAnimationEnd(animation: Animator) {
                     onAnimationEnd?.run()
                     drawRipple = false
                     visibility = GONE
@@ -331,7 +329,7 @@ class AuthRippleView(context: Context?, attrs: AttributeSet?) : View(context, at
         }
     }
 
-    override fun onDraw(canvas: Canvas?) {
+    override fun onDraw(canvas: Canvas) {
         // To reduce overdraw, we mask the effect to a circle whose radius is big enough to cover
         // the active effect area. Values here should be kept in sync with the
         // animation implementation in the ripple shader. (Twice bigger)

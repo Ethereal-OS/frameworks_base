@@ -48,11 +48,13 @@ extern jmethodID method_reportMeasurementData;
 void GnssMeasurement_class_init_once(JNIEnv* env, jclass& clazz);
 
 void setMeasurementData(JNIEnv* env, jobject& callbacksObj, jobject clock,
-                        jobjectArray measurementArray, jobjectArray gnssAgcArray);
+                        jobjectArray measurementArray, jobjectArray gnssAgcArray,
+                        bool hasIsFullTracking, jboolean isFullTracking);
 
 class GnssMeasurementCallbackAidl : public hardware::gnss::BnGnssMeasurementCallback {
 public:
-    GnssMeasurementCallbackAidl() : mCallbacksObj(getCallbacksObj()) {}
+    GnssMeasurementCallbackAidl(int version)
+          : mCallbacksObj(getCallbacksObj()), interfaceVersion(version) {}
     android::binder::Status gnssMeasurementCb(const hardware::gnss::GnssData& data) override;
 
 private:
@@ -70,6 +72,7 @@ private:
     void translateGnssClock(JNIEnv* env, const hardware::gnss::GnssData& data, JavaObject& object);
 
     jobject& mCallbacksObj;
+    const int interfaceVersion;
 };
 
 /*
@@ -109,10 +112,10 @@ private:
 
 class GnssMeasurementCallback {
 public:
-    GnssMeasurementCallback() {}
+    GnssMeasurementCallback(int version) : interfaceVersion(version) {}
     sp<GnssMeasurementCallbackAidl> getAidl() {
         if (callbackAidl == nullptr) {
-            callbackAidl = sp<GnssMeasurementCallbackAidl>::make();
+            callbackAidl = sp<GnssMeasurementCallbackAidl>::make(interfaceVersion);
         }
         return callbackAidl;
     }
@@ -127,6 +130,7 @@ public:
 private:
     sp<GnssMeasurementCallbackAidl> callbackAidl;
     sp<GnssMeasurementCallbackHidl> callbackHidl;
+    const int interfaceVersion;
 };
 
 template <class T>
@@ -140,7 +144,9 @@ void GnssMeasurementCallbackHidl::translateAndSetGnssData(const T& data) {
     size_t count = getMeasurementCount(data);
     jobjectArray measurementArray =
             translateAllGnssMeasurements(env, data.measurements.data(), count);
-    setMeasurementData(env, mCallbacksObj, clock, measurementArray, nullptr);
+    setMeasurementData(env, mCallbacksObj, clock, measurementArray, /*gnssAgcArray=*/nullptr,
+                       /*hasIsFullTracking=*/false,
+                       /*isFullTracking=*/JNI_FALSE);
 
     env->DeleteLocalRef(clock);
     env->DeleteLocalRef(measurementArray);

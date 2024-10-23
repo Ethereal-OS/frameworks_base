@@ -16,14 +16,20 @@
 
 package android.app;
 
+import static android.Manifest.permission.INTERNAL_SYSTEM_WINDOW;
+import static android.os.UserHandle.getCallingUserId;
+
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.content.ComponentName;
+import android.content.ContentProvider;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.IRemoteCallback;
 import android.os.PersistableBundle;
 import android.os.RemoteException;
 import android.util.Singleton;
@@ -293,6 +299,38 @@ public class ActivityClient {
         }
     }
 
+    /** Returns the uid of the app that launched the activity. */
+    public int getActivityCallerUid(IBinder activityToken, IBinder callerToken) {
+        try {
+            return getActivityClientController().getActivityCallerUid(activityToken,
+                    callerToken);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /** Returns the package of the app that launched the activity. */
+    public String getActivityCallerPackage(IBinder activityToken, IBinder callerToken) {
+        try {
+            return getActivityClientController().getActivityCallerPackage(activityToken,
+                    callerToken);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /** Checks if the app that launched the activity has access to the URI. */
+    public int checkActivityCallerContentUriPermission(IBinder activityToken, IBinder callerToken,
+            Uri uri, int modeFlags) {
+        try {
+            return getActivityClientController().checkActivityCallerContentUriPermission(
+                    activityToken, callerToken, ContentProvider.getUriWithoutUserId(uri), modeFlags,
+                    ContentProvider.getUserIdFromUri(uri, getCallingUserId()));
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
     public void setRequestedOrientation(IBinder token, int requestedOrientation) {
         try {
             getActivityClientController().setRequestedOrientation(token, requestedOrientation);
@@ -376,6 +414,14 @@ public class ActivityClient {
     void toggleFreeformWindowingMode(IBinder token) {
         try {
             getActivityClientController().toggleFreeformWindowingMode(token);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    void requestMultiwindowFullscreen(IBinder token, int request, IRemoteCallback callback) {
+        try {
+            getActivityClientController().requestMultiwindowFullscreen(token, request, callback);
         } catch (RemoteException e) {
             e.rethrowFromSystemServer();
         }
@@ -469,11 +515,37 @@ public class ActivityClient {
         }
     }
 
+    void setAllowCrossUidActivitySwitchFromBelow(IBinder token, boolean allowed) {
+        try {
+            getActivityClientController().setAllowCrossUidActivitySwitchFromBelow(token, allowed);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
     int setVrMode(IBinder token, boolean enabled, ComponentName packageName) {
         try {
             return getActivityClientController().setVrMode(token, enabled, packageName);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
+        }
+    }
+
+    void overrideActivityTransition(IBinder token, boolean open, int enterAnim, int exitAnim,
+            int backgroundColor) {
+        try {
+            getActivityClientController().overrideActivityTransition(
+                    token, open, enterAnim, exitAnim, backgroundColor);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    void clearOverrideActivityTransition(IBinder token, boolean open) {
+        try {
+            getActivityClientController().clearOverrideActivityTransition(token, open);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
         }
     }
 
@@ -549,6 +621,40 @@ public class ActivityClient {
     void reportSplashScreenAttached(IBinder token) {
         try {
             getActivityClientController().splashScreenAttached(token);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    void enableTaskLocaleOverride(IBinder token) {
+        try {
+            getActivityClientController().enableTaskLocaleOverride(token);
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Returns {@code true} if the activity was explicitly requested to be launched in the
+     * TaskFragment.
+     *
+     * @param activityToken The token of the Activity.
+     * @param taskFragmentToken The token of the TaskFragment.
+     */
+    public boolean isRequestedToLaunchInTaskFragment(IBinder activityToken,
+            IBinder taskFragmentToken) {
+        try {
+            return getActivityClientController().isRequestedToLaunchInTaskFragment(activityToken,
+                    taskFragmentToken);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    @RequiresPermission(INTERNAL_SYSTEM_WINDOW)
+    void setActivityRecordInputSinkEnabled(IBinder activityToken, boolean enabled) {
+        try {
+            getActivityClientController().setActivityRecordInputSinkEnabled(activityToken, enabled);
         } catch (RemoteException e) {
             e.rethrowFromSystemServer();
         }

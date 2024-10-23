@@ -27,6 +27,7 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.media.IMediaRoute2ProviderService;
 import android.media.IMediaRoute2ProviderServiceCallback;
+import android.media.MediaRoute2Info;
 import android.media.MediaRoute2ProviderInfo;
 import android.media.MediaRoute2ProviderService;
 import android.media.RouteDiscoveryPreference;
@@ -43,13 +44,14 @@ import android.util.Log;
 import android.util.Slog;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.media.flags.Flags;
 
-import java.io.PrintWriter;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Maintains a connection to a particular {@link MediaRoute2ProviderService}.
@@ -62,6 +64,7 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
     private final Context mContext;
     private final int mUserId;
     private final Handler mHandler;
+    private final boolean mIsSelfScanOnlyProvider;
 
     // Connection state
     private boolean mRunning;
@@ -71,25 +74,21 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
 
     private boolean mIsManagerScanning;
     private RouteDiscoveryPreference mLastDiscoveryPreference = null;
+    private boolean mLastDiscoveryPreferenceIncludesThisPackage = false;
 
     @GuardedBy("mLock")
     final List<RoutingSessionInfo> mReleasingSessions = new ArrayList<>();
 
-    MediaRoute2ProviderServiceProxy(@NonNull Context context, @NonNull ComponentName componentName,
+    MediaRoute2ProviderServiceProxy(
+            @NonNull Context context,
+            @NonNull ComponentName componentName,
+            boolean isSelfScanOnlyProvider,
             int userId) {
         super(componentName);
         mContext = Objects.requireNonNull(context, "Context must not be null.");
+        mIsSelfScanOnlyProvider = isSelfScanOnlyProvider;
         mUserId = userId;
         mHandler = new Handler(Looper.myLooper());
-    }
-
-    public void dump(PrintWriter pw, String prefix) {
-        pw.println(prefix + "Proxy");
-        pw.println(prefix + "  mUserId=" + mUserId);
-        pw.println(prefix + "  mRunning=" + mRunning);
-        pw.println(prefix + "  mBound=" + mBound);
-        pw.println(prefix + "  mActiveConnection=" + mActiveConnection);
-        pw.println(prefix + "  mConnectionReady=" + mConnectionReady);
     }
 
     public void setManagerScanning(boolean managerScanning) {
@@ -100,8 +99,14 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
     }
 
     @Override
-    public void requestCreateSession(long requestId, String packageName, String routeId,
-            Bundle sessionHints) {
+    public void requestCreateSession(
+            long requestId,
+            String packageName,
+            String routeId,
+            Bundle sessionHints,
+            @RoutingSessionInfo.TransferReason int transferReason,
+            @NonNull UserHandle transferInitiatorUserHandle,
+            @NonNull String transferInitiatorPackageName) {
         if (mConnectionReady) {
             mActiveConnection.requestCreateSession(requestId, packageName, routeId, sessionHints);
             updateBinding();
@@ -117,8 +122,11 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
     }
 
     @Override
-    public void updateDiscoveryPreference(RouteDiscoveryPreference discoveryPreference) {
+    public void updateDiscoveryPreference(
+            Set<String> activelyScanningPackages, RouteDiscoveryPreference discoveryPreference) {
         mLastDiscoveryPreference = discoveryPreference;
+        mLastDiscoveryPreferenceIncludesThisPackage =
+                activelyScanningPackages.contains(mComponentName.getPackageName());
         if (mConnectionReady) {
             mActiveConnection.updateDiscoveryPreference(discoveryPreference);
         }
@@ -140,7 +148,13 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
     }
 
     @Override
-    public void transferToRoute(long requestId, String sessionId, String routeId) {
+    public void transferToRoute(
+            long requestId,
+            @NonNull UserHandle transferInitiatorUserHandle,
+            @NonNull String transferInitiatorPackageName,
+            String sessionId,
+            String routeId,
+            @RoutingSessionInfo.TransferReason int transferReason) {
         if (mConnectionReady) {
             mActiveConnection.transferToRoute(requestId, sessionId, routeId);
         }
@@ -180,13 +194,19 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
                 && mComponentName.getClassName().equals(className);
     }
 
-    public void start() {
+    public void start(boolean rebindIfDisconnected) {
         if (!mRunning) {
             if (DEBUG) {
                 Slog.d(TAG, this + ": Starting");
             }
             mRunning = true;
-            updateBinding();
+            if (!Flags.enablePreventionOfKeepAliveRouteProviders()) {
+                updateBinding();
+            }
+        }
+        if (rebindIfDisconnected && mActiveConnection == null && shouldBind()) {
+            unbind();
+            bind();
         }
     }
 
@@ -200,15 +220,6 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
         }
     }
 
-    public void rebindIfDisconnected() {
-        //TODO: When we are connecting to the service, calling this will unbind and bind again.
-        // We'd better not unbind if we are connecting.
-        if (mActiveConnection == null && shouldBind()) {
-            unbind();
-            bind();
-        }
-    }
-
     private void updateBinding() {
         if (shouldBind()) {
             bind();
@@ -218,14 +229,21 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
     }
 
     private boolean shouldBind() {
-        if (mRunning) {
-            // Bind when there is a discovery preference or an active route session.
-            return (mLastDiscoveryPreference != null
-                    && !mLastDiscoveryPreference.getPreferredFeatures().isEmpty())
-                    || !getSessionInfos().isEmpty()
-                    || mIsManagerScanning;
+        if (!mRunning) {
+            return false;
         }
-        return false;
+        if (!getSessionInfos().isEmpty() || mIsManagerScanning) {
+            // We bind if any manager is scanning (regardless of whether an app is scanning) to give
+            // the opportunity for providers to publish routing sessions that were established
+            // directly between the app and the provider (typically via AndroidX MediaRouter). See
+            // b/176774510#comment20 for more information.
+            return true;
+        }
+        boolean anAppIsScanning =
+                mLastDiscoveryPreference != null
+                        && !mLastDiscoveryPreference.getPreferredFeatures().isEmpty();
+        return anAppIsScanning
+                && (mLastDiscoveryPreferenceIncludesThisPackage || !mIsSelfScanOnlyProvider);
     }
 
     private void bind() {
@@ -238,8 +256,7 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
             service.setComponent(mComponentName);
             try {
                 mBound = mContext.bindServiceAsUser(service, this,
-                        Context.BIND_AUTO_CREATE | Context.BIND_FOREGROUND_SERVICE
-                                | Context.BIND_DENY_ACTIVITY_STARTS_PRE_34,
+                        Context.BIND_AUTO_CREATE | Context.BIND_FOREGROUND_SERVICE,
                         new UserHandle(mUserId));
                 if (!mBound && DEBUG) {
                     Slog.d(TAG, this + ": Bind failed");
@@ -299,11 +316,19 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
 
     @Override
     public void onBindingDied(ComponentName name) {
-        if (DEBUG) {
-            Slog.d(TAG, this + ": Service binding died");
-        }
         unbind();
-        if (shouldBind()) {
+        if (Flags.enablePreventionOfKeepAliveRouteProviders()) {
+            Slog.w(
+                    TAG,
+                    TextUtils.formatSimple(
+                            "Route provider service (%s) binding died, but we did not rebind.",
+                            name.toString()));
+        } else if (shouldBind()) {
+            Slog.w(
+                    TAG,
+                    TextUtils.formatSimple(
+                            "Rebound to provider service (%s) after binding died.",
+                            name.toString()));
             bind();
         }
     }
@@ -312,7 +337,11 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
         if (mActiveConnection == connection) {
             mConnectionReady = true;
             if (mLastDiscoveryPreference != null) {
-                updateDiscoveryPreference(mLastDiscoveryPreference);
+                updateDiscoveryPreference(
+                        mLastDiscoveryPreferenceIncludesThisPackage
+                                ? Set.of(mComponentName.getPackageName())
+                                : Set.of(),
+                        mLastDiscoveryPreference);
             }
         }
     }
@@ -404,21 +433,21 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
         }
     }
 
-    private void onSessionReleased(Connection connection, RoutingSessionInfo releaedSession) {
+    private void onSessionReleased(Connection connection, RoutingSessionInfo releasedSession) {
         if (mActiveConnection != connection) {
             return;
         }
-        if (releaedSession == null) {
+        if (releasedSession == null) {
             Slog.w(TAG, "onSessionReleased: Ignoring null session sent from " + mComponentName);
             return;
         }
 
-        releaedSession = assignProviderIdForSession(releaedSession);
+        releasedSession = assignProviderIdForSession(releasedSession);
 
         boolean found = false;
         synchronized (mLock) {
             for (RoutingSessionInfo session : mSessionInfos) {
-                if (TextUtils.equals(session.getId(), releaedSession.getId())) {
+                if (TextUtils.equals(session.getId(), releasedSession.getId())) {
                     mSessionInfos.remove(session);
                     found = true;
                     break;
@@ -426,7 +455,7 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
             }
             if (!found) {
                 for (RoutingSessionInfo session : mReleasingSessions) {
-                    if (TextUtils.equals(session.getId(), releaedSession.getId())) {
+                    if (TextUtils.equals(session.getId(), releasedSession.getId())) {
                         mReleasingSessions.remove(session);
                         return;
                     }
@@ -439,7 +468,7 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
             return;
         }
 
-        mCallback.onSessionReleased(this, releaedSession);
+        mCallback.onSessionReleased(this, releasedSession);
     }
 
     private void dispatchSessionCreated(long requestId, RoutingSessionInfo session) {
@@ -494,8 +523,13 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
     }
 
     @Override
-    public String toString() {
-        return "Service connection " + mComponentName.flattenToShortString();
+    protected String getDebugString() {
+        return TextUtils.formatSimple(
+                "ProviderServiceProxy - package: %s, bound: %b, connection (active:%b, ready:%b)",
+                mComponentName.getPackageName(),
+                mBound,
+                mActiveConnection != null,
+                mConnectionReady);
     }
 
     private final class Connection implements DeathRecipient {
@@ -629,6 +663,23 @@ final class MediaRoute2ProviderServiceProxy extends MediaRoute2Provider
 
         @Override
         public void notifyProviderUpdated(MediaRoute2ProviderInfo providerInfo) {
+            for (MediaRoute2Info route : providerInfo.getRoutes()) {
+                if (route.isSystemRoute()) {
+                    throw new SecurityException(
+                            "Only the system is allowed to publish system routes. "
+                                    + "Disallowed route: "
+                                    + route);
+                }
+
+                if (route.getSuitabilityStatus()
+                        == MediaRoute2Info.SUITABILITY_STATUS_NOT_SUITABLE_FOR_TRANSFER) {
+                    throw new SecurityException(
+                            "Only the system is allowed to set not suitable for transfer status. "
+                                    + "Disallowed route: "
+                                    + route);
+                }
+            }
+
             Connection connection = mConnectionRef.get();
             if (connection != null) {
                 connection.postProviderUpdated(providerInfo);

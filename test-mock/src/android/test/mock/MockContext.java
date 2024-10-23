@@ -822,12 +822,6 @@ public class MockContext extends Context {
         throw new UnsupportedOperationException();
     }
 
-    /** {@hide} */
-    @Override
-    public int getUserId() {
-        throw new UnsupportedOperationException();
-    }
-
     @Override
     public Context createConfigurationContext(Configuration overrideConfiguration) {
         throw new UnsupportedOperationException();
@@ -835,6 +829,11 @@ public class MockContext extends Context {
 
     @Override
     public Context createDisplayContext(Display display) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public @NonNull Context createDeviceContext(int deviceId) {
         throw new UnsupportedOperationException();
     }
 
@@ -879,6 +878,17 @@ public class MockContext extends Context {
     /** @hide */
     @Override
     public void updateDisplay(int displayId) {
+        throw new UnsupportedOperationException();
+    }
+
+    /** @hide */
+    @Override
+    public void updateDeviceId(int deviceId) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public int getDeviceId() {
         throw new UnsupportedOperationException();
     }
 
@@ -951,7 +961,7 @@ public class MockContext extends Context {
     /** {@hide} */
     @Override
     public IServiceConnection getServiceDispatcher(ServiceConnection conn, Handler handler,
-            int flags) {
+            long flags) {
         throw new UnsupportedOperationException();
     }
 

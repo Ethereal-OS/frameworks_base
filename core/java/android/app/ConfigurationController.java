@@ -29,6 +29,8 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.HardwareRenderer;
 import android.graphics.Typeface;
+import android.inputmethodservice.InputMethodService;
+import android.os.Build;
 import android.os.LocaleList;
 import android.os.Trace;
 import android.util.DisplayMetrics;
@@ -265,6 +267,11 @@ class ConfigurationController {
      * original LocaleList.
      */
     void updateLocaleListFromAppContext(@NonNull Context context) {
+        if (context.getResources() == null || context.getResources().getConfiguration() == null ||
+                mResourcesManager == null || mResourcesManager.getConfiguration() == null) {
+            Slog.w(TAG, "updateLocaleListFromAppContext failed. configurations were null");
+            return;
+        }
         final Locale bestLocale = context.getResources().getConfiguration().getLocales().get(0);
         final LocaleList newLocaleList = mResourcesManager.getConfiguration().getLocales();
         final int newLocaleListSize = newLocaleList.size();

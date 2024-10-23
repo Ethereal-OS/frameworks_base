@@ -19,6 +19,7 @@ package com.android.systemui.statusbar.policy
 import android.app.admin.DeviceAdminInfo
 import android.content.ComponentName
 import android.graphics.drawable.Drawable
+import com.android.internal.net.VpnProfile
 import java.io.PrintWriter
 
 /** A fake [SecurityController] to be used in tests. */
@@ -67,6 +68,8 @@ class FakeSecurityController(
 
     override fun getDeviceOwnerType(admin: ComponentName?): Int = 0
 
+    override fun isFinancedDevice(): Boolean = false
+
     override fun isNetworkLoggingEnabled(): Boolean = fakeState.isNetworkLoggingEnabled
 
     override fun isVpnEnabled(): Boolean = fakeState.isVpnEnabled
@@ -74,6 +77,8 @@ class FakeSecurityController(
     override fun isVpnRestricted(): Boolean = fakeState.isVpnRestricted
 
     override fun isVpnBranded(): Boolean = fakeState.isVpnBranded
+
+    override fun isVpnValidated(): Boolean = fakeState.isVpnValidated
 
     override fun getPrimaryVpnName(): String? = fakeState.primaryVpnName
 
@@ -93,6 +98,16 @@ class FakeSecurityController(
 
     override fun getLabel(info: DeviceAdminInfo?): CharSequence? = null
 
+    override fun getConfiguredLegacyVpns(): List<VpnProfile> = listOf()
+
+    override fun getVpnAppPackageNames(): List<String> = listOf()
+
+    override fun connectLegacyVpn(profile: VpnProfile) {}
+
+    override fun launchVpnApp(packageName: String) {}
+
+    override fun disconnectPrimaryVpn() {}
+
     class FakeState(
         var isDeviceManaged: Boolean = false,
         var hasProfileOwner: Boolean = false,
@@ -108,6 +123,7 @@ class FakeSecurityController(
         var isVpnEnabled: Boolean = false,
         var isVpnRestricted: Boolean = false,
         var isVpnBranded: Boolean = false,
+        var isVpnValidated: Boolean = false,
         var primaryVpnName: String? = null,
         var workProfileVpnName: String? = null,
         var hasCACertInCurrentUser: Boolean = false,

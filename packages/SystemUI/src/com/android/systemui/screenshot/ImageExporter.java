@@ -19,11 +19,9 @@ package com.android.systemui.screenshot;
 import static android.os.FileUtils.closeQuietly;
 
 import android.annotation.IntRange;
-import android.annotation.Nullable;
 import android.content.ContentProvider;
 import android.content.ContentResolver;
 import android.content.ContentValues;
-import android.ext.settings.ExtSettings;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.CompressFormat;
 import android.net.Uri;
@@ -35,13 +33,13 @@ import android.os.Trace;
 import android.os.UserHandle;
 import android.provider.MediaStore;
 import android.util.Log;
+import android.view.Display;
 
 import androidx.concurrent.futures.CallbackToFutureAdapter;
 import androidx.exifinterface.media.ExifInterface;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.systemui.flags.FeatureFlags;
-import com.android.systemui.flags.Flags;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
@@ -70,6 +68,9 @@ public class ImageExporter {
     // ex: 'Screenshot_20201215-090626_Settings.png'
     private static final String FILENAME_WITH_APP_NAME_PATTERN =
             "Screenshot_%1$tY%<tm%<td-%<tH%<tM%<tS_%2$s.%3$s";
+    // ex: 'Screenshot_20201215-090626-display-1.png'
+    private static final String CONNECTED_DISPLAY_FILENAME_PATTERN =
+            "Screenshot_%1$tY%<tm%<td-%<tH%<tM%<tS-display-%2$d.%3$s";
     private static final String SCREENSHOTS_PATH = Environment.DIRECTORY_PICTURES
             + File.separator + Environment.DIRECTORY_SCREENSHOTS;
 
@@ -151,13 +152,13 @@ public class ImageExporter {
      *
      * @param executor the thread for execution
      * @param bitmap the bitmap to export
+     * @param displayId the display id the bitmap comes from.
      * @param foregroundAppName the name of app running in foreground
-     *
      * @return a listenable future result
      */
     public ListenableFuture<Result> export(Executor executor, UUID requestId, Bitmap bitmap,
-            UserHandle owner, String foregroundAppName) {
-        return export(executor, requestId, bitmap, ZonedDateTime.now(), owner, foregroundAppName);
+            UserHandle owner, int displayId, String foregroundAppName) {
+        return export(executor, requestId, bitmap, ZonedDateTime.now(), owner, displayId, foregroundAppName);
     }
 
     /**
@@ -170,10 +171,10 @@ public class ImageExporter {
      * @return a listenable future result
      */
     ListenableFuture<Result> export(Executor executor, UUID requestId, Bitmap bitmap,
-            ZonedDateTime captureTime, UserHandle owner, String foregroundAppName) {
+            ZonedDateTime captureTime, UserHandle owner, int displayId, String foregroundAppName) {
 
-        final Task task = new Task(mResolver, requestId, bitmap, captureTime, foregroundAppName,
-                mCompressFormat, mQuality, /* publish */ true, owner, mFlags);
+        final Task task = new Task(mResolver, requestId, bitmap, captureTime, foregroundAppName, mCompressFormat,
+                mQuality, /* publish */ true, owner, mFlags, displayId);
 
         return CallbackToFutureAdapter.getFuture(
                 (completer) -> {
@@ -225,8 +226,8 @@ public class ImageExporter {
         private final FeatureFlags mFlags;
 
         Task(ContentResolver resolver, UUID requestId, Bitmap bitmap, ZonedDateTime captureTime,
-                String foregroundAppName, CompressFormat format, int quality, boolean publish,
-                UserHandle owner, FeatureFlags flags) {
+                String foregroundAppName, CompressFormat format, int quality, boolean publish, UserHandle owner,
+                FeatureFlags flags, int displayId) {
             mResolver = resolver;
             mRequestId = requestId;
             mBitmap = bitmap;
@@ -234,7 +235,7 @@ public class ImageExporter {
             mFormat = format;
             mQuality = quality;
             mOwner = owner;
-            mFileName = createFilename(mCaptureTime, mFormat, foregroundAppName);
+            mFileName = createFilename(mCaptureTime, mFormat, displayId, foregroundAppName);
             mPublish = publish;
             mFlags = flags;
         }
@@ -301,11 +302,9 @@ public class ImageExporter {
             final ContentValues values = createMetadata(time, format, fileName);
 
             Uri baseUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-            if (flags.isEnabled(Flags.SCREENSHOT_WORK_PROFILE_POLICY)
-                    && UserHandle.myUserId() != owner.getIdentifier()) {
-                baseUri = ContentProvider.maybeAddUserId(baseUri, owner.getIdentifier());
-            }
-            Uri uri = resolver.insert(baseUri, values);
+            Uri uriWithUserId = ContentProvider.maybeAddUserId(baseUri, owner.getIdentifier());
+
+            Uri uri = resolver.insert(uriWithUserId, values);
             if (uri == null) {
                 throw new ImageExportException(RESOLVER_INSERT_RETURNED_NULL);
             }
@@ -350,10 +349,6 @@ public class ImageExporter {
                 throw new ImageExportException(EXIF_READ_EXCEPTION, e);
             }
 
-            if (!ExtSettings.SCREENSHOT_TIMESTAMP_EXIF.get(resolver.getContext())) {
-                captureTime = null;
-            }
-
             updateExifAttributes(exif, requestId, width, height, captureTime);
             try {
                 exif.saveAttributes();
@@ -385,13 +380,15 @@ public class ImageExporter {
     }
 
     @VisibleForTesting
-    static String createFilename(ZonedDateTime time, CompressFormat format,
+    static String createFilename(ZonedDateTime time, CompressFormat format, int displayId,  
             String foregroundAppName) {
-        if (foregroundAppName != null) {
-            return String.format(FILENAME_WITH_APP_NAME_PATTERN, time, foregroundAppName,
-                    fileExtension(format));
+        if (displayId == Display.DEFAULT_DISPLAY) {
+            if (foregroundAppName != null) {
+                return String.format(FILENAME_WITH_APP_NAME_PATTERN, time, foregroundAppName, fileExtension(format));
+            }
+            return String.format(FILENAME_PATTERN, time, fileExtension(format));
         }
-        return String.format(FILENAME_PATTERN, time, fileExtension(format));
+        return String.format(CONNECTED_DISPLAY_FILENAME_PATTERN, time, displayId, fileExtension(format));
     }
 
     static ContentValues createMetadata(ZonedDateTime captureTime, CompressFormat format,
@@ -409,15 +406,12 @@ public class ImageExporter {
     }
 
     static void updateExifAttributes(ExifInterface exif, UUID uniqueId, int width, int height,
-            @Nullable ZonedDateTime captureTime) {
+            ZonedDateTime captureTime) {
         exif.setAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID, uniqueId.toString());
 
+        exif.setAttribute(ExifInterface.TAG_SOFTWARE, "Android " + Build.DISPLAY);
         exif.setAttribute(ExifInterface.TAG_IMAGE_WIDTH, Integer.toString(width));
         exif.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, Integer.toString(height));
-
-        if (captureTime == null) {
-            return;
-        }
 
         String dateTime = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss").format(captureTime);
         String subSec = DateTimeFormatter.ofPattern("SSS").format(captureTime);

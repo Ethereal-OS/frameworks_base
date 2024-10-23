@@ -34,6 +34,8 @@ import com.android.internal.widget.ConversationLayout;
 import com.android.internal.widget.ImageFloatingTextView;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 import com.android.systemui.statusbar.notification.row.NotificationContentView;
+import com.android.systemui.statusbar.notification.row.shared.AsyncGroupHeaderViewInflation;
+import com.android.systemui.statusbar.notification.row.wrapper.NotificationViewWrapper;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -191,28 +193,32 @@ public class NotificationGroupingUtil {
         int timeVisibility = !hasVisibleText
                 || row.getEntry().getSbn().getNotification().showsTime()
                 ? View.VISIBLE : View.GONE;
-        time.setVisibility(timeVisibility);
+        if (time != null) {
+            time.setVisibility(timeVisibility);
+        }
         View left = null;
         View right;
         for (int i = 0; i < childCount; i++) {
             View child = rowHeader.getChildAt(i);
-            if (mDividers.contains(child.getId())) {
+            if (child != null && mDividers.contains(child.getId())) {
                 boolean visible = false;
                 // Lets find the item to the right
                 for (i++; i < childCount; i++) {
                     right = rowHeader.getChildAt(i);
-                    if (mDividers.contains(right.getId())) {
+                    if (right != null && mDividers.contains(right.getId())) {
                         // A divider was found, this needs to be hidden
                         i--;
                         break;
-                    } else if (right.getVisibility() != View.GONE && right instanceof TextView) {
+                    } else if (right != null && right.getVisibility() != View.GONE && right instanceof TextView) {
                         visible = left != null;
                         left = right;
                         break;
                     }
                 }
-                child.setVisibility(visible ? View.VISIBLE : View.GONE);
-            } else if (child.getVisibility() != View.GONE && child instanceof TextView) {
+                if (child != null) {
+                    child.setVisibility(visible ? View.VISIBLE : View.GONE);
+                }
+            } else if (child != null && child.getVisibility() != View.GONE && child instanceof TextView) {
                 left = child;
             }
         }
@@ -253,7 +259,8 @@ public class NotificationGroupingUtil {
         }
 
         public void init() {
-            View header = mParentRow.getNotificationViewWrapper().getNotificationHeader();
+            NotificationViewWrapper wrapper = mParentRow.getNotificationViewWrapper();
+            View header = wrapper == null ? null : wrapper.getNotificationHeader();
             mParentView = header == null ? null : header.findViewById(mId);
             mParentData = mExtractor == null ? null : mExtractor.extractData(mParentRow);
             mApply = !mComparator.isEmpty(mParentView);
@@ -326,6 +333,9 @@ public class NotificationGroupingUtil {
 
         @Override
         public boolean isEmpty(View view) {
+            if (AsyncGroupHeaderViewInflation.isEnabled() && view == null) {
+                return true;
+            }
             if (view instanceof ImageView) {
                 return ((ImageView) view).getDrawable() == null;
             }

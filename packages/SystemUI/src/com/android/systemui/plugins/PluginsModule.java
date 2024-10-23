@@ -21,7 +21,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
 
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.dagger.PluginModule;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.shared.plugins.PluginActionManager;
@@ -59,7 +59,7 @@ public abstract class PluginsModule {
     @Provides
     @Named(PLUGIN_DEBUG)
     static boolean providesPluginDebug() {
-        return Build.IS_ENG;
+        return Build.IS_DEBUGGABLE;
     }
 
     @Binds
@@ -73,7 +73,7 @@ public abstract class PluginsModule {
         return new PluginInstance.Factory(
                 PluginModule.class.getClassLoader(),
                 new PluginInstance.InstanceFactory<>(),
-                new PluginInstance.VersionChecker(),
+                new PluginInstance.VersionCheckerImpl(),
                 privilegedPlugins,
                 isDebug);
     }

@@ -18,6 +18,7 @@ package com.android.keyguard;
 
 import static com.android.internal.util.LatencyTracker.ACTION_CHECK_CREDENTIAL;
 import static com.android.internal.util.LatencyTracker.ACTION_CHECK_CREDENTIAL_UNLOCKED;
+import static com.android.systemui.flags.Flags.LOCKSCREEN_ENABLE_LANDSCAPE;
 
 import android.content.res.ColorStateList;
 import android.os.AsyncTask;
@@ -35,10 +36,12 @@ import com.android.internal.widget.LockPatternView.Cell;
 import com.android.internal.widget.LockscreenCredential;
 import com.android.keyguard.EmergencyButtonController.EmergencyButtonCallback;
 import com.android.keyguard.KeyguardSecurityModel.SecurityMode;
-import com.android.systemui.R;
 import com.android.systemui.classifier.FalsingClassifier;
 import com.android.systemui.classifier.FalsingCollector;
+import com.android.systemui.flags.FeatureFlags;
+import com.android.systemui.res.R;
 import com.android.systemui.statusbar.policy.DevicePostureController;
+import com.android.systemui.user.domain.interactor.SelectedUserInteractor;
 
 import java.util.HashMap;
 import java.util.List;
@@ -108,7 +111,7 @@ public class KeyguardPatternViewController
                 mPendingLockCheck.cancel(false);
             }
 
-            final int userId = KeyguardUpdateMonitor.getCurrentUser();
+            final int userId = mSelectedUserInteractor.getSelectedUserId();
             if (pattern.size() < LockPatternUtils.MIN_PATTERN_REGISTER_FAIL) {
                 // Treat single-sized patterns as erroneous taps.
                 if (pattern.size() == 1) {
@@ -124,8 +127,7 @@ public class KeyguardPatternViewController
             mLatencyTracker.onActionStart(ACTION_CHECK_CREDENTIAL_UNLOCKED);
             mPendingLockCheck = LockPatternChecker.checkCredential(
                     mLockPatternUtils,
-                    LockscreenCredential.createPattern(pattern,
-                            mLockPatternUtils.getLockPatternSize(userId)),
+                    LockscreenCredential.createPattern(pattern),
                     userId,
                     new LockPatternChecker.OnCheckCallback() {
 
@@ -162,7 +164,7 @@ public class KeyguardPatternViewController
 
         private void onPatternChecked(int userId, boolean matched, int timeoutMs,
                 boolean isValidPattern) {
-            boolean dismissKeyguard = KeyguardUpdateMonitor.getCurrentUser() == userId;
+            boolean dismissKeyguard = mSelectedUserInteractor.getSelectedUserId() == userId;
             if (matched) {
                 getKeyguardSecurityCallback().reportUnlockAttempt(userId, true, 0);
                 if (dismissKeyguard) {
@@ -197,14 +199,17 @@ public class KeyguardPatternViewController
             FalsingCollector falsingCollector,
             EmergencyButtonController emergencyButtonController,
             KeyguardMessageAreaController.Factory messageAreaControllerFactory,
-            DevicePostureController postureController) {
+            DevicePostureController postureController, FeatureFlags featureFlags,
+            SelectedUserInteractor selectedUserInteractor) {
         super(view, securityMode, keyguardSecurityCallback, emergencyButtonController,
-                messageAreaControllerFactory);
+                messageAreaControllerFactory, featureFlags, selectedUserInteractor);
         mKeyguardUpdateMonitor = keyguardUpdateMonitor;
         mLockPatternUtils = lockPatternUtils;
         mLatencyTracker = latencyTracker;
         mFalsingCollector = falsingCollector;
         mEmergencyButtonController = emergencyButtonController;
+        view.setIsLockScreenLandscapeEnabled(
+                featureFlags.isEnabled(LOCKSCREEN_ENABLE_LANDSCAPE));
         mLockPatternView = mView.findViewById(R.id.lockPatternView);
         mPostureController = postureController;
     }
@@ -217,15 +222,10 @@ public class KeyguardPatternViewController
     @Override
     protected void onViewAttached() {
         super.onViewAttached();
-        int userId = KeyguardUpdateMonitor.getCurrentUser();
         mLockPatternView.setOnPatternListener(new UnlockPatternListener());
         mLockPatternView.setSaveEnabled(false);
         mLockPatternView.setInStealthMode(!mLockPatternUtils.isVisiblePatternEnabled(
-                KeyguardUpdateMonitor.getCurrentUser()));
-        mLockPatternView.setLockPatternUtils(mLockPatternUtils);
-        mLockPatternView.setLockPatternSize(mLockPatternUtils.getLockPatternSize(userId));
-        mLockPatternView.setVisibleDots(mLockPatternUtils.isVisibleDotsEnabled(userId));
-        mLockPatternView.setShowErrorPath(mLockPatternUtils.isShowErrorPath(userId));
+                mSelectedUserInteractor.getSelectedUserId()));
         mLockPatternView.setOnTouchListener((v, event) -> {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 mFalsingCollector.avoidGesture();
@@ -241,7 +241,14 @@ public class KeyguardPatternViewController
                 getKeyguardSecurityCallback().onCancelClicked();
             });
         }
+        mView.onDevicePostureChanged(mPostureController.getDevicePosture());
         mPostureController.addCallback(mPostureCallback);
+        // if the user is currently locked out, enforce it.
+        long deadline = mLockPatternUtils.getLockoutAttemptDeadline(
+                mSelectedUserInteractor.getSelectedUserId());
+        if (deadline != 0) {
+            handleAttemptLockout(deadline);
+        }
     }
 
     @Override
@@ -261,19 +268,17 @@ public class KeyguardPatternViewController
     public void reset() {
         // reset lock pattern
         mLockPatternView.setInStealthMode(!mLockPatternUtils.isVisiblePatternEnabled(
-                KeyguardUpdateMonitor.getCurrentUser()));
+                mSelectedUserInteractor.getSelectedUserId()));
         mLockPatternView.enableInput();
         mLockPatternView.setEnabled(true);
         mLockPatternView.clearPattern();
 
-        // if the user is currently locked out, enforce it.
-        long deadline = mLockPatternUtils.getLockoutAttemptDeadline(
-                KeyguardUpdateMonitor.getCurrentUser());
-        if (deadline != 0) {
-            handleAttemptLockout(deadline);
-        } else {
-            displayDefaultSecurityMessage();
-        }
+        displayDefaultSecurityMessage();
+    }
+
+    @Override
+    public void onResume(int reason) {
+        super.onResume(reason);
     }
 
     @Override
@@ -300,45 +305,55 @@ public class KeyguardPatternViewController
     @Override
     public void showPromptReason(int reason) {
         /// TODO: move all this logic into the MessageAreaController?
+        int resId =  0;
         switch (reason) {
             case PROMPT_REASON_RESTART:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_restart_pattern);
+                resId = R.string.kg_prompt_reason_restart_pattern;
+                break;
+            case PROMPT_REASON_RESTART_FOR_MAINLINE_UPDATE:
+                resId = R.string.kg_prompt_after_update_pattern;
                 break;
             case PROMPT_REASON_TIMEOUT:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_timeout_pattern);
+                resId = R.string.kg_prompt_reason_timeout_pattern;
                 break;
             case PROMPT_REASON_DEVICE_ADMIN:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_device_admin);
+                resId = R.string.kg_prompt_reason_device_admin;
                 break;
             case PROMPT_REASON_USER_REQUEST:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_user_request);
+                resId = R.string.kg_prompt_after_user_lockdown_pattern;
                 break;
             case PROMPT_REASON_PREPARE_FOR_UPDATE:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_timeout_pattern);
+                resId = R.string.kg_prompt_reason_timeout_pattern;
                 break;
             case PROMPT_REASON_NON_STRONG_BIOMETRIC_TIMEOUT:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_timeout_pattern);
+                resId = R.string.kg_prompt_reason_timeout_pattern;
                 break;
             case PROMPT_REASON_TRUSTAGENT_EXPIRED:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_timeout_pattern);
+                resId = R.string.kg_prompt_reason_timeout_pattern;
+                break;
+            case PROMPT_REASON_ADAPTIVE_AUTH_REQUEST:
+                resId = R.string.kg_prompt_after_adaptive_auth_lock;
                 break;
             case PROMPT_REASON_NONE:
                 break;
             default:
-                mMessageAreaController.setMessage(R.string.kg_prompt_reason_timeout_pattern);
+                resId = R.string.kg_prompt_reason_timeout_pattern;
                 break;
+        }
+        if (resId != 0) {
+            mMessageAreaController.setMessage(getResources().getText(resId), /* animate= */ false);
         }
     }
 
     @Override
-    public void showMessage(CharSequence message, ColorStateList colorState) {
+    public void showMessage(CharSequence message, ColorStateList colorState, boolean animated) {
         if (mMessageAreaController == null) {
             return;
         }
         if (colorState != null) {
             mMessageAreaController.setNextMessageColor(colorState);
         }
-        mMessageAreaController.setMessage(message);
+        mMessageAreaController.setMessage(message, animated);
     }
 
     @Override
@@ -362,6 +377,7 @@ public class KeyguardPatternViewController
         final long elapsedRealtime = SystemClock.elapsedRealtime();
         final long secondsInFuture = (long) Math.ceil(
                 (elapsedRealtimeDeadline - elapsedRealtime) / 1000.0);
+        getKeyguardSecurityCallback().onAttemptLockoutStart(secondsInFuture);
         mCountdownTimer = new CountDownTimer(secondsInFuture * 1000, 1000) {
 
             @Override

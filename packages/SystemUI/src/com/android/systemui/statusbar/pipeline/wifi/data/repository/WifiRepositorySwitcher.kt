@@ -19,13 +19,16 @@ package com.android.systemui.statusbar.pipeline.wifi.data.repository
 import android.os.Bundle
 import androidx.annotation.VisibleForTesting
 import com.android.systemui.common.coroutine.ConflatedCallbackFlow.conflatedCallbackFlow
+import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.demomode.DemoMode
 import com.android.systemui.demomode.DemoModeController
+import com.android.systemui.statusbar.pipeline.ims.data.model.ImsStateModel
 import com.android.systemui.statusbar.pipeline.shared.data.model.DataActivityModel
 import com.android.systemui.statusbar.pipeline.wifi.data.repository.demo.DemoWifiRepository
 import com.android.systemui.statusbar.pipeline.wifi.data.repository.prod.WifiRepositoryImpl
 import com.android.systemui.statusbar.pipeline.wifi.shared.model.WifiNetworkModel
+import com.android.systemui.statusbar.pipeline.wifi.shared.model.WifiScanEntry
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -54,6 +57,7 @@ import kotlinx.coroutines.flow.stateIn
  */
 @Suppress("EXPERIMENTAL_IS_NOT_ENABLED")
 @OptIn(ExperimentalCoroutinesApi::class)
+@SysUISingleton
 class WifiRepositorySwitcher
 @Inject
 constructor(
@@ -113,8 +117,23 @@ constructor(
             .flatMapLatest { it.wifiNetwork }
             .stateIn(scope, SharingStarted.WhileSubscribed(), realImpl.wifiNetwork.value)
 
+    override val secondaryNetworks: StateFlow<List<WifiNetworkModel>> =
+        activeRepo
+            .flatMapLatest { it.secondaryNetworks }
+            .stateIn(scope, SharingStarted.WhileSubscribed(), realImpl.secondaryNetworks.value)
+
     override val wifiActivity: StateFlow<DataActivityModel> =
         activeRepo
             .flatMapLatest { it.wifiActivity }
             .stateIn(scope, SharingStarted.WhileSubscribed(), realImpl.wifiActivity.value)
+
+    override val wifiScanResults: StateFlow<List<WifiScanEntry>> =
+        activeRepo
+            .flatMapLatest { it.wifiScanResults }
+            .stateIn(scope, SharingStarted.WhileSubscribed(), realImpl.wifiScanResults.value)
+
+    override val imsStates: StateFlow<List<ImsStateModel>> =
+        activeRepo
+            .flatMapLatest { it.imsStates }
+            .stateIn(scope, SharingStarted.WhileSubscribed(), realImpl.imsStates.value)
 }

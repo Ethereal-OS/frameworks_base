@@ -34,7 +34,7 @@ import android.view.View
 
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent
 import com.android.internal.logging.MetricsLogger
-import com.android.systemui.R
+import com.android.systemui.res.R
 import com.android.systemui.dagger.qualifiers.Background
 import com.android.systemui.dagger.qualifiers.Main
 import com.android.systemui.plugins.qs.QSTile.Icon
@@ -45,12 +45,14 @@ import com.android.systemui.plugins.FalsingManager
 import com.android.systemui.qs.logging.QSLogger
 import com.android.systemui.qs.tileimpl.QSTileImpl
 import com.android.systemui.qs.QSHost
+import com.android.systemui.qs.QsEventLogger
 import com.android.systemui.util.settings.SystemSettings
 
 import javax.inject.Inject
 
 class RefreshRateTile @Inject constructor(
     host: QSHost,
+    uiEventLogger: QsEventLogger,
     @Background backgroundLooper: Looper,
     @Main private val mainHandler: Handler,
     falsingManager: FalsingManager,
@@ -61,6 +63,7 @@ class RefreshRateTile @Inject constructor(
     private val systemSettings: SystemSettings,
 ): QSTileImpl<State>(
     host,
+    uiEventLogger,
     backgroundLooper,
     mainHandler,
     falsingManager,
@@ -88,7 +91,7 @@ class RefreshRateTile @Inject constructor(
         }
 
         val display: Display? = mContext.getSystemService(
-                DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
+                DisplayManager::class.java)!!.getDisplay(Display.DEFAULT_DISPLAY)
         display?.let {
             it.getSupportedModes().forEach({ mode ->
                 mode.refreshRate.let { rr ->
@@ -136,7 +139,7 @@ class RefreshRateTile @Inject constructor(
         logD("secondaryLabel = ${state.secondaryLabel}")
     }
 
-    override fun getMetricsCategory(): Int = MetricsEvent.ETHEREAL
+    override fun getMetricsCategory(): Int = MetricsEvent.GEOMETRICS
 
     override fun destroy() {
         settingsObserver.unobserve()
@@ -208,7 +211,7 @@ class RefreshRateTile @Inject constructor(
     private inner class SettingsObserver: ContentObserver(mainHandler) {
         private var isObserving = false
 
-        override fun onChange(selfChange: Boolean, uri: Uri) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
             if (!ignoreSettingsChange) updateMode()
         }
 
@@ -237,7 +240,7 @@ class RefreshRateTile @Inject constructor(
         private val displaySettingsIntent = Intent().setComponent(ComponentName("com.android.settings",
             "com.android.settings.Settings\$DisplaySettingsActivity"))
         
-        private fun logD(msg: String?) {
+        private fun logD(msg: String) {
             if (DEBUG) Log.d(TAG, msg)
         }
     }

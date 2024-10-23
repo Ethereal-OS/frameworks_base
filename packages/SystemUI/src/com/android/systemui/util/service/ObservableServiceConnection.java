@@ -22,10 +22,17 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.IBinder;
+import android.util.IndentingPrintWriter;
 import android.util.Log;
 
-import com.android.systemui.dagger.qualifiers.Main;
+import androidx.annotation.NonNull;
 
+import com.android.systemui.dagger.qualifiers.Main;
+import com.android.systemui.settings.UserTracker;
+import com.android.systemui.util.DumpUtilsKt;
+import com.android.systemui.util.annotations.WeaklyReferencedCallback;
+
+import java.io.PrintWriter;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
@@ -63,6 +70,7 @@ public class ObservableServiceConnection<T> implements ServiceConnection {
      * An interface for listening to the connection status.
      * @param <T> The wrapper type.
      */
+    @WeaklyReferencedCallback
     public interface Callback<T> {
         /**
          * Invoked when the service has been successfully connected to.
@@ -108,6 +116,7 @@ public class ObservableServiceConnection<T> implements ServiceConnection {
 
     private final Context mContext;
     private final Intent mServiceIntent;
+    private final UserTracker mUserTracker;
     private final int mFlags;
     private final Executor mExecutor;
     private final ServiceTransformer<T> mTransformer;
@@ -127,10 +136,12 @@ public class ObservableServiceConnection<T> implements ServiceConnection {
      */
     @Inject
     public ObservableServiceConnection(Context context, Intent serviceIntent,
+            UserTracker userTracker,
             @Main Executor executor,
             ServiceTransformer<T> transformer) {
         mContext = context;
         mServiceIntent = serviceIntent;
+        mUserTracker = userTracker;
         mFlags = Context.BIND_AUTO_CREATE;
         mExecutor = executor;
         mTransformer = transformer;
@@ -145,12 +156,13 @@ public class ObservableServiceConnection<T> implements ServiceConnection {
     public boolean bind() {
         boolean bindResult = false;
         try {
-            bindResult = mContext.bindService(mServiceIntent, mFlags, mExecutor, this);
+            bindResult = mContext.bindServiceAsUser(mServiceIntent, this, mFlags,
+                    mUserTracker.getUserHandle());
+            mBoundCalled = true;
         } catch (SecurityException e) {
             Log.d(TAG, "Could not bind to service", e);
             mContext.unbindService(this);
         }
-        mBoundCalled = true;
         if (DEBUG) {
             Log.d(TAG, "bind. bound:" + bindResult);
         }
@@ -228,11 +240,28 @@ public class ObservableServiceConnection<T> implements ServiceConnection {
 
     @Override
     public void onServiceConnected(ComponentName name, IBinder service) {
-        if (DEBUG) {
-            Log.d(TAG, "onServiceConnected");
-        }
-        mProxy = mTransformer.convert(service);
-        applyToCallbacksLocked(callback -> callback.onConnected(this, mProxy));
+        mExecutor.execute(() -> {
+            if (DEBUG) {
+                Log.d(TAG, "onServiceConnected");
+            }
+            mProxy = mTransformer.convert(service);
+            applyToCallbacksLocked(callback -> callback.onConnected(this, mProxy));
+        });
+    }
+
+    void dump(@NonNull PrintWriter pw) {
+        IndentingPrintWriter ipw = DumpUtilsKt.asIndenting(pw);
+        ipw.println("ObservableServiceConnection state:");
+        DumpUtilsKt.withIncreasedIndent(ipw, () -> {
+            ipw.println("mServiceIntent: " + mServiceIntent);
+            ipw.println("mLastDisconnectReason: " + mLastDisconnectReason.orElse(-1));
+            ipw.println("Callbacks:");
+            DumpUtilsKt.withIncreasedIndent(ipw, () -> {
+                for (WeakReference<Callback<T>> cbRef : mCallbacks) {
+                    ipw.println(cbRef.get());
+                }
+            });
+        });
     }
 
     private void applyToCallbacksLocked(Consumer<Callback<T>> applicator) {
@@ -250,16 +279,16 @@ public class ObservableServiceConnection<T> implements ServiceConnection {
 
     @Override
     public void onServiceDisconnected(ComponentName name) {
-        onDisconnected(DISCONNECT_REASON_DISCONNECTED);
+        mExecutor.execute(() -> onDisconnected(DISCONNECT_REASON_DISCONNECTED));
     }
 
     @Override
     public void onBindingDied(ComponentName name) {
-        onDisconnected(DISCONNECT_REASON_DISCONNECTED);
+        mExecutor.execute(() -> onDisconnected(DISCONNECT_REASON_BINDING_DIED));
     }
 
     @Override
     public void onNullBinding(ComponentName name) {
-        onDisconnected(DISCONNECT_REASON_NULL_BINDING);
+        mExecutor.execute(() -> onDisconnected(DISCONNECT_REASON_NULL_BINDING));
     }
 }

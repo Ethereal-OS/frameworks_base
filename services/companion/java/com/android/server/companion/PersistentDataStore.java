@@ -27,10 +27,11 @@ import static com.android.internal.util.XmlUtils.writeLongAttribute;
 import static com.android.internal.util.XmlUtils.writeStringAttribute;
 import static com.android.server.companion.CompanionDeviceManagerService.getFirstAssociationIdForUser;
 import static com.android.server.companion.CompanionDeviceManagerService.getLastAssociationIdForUser;
-import static com.android.server.companion.DataStoreUtils.createStorageFileForUser;
-import static com.android.server.companion.DataStoreUtils.isEndOfTag;
-import static com.android.server.companion.DataStoreUtils.isStartOfTag;
-import static com.android.server.companion.DataStoreUtils.writeToFileSafely;
+import static com.android.server.companion.utils.DataStoreUtils.createStorageFileForUser;
+import static com.android.server.companion.utils.DataStoreUtils.fileToByteArray;
+import static com.android.server.companion.utils.DataStoreUtils.isEndOfTag;
+import static com.android.server.companion.utils.DataStoreUtils.isStartOfTag;
+import static com.android.server.companion.utils.DataStoreUtils.writeToFileSafely;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -45,19 +46,22 @@ import android.util.AtomicFile;
 import android.util.Log;
 import android.util.Slog;
 import android.util.SparseArray;
-import android.util.TypedXmlPullParser;
-import android.util.TypedXmlSerializer;
 import android.util.Xml;
 
 import com.android.internal.util.XmlUtils;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
+import com.android.server.companion.utils.DataStoreUtils;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 import org.xmlpull.v1.XmlSerializer;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -132,7 +136,8 @@ import java.util.concurrent.ConcurrentMap;
  *             notify_device_nearby="false"
  *             revoked="false"
  *             last_time_connected="1634641160229"
- *             time_approved="1634389553216"/>
+ *             time_approved="1634389553216"
+ *             system_data_sync_flags="0"/>
  *
  *         <association
  *             id="3"
@@ -143,7 +148,8 @@ import java.util.concurrent.ConcurrentMap;
  *             notify_device_nearby="false"
  *             revoked="false"
  *             last_time_connected="1634641160229"
- *             time_approved="1634641160229"/>
+ *             time_approved="1634641160229"
+ *             system_data_sync_flags="1"/>
  *     </associations>
  *
  *     <previously-used-ids>
@@ -169,6 +175,7 @@ final class PersistentDataStore {
     private static final String XML_TAG_ASSOCIATION = "association";
     private static final String XML_TAG_PREVIOUSLY_USED_IDS = "previously-used-ids";
     private static final String XML_TAG_PACKAGE = "package";
+    private static final String XML_TAG_TAG = "tag";
     private static final String XML_TAG_ID = "id";
 
     private static final String XML_ATTR_PERSISTENCE_VERSION = "persistence-version";
@@ -183,8 +190,10 @@ final class PersistentDataStore {
     private static final String XML_ATTR_SELF_MANAGED = "self_managed";
     private static final String XML_ATTR_NOTIFY_DEVICE_NEARBY = "notify_device_nearby";
     private static final String XML_ATTR_REVOKED = "revoked";
+    private static final String XML_ATTR_PENDING = "pending";
     private static final String XML_ATTR_TIME_APPROVED = "time_approved";
     private static final String XML_ATTR_LAST_TIME_CONNECTED = "last_time_connected";
+    private static final String XML_ATTR_SYSTEM_DATA_SYNC_FLAGS = "system_data_sync_flags";
 
     private static final String LEGACY_XML_ATTR_DEVICE = "device";
 
@@ -228,6 +237,11 @@ final class PersistentDataStore {
 
     /**
      * Reads previously persisted data for the given user "into" the provided containers.
+     *
+     * Note that {@link AssociationInfo#getAssociatedDevice()} will always be {@code null} after
+     * retrieval from this datastore because it is not persisted (by design). This means that
+     * persisted data is not guaranteed to be identical to the initial data that was stored at the
+     * time of association.
      *
      * @param userId Android UserID
      * @param associationsOut a container to read the {@link AssociationInfo}s "into".
@@ -293,6 +307,9 @@ final class PersistentDataStore {
     /**
      * Persisted data to the disk.
      *
+     * Note that associatedDevice field in {@link AssociationInfo} is not persisted by this
+     * datastore implementation.
+     *
      * @param userId Android UserID
      * @param associations a set of user's associations.
      * @param previouslyUsedIdsPerPackage a set previously used Association IDs for the user.
@@ -316,32 +333,40 @@ final class PersistentDataStore {
             @NonNull String rootTag, @Nullable Collection<AssociationInfo> associationsOut,
             @NonNull Map<String, Set<Integer>> previouslyUsedIdsPerPackageOut) {
         try (FileInputStream in = file.openRead()) {
-            final TypedXmlPullParser parser = Xml.resolvePullParser(in);
-
-            XmlUtils.beginDocument(parser, rootTag);
-            final int version = readIntAttribute(parser, XML_ATTR_PERSISTENCE_VERSION, 0);
-            switch (version) {
-                case 0:
-                    readAssociationsV0(parser, userId, associationsOut);
-                    break;
-                case 1:
-                    while (true) {
-                        parser.nextTag();
-                        if (isStartOfTag(parser, XML_TAG_ASSOCIATIONS)) {
-                            readAssociationsV1(parser, userId, associationsOut);
-                        } else if (isStartOfTag(parser, XML_TAG_PREVIOUSLY_USED_IDS)) {
-                            readPreviouslyUsedIdsV1(parser, previouslyUsedIdsPerPackageOut);
-                        } else if (isEndOfTag(parser, rootTag)) {
-                            break;
-                        }
-                    }
-                    break;
-            }
-            return version;
+            return readStateFromInputStream(userId, in, rootTag, associationsOut,
+                    previouslyUsedIdsPerPackageOut);
         } catch (XmlPullParserException | IOException e) {
             Slog.e(TAG, "Error while reading associations file", e);
             return -1;
         }
+    }
+
+    private int readStateFromInputStream(@UserIdInt int userId, @NonNull InputStream in,
+            @NonNull String rootTag, @Nullable Collection<AssociationInfo> associationsOut,
+            @NonNull Map<String, Set<Integer>> previouslyUsedIdsPerPackageOut)
+            throws XmlPullParserException, IOException {
+        final TypedXmlPullParser parser = Xml.resolvePullParser(in);
+
+        XmlUtils.beginDocument(parser, rootTag);
+        final int version = readIntAttribute(parser, XML_ATTR_PERSISTENCE_VERSION, 0);
+        switch (version) {
+            case 0:
+                readAssociationsV0(parser, userId, associationsOut);
+                break;
+            case 1:
+                while (true) {
+                    parser.nextTag();
+                    if (isStartOfTag(parser, XML_TAG_ASSOCIATIONS)) {
+                        readAssociationsV1(parser, userId, associationsOut);
+                    } else if (isStartOfTag(parser, XML_TAG_PREVIOUSLY_USED_IDS)) {
+                        readPreviouslyUsedIdsV1(parser, previouslyUsedIdsPerPackageOut);
+                    } else if (isEndOfTag(parser, rootTag)) {
+                        break;
+                    }
+                }
+                break;
+        }
+        return version;
     }
 
     private void persistStateToFileLocked(@NonNull AtomicFile file,
@@ -379,6 +404,26 @@ final class PersistentDataStore {
                 u -> createStorageFileForUser(userId, FILE_NAME));
     }
 
+    byte[] getBackupPayload(@UserIdInt int userId) {
+        Slog.i(TAG, "Fetching stored state data for user " + userId + " from disk");
+        final AtomicFile file = getStorageFileForUser(userId);
+
+        synchronized (file) {
+            return fileToByteArray(file);
+        }
+    }
+
+    void readStateFromPayload(byte[] payload, @UserIdInt int userId,
+                              @NonNull Set<AssociationInfo> associationsOut,
+                              @NonNull Map<String, Set<Integer>> previouslyUsedIdsPerPackageOut) {
+        try (ByteArrayInputStream in = new ByteArrayInputStream(payload)) {
+            readStateFromInputStream(userId, in, XML_TAG_STATE, associationsOut,
+                    previouslyUsedIdsPerPackageOut);
+        } catch (XmlPullParserException | IOException e) {
+            Slog.e(TAG, "Error while reading associations file", e);
+        }
+    }
+
     private static @NonNull File getBaseLegacyStorageFileForUser(@UserIdInt int userId) {
         return new File(Environment.getUserSystemDirectory(userId), FILE_NAME_LEGACY);
     }
@@ -410,6 +455,7 @@ final class PersistentDataStore {
         requireStartOfTag(parser, XML_TAG_ASSOCIATION);
 
         final String appPackage = readStringAttribute(parser, XML_ATTR_PACKAGE);
+        final String tag = readStringAttribute(parser, XML_TAG_TAG);
         final String deviceAddress = readStringAttribute(parser, LEGACY_XML_ATTR_DEVICE);
 
         if (appPackage == null || deviceAddress == null) return;
@@ -418,10 +464,10 @@ final class PersistentDataStore {
         final boolean notify = readBooleanAttribute(parser, XML_ATTR_NOTIFY_DEVICE_NEARBY);
         final long timeApproved = readLongAttribute(parser, XML_ATTR_TIME_APPROVED, 0L);
 
-        out.add(new AssociationInfo(associationId, userId, appPackage,
-                MacAddress.fromString(deviceAddress), null, profile,
-                /* managedByCompanionApp */ false, notify, /* revoked */ false, timeApproved,
-                Long.MAX_VALUE));
+        out.add(new AssociationInfo(associationId, userId, appPackage, tag,
+                MacAddress.fromString(deviceAddress), null, profile, null,
+                /* managedByCompanionApp */ false, notify, /* revoked */ false, /* pending */ false,
+                timeApproved, Long.MAX_VALUE, /* systemDataSyncFlags */ 0));
     }
 
     private static void readAssociationsV1(@NonNull TypedXmlPullParser parser,
@@ -445,19 +491,23 @@ final class PersistentDataStore {
         final int associationId = readIntAttribute(parser, XML_ATTR_ID);
         final String profile = readStringAttribute(parser, XML_ATTR_PROFILE);
         final String appPackage = readStringAttribute(parser, XML_ATTR_PACKAGE);
+        final String tag = readStringAttribute(parser, XML_TAG_TAG);
         final MacAddress macAddress = stringToMacAddress(
                 readStringAttribute(parser, XML_ATTR_MAC_ADDRESS));
         final String displayName = readStringAttribute(parser, XML_ATTR_DISPLAY_NAME);
         final boolean selfManaged = readBooleanAttribute(parser, XML_ATTR_SELF_MANAGED);
         final boolean notify = readBooleanAttribute(parser, XML_ATTR_NOTIFY_DEVICE_NEARBY);
         final boolean revoked = readBooleanAttribute(parser, XML_ATTR_REVOKED, false);
+        final boolean pending = readBooleanAttribute(parser, XML_ATTR_PENDING, false);
         final long timeApproved = readLongAttribute(parser, XML_ATTR_TIME_APPROVED, 0L);
         final long lastTimeConnected = readLongAttribute(
                 parser, XML_ATTR_LAST_TIME_CONNECTED, Long.MAX_VALUE);
+        final int systemDataSyncFlags = readIntAttribute(parser,
+                XML_ATTR_SYSTEM_DATA_SYNC_FLAGS, 0);
 
         final AssociationInfo associationInfo = createAssociationInfoNoThrow(associationId, userId,
-                appPackage, macAddress, displayName, profile, selfManaged, notify, revoked,
-                timeApproved, lastTimeConnected);
+                appPackage, tag, macAddress, displayName, profile, selfManaged, notify, revoked,
+                pending, timeApproved, lastTimeConnected, systemDataSyncFlags);
         if (associationInfo != null) {
             out.add(associationInfo);
         }
@@ -505,16 +555,18 @@ final class PersistentDataStore {
         writeIntAttribute(serializer, XML_ATTR_ID, a.getId());
         writeStringAttribute(serializer, XML_ATTR_PROFILE, a.getDeviceProfile());
         writeStringAttribute(serializer, XML_ATTR_PACKAGE, a.getPackageName());
+        writeStringAttribute(serializer, XML_TAG_TAG, a.getTag());
         writeStringAttribute(serializer, XML_ATTR_MAC_ADDRESS, a.getDeviceMacAddressAsString());
         writeStringAttribute(serializer, XML_ATTR_DISPLAY_NAME, a.getDisplayName());
         writeBooleanAttribute(serializer, XML_ATTR_SELF_MANAGED, a.isSelfManaged());
         writeBooleanAttribute(
                 serializer, XML_ATTR_NOTIFY_DEVICE_NEARBY, a.isNotifyOnDeviceNearby());
-        writeBooleanAttribute(
-                serializer, XML_ATTR_REVOKED, a.isRevoked());
+        writeBooleanAttribute(serializer, XML_ATTR_REVOKED, a.isRevoked());
+        writeBooleanAttribute(serializer, XML_ATTR_PENDING, a.isPending());
         writeLongAttribute(serializer, XML_ATTR_TIME_APPROVED, a.getTimeApprovedMs());
         writeLongAttribute(
                 serializer, XML_ATTR_LAST_TIME_CONNECTED, a.getLastTimeConnectedMs());
+        writeIntAttribute(serializer, XML_ATTR_SYSTEM_DATA_SYNC_FLAGS, a.getSystemDataSyncFlags());
 
         serializer.endTag(null, XML_TAG_ASSOCIATION);
     }
@@ -551,14 +603,17 @@ final class PersistentDataStore {
     }
 
     private static AssociationInfo createAssociationInfoNoThrow(int associationId,
-            @UserIdInt int userId, @NonNull String appPackage, @Nullable MacAddress macAddress,
-            @Nullable CharSequence displayName, @Nullable String profile, boolean selfManaged,
-            boolean notify, boolean revoked, long timeApproved, long lastTimeConnected) {
+            @UserIdInt int userId, @NonNull String appPackage, @Nullable String tag,
+            @Nullable MacAddress macAddress, @Nullable CharSequence displayName,
+            @Nullable String profile, boolean selfManaged, boolean notify, boolean revoked,
+            boolean pending, long timeApproved, long lastTimeConnected, int systemDataSyncFlags) {
         AssociationInfo associationInfo = null;
         try {
-            associationInfo = new AssociationInfo(associationId, userId, appPackage, macAddress,
-                    displayName, profile, selfManaged, notify, revoked, timeApproved,
-                    lastTimeConnected);
+            // We do not persist AssociatedDevice, which means that AssociationInfo retrieved from
+            // datastore is not guaranteed to be identical to the one from initial association.
+            associationInfo = new AssociationInfo(associationId, userId, appPackage, tag,
+                    macAddress, displayName, profile, null, selfManaged, notify,
+                    revoked, pending, timeApproved, lastTimeConnected, systemDataSyncFlags);
         } catch (Exception e) {
             if (DEBUG) Log.w(TAG, "Could not create AssociationInfo", e);
         }

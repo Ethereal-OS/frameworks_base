@@ -20,12 +20,9 @@ import static com.android.systemui.statusbar.phone.StatusBarIconList.Slot;
 
 import android.annotation.NonNull;
 import android.content.Context;
-import android.database.ContentObserver;
 import android.graphics.drawable.Icon;
 import android.os.Bundle;
-import android.os.Handler;
 import android.os.UserHandle;
-import android.provider.Settings;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Log;
@@ -35,25 +32,23 @@ import androidx.annotation.VisibleForTesting;
 
 import com.android.internal.statusbar.StatusBarIcon;
 import com.android.systemui.Dumpable;
-import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.demomode.DemoMode;
 import com.android.systemui.demomode.DemoModeController;
 import com.android.systemui.dump.DumpManager;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.StatusIconDisplayable;
-import com.android.systemui.statusbar.connectivity.ImsIconState;
+import com.android.systemui.statusbar.phone.StatusBarIconHolder.BindableIconHolder;
 import com.android.systemui.statusbar.phone.PhoneStatusBarPolicy.BluetoothIconState;
 import com.android.systemui.statusbar.phone.PhoneStatusBarPolicy.NetworkTrafficState;
 import com.android.systemui.statusbar.phone.StatusBarSignalPolicy.CallIndicatorIconState;
-import com.android.systemui.statusbar.phone.StatusBarSignalPolicy.MobileIconState;
-import com.android.systemui.statusbar.phone.StatusBarSignalPolicy.WifiIconState;
 import com.android.systemui.statusbar.pipeline.StatusBarPipelineFlags;
+import com.android.systemui.statusbar.pipeline.icons.shared.BindableIconsRegistry;
+import com.android.systemui.statusbar.pipeline.icons.shared.model.BindableIcon;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.ConfigurationController.ConfigurationListener;
 import com.android.systemui.tuner.TunerService;
 import com.android.systemui.tuner.TunerService.Tunable;
-import com.android.systemui.util.settings.SystemSettings;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -82,9 +77,6 @@ public class StatusBarIconControllerImpl implements Tunable,
     private final ArraySet<String> mIconHideList = new ArraySet<>();
     private final StatusBarPipelineFlags mStatusBarPipelineFlags;
     private final Context mContext;
-    private final SystemSettings mSystemSettings;
-
-    private boolean mIsOldSignalStyle = false;
 
     /** */
     @Inject
@@ -97,13 +89,11 @@ public class StatusBarIconControllerImpl implements Tunable,
             DumpManager dumpManager,
             StatusBarIconList statusBarIconList,
             StatusBarPipelineFlags statusBarPipelineFlags,
-            @Main Handler handler,
-            SystemSettings systemSettings
+            BindableIconsRegistry modernIconsRegistry
     ) {
         mStatusBarIconList = statusBarIconList;
         mContext = context;
         mStatusBarPipelineFlags = statusBarPipelineFlags;
-        mSystemSettings = systemSettings;
 
         configurationController.addCallback(this);
         commandQueue.addCallback(mCommandQueueCallbacks);
@@ -111,31 +101,27 @@ public class StatusBarIconControllerImpl implements Tunable,
         demoModeController.addCallback(this);
         dumpManager.registerDumpable(getClass().getSimpleName(), this);
 
-        mIsOldSignalStyle = getIsOldSignalStyle();
-        final ContentObserver settingsObserver = new ContentObserver(handler) {
-            @Override
-            public void onChange(boolean selfChange) {
-                final boolean isOldSignalStyle = getIsOldSignalStyle();
-                if (mIsOldSignalStyle == isOldSignalStyle) return;
-                mIsOldSignalStyle = isOldSignalStyle;
-                mIconGroups.forEach(group -> {
-                    group.setMobileSignalStyle(mIsOldSignalStyle);
-                    group.updateMobileIconStyle();
-                });
-            }
-        };
-        mSystemSettings.registerContentObserverForUser(
-            Settings.System.USE_OLD_MOBILETYPE,
-            settingsObserver,
-            UserHandle.USER_ALL
-        );
+        addModernBindableIcons(modernIconsRegistry);
     }
 
-    private boolean getIsOldSignalStyle() {
-        return mSystemSettings.getIntForUser(
-            Settings.System.USE_OLD_MOBILETYPE,
-            0, UserHandle.USER_CURRENT
-        ) == 1;
+    /**
+     * BindableIcons will always produce ModernStatusBarViews, which will be initialized and bound
+     * upon being added to any icon group. Because their view policy does not require subsequent
+     * calls to setIcon(), we can simply register them all statically here and not have to build
+     * CoreStartables for each modern icon.
+     *
+     * @param registry a statically defined provider of the modern icons
+     */
+    private void addModernBindableIcons(BindableIconsRegistry registry) {
+        List<BindableIcon> icons = registry.getBindableIcons();
+
+        // Initialization point for the bindable (modern) icons. These icons get their own slot
+        // allocated immediately, and are required to control their own display properties
+        for (BindableIcon i : icons) {
+            if (i.getShouldBindIcon()) {
+                addBindableIcon(i);
+            }
+        }
     }
 
     /** */
@@ -148,7 +134,7 @@ public class StatusBarIconControllerImpl implements Tunable,
                 .ifPresent(i -> removeIconGroup(i));
 
         group.setController(this);
-        group.setMobileSignalStyle(mIsOldSignalStyle);
+        group.reloadDimens();
         mIconGroups.add(group);
         List<Slot> allSlots = mStatusBarIconList.getSlots();
         for (int i = 0; i < allSlots.size(); i++) {
@@ -217,7 +203,7 @@ public class StatusBarIconControllerImpl implements Tunable,
     }
 
     @Override
-    public void setImsIcon(String slot, ImsIconState state) {
+    public void setNetworkTraffic(String slot, NetworkTrafficState state) {
         if (state == null) {
             removeIcon(slot, 0);
             return;
@@ -225,10 +211,10 @@ public class StatusBarIconControllerImpl implements Tunable,
 
         StatusBarIconHolder holder = mStatusBarIconList.getIconHolder(slot, 0);
         if (holder == null) {
-            holder = StatusBarIconHolder.fromImsIconState(state);
+            holder = StatusBarIconHolder.fromNetworkTrafficState(state);
             setIcon(slot, holder);
         } else {
-            holder.setImsState(state);
+            holder.setNetworkTrafficState(state);
             handleSet(slot, holder);
         }
     }
@@ -238,6 +224,17 @@ public class StatusBarIconControllerImpl implements Tunable,
         boolean hidden = mIconHideList.contains(slot);
 
         mIconGroups.forEach(l -> l.onIconAdded(viewIndex, slot, hidden, holder));
+    }
+
+    void addBindableIcon(BindableIcon icon) {
+        StatusBarIconHolder existingHolder = mStatusBarIconList.getIconHolder(icon.getSlot(), 0);
+        // Expected to be null
+        if (existingHolder == null) {
+            BindableIconHolder bindableIcon = new BindableIconHolder(icon.getInitializer());
+            setIcon(icon.getSlot(), bindableIcon);
+        } else {
+            Log.e(TAG, "addBindableIcon called, but icon has already been added. Ignoring");
+        }
     }
 
     /** */
@@ -258,35 +255,7 @@ public class StatusBarIconControllerImpl implements Tunable,
     }
 
     @Override
-    public void setWifiIcon(String slot, WifiIconState state) {
-        if (mStatusBarPipelineFlags.useNewWifiIcon()) {
-            Log.d(TAG, "ignoring old pipeline callback because the new wifi icon is enabled");
-            return;
-        }
-
-        if (state == null) {
-            removeIcon(slot, 0);
-            return;
-        }
-
-        StatusBarIconHolder holder = mStatusBarIconList.getIconHolder(slot, 0);
-        if (holder == null) {
-            holder = StatusBarIconHolder.fromWifiIconState(state);
-            setIcon(slot, holder);
-        } else {
-            holder.setWifiState(state);
-            handleSet(slot, holder);
-        }
-    }
-
-
-    @Override
     public void setNewWifiIcon() {
-        if (!mStatusBarPipelineFlags.useNewWifiIcon()) {
-            Log.d(TAG, "ignoring new pipeline callback because the new wifi icon is disabled");
-            return;
-        }
-
         String slot = mContext.getString(com.android.internal.R.string.status_bar_wifi);
         StatusBarIconHolder holder = mStatusBarIconList.getIconHolder(slot, /* tag= */ 0);
         if (holder == null) {
@@ -317,41 +286,10 @@ public class StatusBarIconControllerImpl implements Tunable,
     /**
      * Accept a list of MobileIconStates, which all live in the same slot(?!), and then are sorted
      * by subId. Don't worry this definitely makes sense and works.
-     * @param slot da slot
-     * @param iconStates All of the mobile icon states
+     * @param subIds list of subscription ID integers that provide the key to the icon to display.
      */
     @Override
-    public void setMobileIcons(String slot, List<MobileIconState> iconStates) {
-        if (mStatusBarPipelineFlags.useNewMobileIcons()) {
-            Log.d(TAG, "ignoring old pipeline callbacks, because the new mobile "
-                    + "icons are enabled");
-            return;
-        }
-        Slot mobileSlot = mStatusBarIconList.getSlot(slot);
-
-        // Reverse the sort order to show icons with left to right([Slot1][Slot2]..).
-        // StatusBarIconList has UI design that first items go to the right of second items.
-        Collections.reverse(iconStates);
-
-        for (MobileIconState state : iconStates) {
-            StatusBarIconHolder holder = mobileSlot.getHolderForTag(state.subId);
-            if (holder == null) {
-                holder = StatusBarIconHolder.fromMobileIconState(state);
-                setIcon(slot, holder);
-            } else {
-                holder.setMobileState(state);
-                handleSet(slot, holder);
-            }
-        }
-    }
-
-    @Override
     public void setNewMobileIconSubIds(List<Integer> subIds) {
-        if (!mStatusBarPipelineFlags.useNewMobileIcons()) {
-            Log.d(TAG, "ignoring new pipeline callback, "
-                    + "since the new mobile icons are disabled");
-            return;
-        }
         String slotName = mContext.getString(com.android.internal.R.string.status_bar_mobile);
         Slot mobileSlot = mStatusBarIconList.getSlot(slotName);
 
@@ -446,23 +384,6 @@ public class StatusBarIconControllerImpl implements Tunable,
         removeAllIconsForExternalSlot(slot);
     }
 
-    @Override
-    public void setNetworkTraffic(String slot, NetworkTrafficState state) {
-        if (state == null) {
-            removeIcon(slot, 0);
-            return;
-        }
-
-        StatusBarIconHolder holder = mStatusBarIconList.getIconHolder(slot, 0);
-        if (holder == null) {
-            holder = StatusBarIconHolder.fromNetworkTrafficState(state);
-            setIcon(slot, holder);
-        } else {
-            holder.setNetworkTrafficState(state);
-            handleSet(slot, holder);
-        }
-    }
-
     private void setExternalIcon(String slot, StatusBarIcon icon) {
         if (icon == null) {
             removeAllIconsForExternalSlot(slot);
@@ -536,13 +457,7 @@ public class StatusBarIconControllerImpl implements Tunable,
     }
 
     private void removeAllIconsForExternalSlot(String slotName) {
-        removeAllIconsForSlot(createExternalSlotName(slotName));
-    }
-
-    /** */
-    @Override
-    public void removeAllIconsForSlot(String slotName) {
-        removeAllIconsForSlot(slotName, /* fromNewPipeline */ false);
+        removeAllIconsForSlot(createExternalSlotName(slotName), /* fromNewPipeline= */ false);
     }
 
     private void removeAllIconsForSlot(String slotName, boolean fromNewPipeline) {

@@ -30,11 +30,11 @@ import android.testing.AndroidTestingRunner;
 import androidx.test.filters.SmallTest;
 
 import com.android.systemui.SysuiTestCase;
+import com.android.systemui.complication.DreamMediaEntryComplication;
 import com.android.systemui.dreams.DreamOverlayStateController;
-import com.android.systemui.dreams.complication.DreamMediaEntryComplication;
 import com.android.systemui.flags.FeatureFlags;
-import com.android.systemui.media.controls.models.player.MediaData;
-import com.android.systemui.media.controls.pipeline.MediaDataManager;
+import com.android.systemui.media.controls.domain.pipeline.MediaDataManager;
+import com.android.systemui.media.controls.shared.model.MediaData;
 
 import org.junit.Before;
 import org.junit.Test;

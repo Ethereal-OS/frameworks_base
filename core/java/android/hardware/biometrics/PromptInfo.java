@@ -16,8 +16,10 @@
 
 package android.hardware.biometrics;
 
+import android.annotation.DrawableRes;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.graphics.Bitmap;
 import android.os.Parcel;
 import android.os.Parcelable;
 
@@ -30,10 +32,15 @@ import java.util.List;
  */
 public class PromptInfo implements Parcelable {
 
+    @DrawableRes private int mLogoRes = -1;
+    @Nullable private Bitmap mLogoBitmap;
+    @Nullable private String mLogoDescription;
     @NonNull private CharSequence mTitle;
     private boolean mUseDefaultTitle;
     @Nullable private CharSequence mSubtitle;
+    private boolean mUseDefaultSubtitle;
     @Nullable private CharSequence mDescription;
+    @Nullable private PromptContentViewParcelable mContentView;
     @Nullable private CharSequence mDeviceCredentialTitle;
     @Nullable private CharSequence mDeviceCredentialSubtitle;
     @Nullable private CharSequence mDeviceCredentialDescription;
@@ -47,16 +54,24 @@ public class PromptInfo implements Parcelable {
     private boolean mAllowBackgroundAuthentication;
     private boolean mIgnoreEnrollmentState;
     private boolean mIsForLegacyFingerprintManager = false;
+    private boolean mShowEmergencyCallButton = false;
+    private boolean mUseParentProfileForDeviceCredential = false;
 
     public PromptInfo() {
 
     }
 
     PromptInfo(Parcel in) {
+        mLogoRes = in.readInt();
+        mLogoBitmap = in.readTypedObject(Bitmap.CREATOR);
+        mLogoDescription = in.readString();
         mTitle = in.readCharSequence();
         mUseDefaultTitle = in.readBoolean();
         mSubtitle = in.readCharSequence();
+        mUseDefaultSubtitle = in.readBoolean();
         mDescription = in.readCharSequence();
+        mContentView = in.readParcelable(PromptContentViewParcelable.class.getClassLoader(),
+                PromptContentViewParcelable.class);
         mDeviceCredentialTitle = in.readCharSequence();
         mDeviceCredentialSubtitle = in.readCharSequence();
         mDeviceCredentialDescription = in.readCharSequence();
@@ -70,6 +85,8 @@ public class PromptInfo implements Parcelable {
         mAllowBackgroundAuthentication = in.readBoolean();
         mIgnoreEnrollmentState = in.readBoolean();
         mIsForLegacyFingerprintManager = in.readBoolean();
+        mShowEmergencyCallButton = in.readBoolean();
+        mUseParentProfileForDeviceCredential = in.readBoolean();
     }
 
     public static final Creator<PromptInfo> CREATOR = new Creator<PromptInfo>() {
@@ -91,10 +108,15 @@ public class PromptInfo implements Parcelable {
 
     @Override
     public void writeToParcel(Parcel dest, int flags) {
+        dest.writeInt(mLogoRes);
+        dest.writeTypedObject(mLogoBitmap, 0);
+        dest.writeString(mLogoDescription);
         dest.writeCharSequence(mTitle);
         dest.writeBoolean(mUseDefaultTitle);
         dest.writeCharSequence(mSubtitle);
+        dest.writeBoolean(mUseDefaultSubtitle);
         dest.writeCharSequence(mDescription);
+        dest.writeParcelable(mContentView, 0);
         dest.writeCharSequence(mDeviceCredentialTitle);
         dest.writeCharSequence(mDeviceCredentialSubtitle);
         dest.writeCharSequence(mDeviceCredentialDescription);
@@ -108,8 +130,11 @@ public class PromptInfo implements Parcelable {
         dest.writeBoolean(mAllowBackgroundAuthentication);
         dest.writeBoolean(mIgnoreEnrollmentState);
         dest.writeBoolean(mIsForLegacyFingerprintManager);
+        dest.writeBoolean(mShowEmergencyCallButton);
+        dest.writeBoolean(mUseParentProfileForDeviceCredential);
     }
 
+    // LINT.IfChange
     public boolean containsTestConfigurations() {
         if (mIsForLegacyFingerprintManager
                 && mAllowedSensorIds.size() == 1
@@ -119,6 +144,10 @@ public class PromptInfo implements Parcelable {
             return true;
         } else if (mAllowBackgroundAuthentication) {
             return true;
+        } else if (mIsForLegacyFingerprintManager) {
+            return true;
+        } else if (mIgnoreEnrollmentState) {
+            return true;
         }
         return false;
     }
@@ -127,6 +156,8 @@ public class PromptInfo implements Parcelable {
         if (mDisallowBiometricsIfPolicyExists) {
             return true;
         } else if (mUseDefaultTitle) {
+            return true;
+        } else if (mUseDefaultSubtitle) {
             return true;
         } else if (mDeviceCredentialTitle != null) {
             return true;
@@ -140,7 +171,42 @@ public class PromptInfo implements Parcelable {
         return false;
     }
 
+    /**
+     * Returns whether SET_BIOMETRIC_DIALOG_LOGO is contained.
+     */
+    public boolean containsSetLogoApiConfigurations() {
+        if (mLogoRes != -1) {
+            return true;
+        } else if (mLogoBitmap != null) {
+            return true;
+        } else if (mLogoDescription != null) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns if parent profile needs to be used for device credential.
+     */
+    public boolean shouldUseParentProfileForDeviceCredential() {
+        return mUseParentProfileForDeviceCredential;
+    }
+    // LINT.ThenChange(frameworks/base/core/java/android/hardware/biometrics/BiometricPrompt.java)
+
     // Setters
+    public void setLogoRes(@DrawableRes int logoRes) {
+        mLogoRes = logoRes;
+        checkOnlyOneLogoSet();
+    }
+
+    public void setLogoBitmap(@NonNull Bitmap logoBitmap) {
+        mLogoBitmap = logoBitmap;
+        checkOnlyOneLogoSet();
+    }
+
+    public void setLogoDescription(@NonNull String logoDescription) {
+        mLogoDescription = logoDescription;
+    }
 
     public void setTitle(CharSequence title) {
         mTitle = title;
@@ -154,8 +220,16 @@ public class PromptInfo implements Parcelable {
         mSubtitle = subtitle;
     }
 
+    public void setUseDefaultSubtitle(boolean useDefaultSubtitle) {
+        mUseDefaultSubtitle = useDefaultSubtitle;
+    }
+
     public void setDescription(CharSequence description) {
         mDescription = description;
+    }
+
+    public void setContentView(PromptContentView view) {
+        mContentView = (PromptContentViewParcelable) view;
     }
 
     public void setDeviceCredentialTitle(CharSequence deviceCredentialTitle) {
@@ -213,7 +287,28 @@ public class PromptInfo implements Parcelable {
         mAllowedSensorIds.add(sensorId);
     }
 
+    public void setShowEmergencyCallButton(boolean showEmergencyCallButton) {
+        mShowEmergencyCallButton = showEmergencyCallButton;
+    }
+
+    public void setUseParentProfileForDeviceCredential(
+            boolean useParentProfileForDeviceCredential) {
+        mUseParentProfileForDeviceCredential = useParentProfileForDeviceCredential;
+    }
+
     // Getters
+    @DrawableRes
+    public int getLogoRes() {
+        return mLogoRes;
+    }
+
+    public Bitmap getLogoBitmap() {
+        return mLogoBitmap;
+    }
+
+    public String getLogoDescription() {
+        return mLogoDescription;
+    }
 
     public CharSequence getTitle() {
         return mTitle;
@@ -227,8 +322,21 @@ public class PromptInfo implements Parcelable {
         return mSubtitle;
     }
 
+    public boolean isUseDefaultSubtitle() {
+        return mUseDefaultSubtitle;
+    }
+
     public CharSequence getDescription() {
         return mDescription;
+    }
+
+    /**
+     * Gets the content view for the prompt.
+     *
+     * @return The content view for the prompt, or null if the prompt has no content view.
+     */
+    public PromptContentView getContentView() {
+        return mContentView;
     }
 
     public CharSequence getDeviceCredentialTitle() {
@@ -289,5 +397,16 @@ public class PromptInfo implements Parcelable {
 
     public boolean isForLegacyFingerprintManager() {
         return mIsForLegacyFingerprintManager;
+    }
+
+    public boolean isShowEmergencyCallButton() {
+        return mShowEmergencyCallButton;
+    }
+
+    private void checkOnlyOneLogoSet() {
+        if (mLogoRes != -1 && mLogoBitmap != null) {
+            throw new IllegalStateException(
+                    "Exclusively one of logo resource or logo bitmap can be set");
+        }
     }
 }

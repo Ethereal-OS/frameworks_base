@@ -44,14 +44,14 @@ import android.os.test.TestLooper;
 import android.provider.DeviceConfig;
 import android.util.AtomicFile;
 import android.util.LongArrayQueue;
-import android.util.TypedXmlPullParser;
-import android.util.TypedXmlSerializer;
 import android.util.Xml;
 
 import androidx.test.InstrumentationRegistry;
 
 import com.android.dx.mockito.inline.extended.ExtendedMockito;
 import com.android.internal.util.XmlUtils;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
 import com.android.server.PackageWatchdog.HealthCheckState;
 import com.android.server.PackageWatchdog.MonitoredPackage;
 import com.android.server.PackageWatchdog.PackageHealthObserver;
@@ -70,6 +70,7 @@ import org.mockito.stubbing.Answer;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -107,10 +108,13 @@ public class PackageWatchdogTest {
     private ConnectivityModuleConnector mConnectivityModuleConnector;
     @Mock
     private PackageManager mMockPackageManager;
+    // Mock only sysprop apis
+    private PackageWatchdog.BootThreshold mSpyBootThreshold;
     @Captor
     private ArgumentCaptor<ConnectivityModuleHealthListener> mConnectivityModuleCallbackCaptor;
     private MockitoSession mSession;
     private HashMap<String, String> mSystemSettingsMap;
+    private HashMap<String, String> mCrashRecoveryPropertiesMap;
 
     private boolean retry(Supplier<Boolean> supplier) throws Exception {
         for (int i = 0; i < RETRY_MAX_COUNT; ++i) {
@@ -417,9 +421,9 @@ public class PackageWatchdogTest {
                         int failureReason, int mitigationCount) {
                     if (versionedPackage.getVersionCode() == VERSION_CODE) {
                         // Only rollback for specific versionCode
-                        return PackageHealthObserverImpact.USER_IMPACT_MEDIUM;
+                        return PackageHealthObserverImpact.USER_IMPACT_LEVEL_30;
                     }
-                    return PackageHealthObserverImpact.USER_IMPACT_NONE;
+                    return PackageHealthObserverImpact.USER_IMPACT_LEVEL_0;
                 }
             };
 
@@ -442,13 +446,13 @@ public class PackageWatchdogTest {
     public void testPackageFailureNotifyAllDifferentImpacts() throws Exception {
         PackageWatchdog watchdog = createWatchdog();
         TestObserver observerNone = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_NONE);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_0);
         TestObserver observerHigh = new TestObserver(OBSERVER_NAME_2,
-                PackageHealthObserverImpact.USER_IMPACT_HIGH);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_100);
         TestObserver observerMid = new TestObserver(OBSERVER_NAME_3,
-                PackageHealthObserverImpact.USER_IMPACT_MEDIUM);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_30);
         TestObserver observerLow = new TestObserver(OBSERVER_NAME_4,
-                PackageHealthObserverImpact.USER_IMPACT_LOW);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_10);
 
         // Start observing for all impact observers
         watchdog.startObservingHealth(observerNone, Arrays.asList(APP_A, APP_B, APP_C, APP_D),
@@ -499,9 +503,9 @@ public class PackageWatchdogTest {
     public void testPackageFailureNotifyLeastImpactSuccessively() throws Exception {
         PackageWatchdog watchdog = createWatchdog();
         TestObserver observerFirst = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_LOW);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_10);
         TestObserver observerSecond = new TestObserver(OBSERVER_NAME_2,
-                PackageHealthObserverImpact.USER_IMPACT_MEDIUM);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_30);
 
         // Start observing for observerFirst and observerSecond with failure handling
         watchdog.startObservingHealth(observerFirst, Arrays.asList(APP_A), LONG_DURATION);
@@ -517,7 +521,7 @@ public class PackageWatchdogTest {
         assertThat(observerSecond.mMitigatedPackages).isEmpty();
 
         // After observerFirst handles failure, next action it has is high impact
-        observerFirst.mImpact = PackageHealthObserverImpact.USER_IMPACT_HIGH;
+        observerFirst.mImpact = PackageHealthObserverImpact.USER_IMPACT_LEVEL_100;
         observerFirst.mMitigatedPackages.clear();
         observerSecond.mMitigatedPackages.clear();
 
@@ -531,7 +535,7 @@ public class PackageWatchdogTest {
         assertThat(observerFirst.mMitigatedPackages).isEmpty();
 
         // After observerSecond handles failure, it has no further actions
-        observerSecond.mImpact = PackageHealthObserverImpact.USER_IMPACT_NONE;
+        observerSecond.mImpact = PackageHealthObserverImpact.USER_IMPACT_LEVEL_0;
         observerFirst.mMitigatedPackages.clear();
         observerSecond.mMitigatedPackages.clear();
 
@@ -545,7 +549,7 @@ public class PackageWatchdogTest {
         assertThat(observerSecond.mMitigatedPackages).isEmpty();
 
         // After observerFirst handles failure, it too has no further actions
-        observerFirst.mImpact = PackageHealthObserverImpact.USER_IMPACT_NONE;
+        observerFirst.mImpact = PackageHealthObserverImpact.USER_IMPACT_LEVEL_0;
         observerFirst.mMitigatedPackages.clear();
         observerSecond.mMitigatedPackages.clear();
 
@@ -566,9 +570,9 @@ public class PackageWatchdogTest {
     public void testPackageFailureNotifyOneSameImpact() throws Exception {
         PackageWatchdog watchdog = createWatchdog();
         TestObserver observer1 = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_HIGH);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_100);
         TestObserver observer2 = new TestObserver(OBSERVER_NAME_2,
-                PackageHealthObserverImpact.USER_IMPACT_HIGH);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_100);
 
         // Start observing for observer1 and observer2 with failure handling
         watchdog.startObservingHealth(observer2, Arrays.asList(APP_A), SHORT_DURATION);
@@ -592,11 +596,11 @@ public class PackageWatchdogTest {
         TestController controller = new TestController();
         PackageWatchdog watchdog = createWatchdog(controller, true /* withPackagesReady */);
         TestObserver observer1 = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_HIGH);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_100);
         TestObserver observer2 = new TestObserver(OBSERVER_NAME_2,
-                PackageHealthObserverImpact.USER_IMPACT_HIGH);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_100);
         TestObserver observer3 = new TestObserver(OBSERVER_NAME_3,
-                PackageHealthObserverImpact.USER_IMPACT_HIGH);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_100);
 
 
         // Start observing with explicit health checks for APP_A and APP_B respectively
@@ -645,7 +649,7 @@ public class PackageWatchdogTest {
         TestController controller = new TestController();
         PackageWatchdog watchdog = createWatchdog(controller, true /* withPackagesReady */);
         TestObserver observer = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_MEDIUM);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_30);
 
         // Start observing with explicit health checks for APP_A and APP_B
         controller.setSupportedPackages(Arrays.asList(APP_A, APP_B, APP_C));
@@ -711,7 +715,7 @@ public class PackageWatchdogTest {
         TestController controller = new TestController();
         PackageWatchdog watchdog = createWatchdog(controller, true /* withPackagesReady */);
         TestObserver observer = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_MEDIUM);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_30);
 
         // Start observing with explicit health checks for APP_A and
         // package observation duration == LONG_DURATION
@@ -742,7 +746,7 @@ public class PackageWatchdogTest {
         TestController controller = new TestController();
         PackageWatchdog watchdog = createWatchdog(controller, true /* withPackagesReady */);
         TestObserver observer = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_MEDIUM);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_30);
 
         // Start observing with explicit health checks for APP_A and
         // package observation duration == SHORT_DURATION / 2
@@ -818,7 +822,7 @@ public class PackageWatchdogTest {
 
         // Start observing with failure handling
         TestObserver observer = new TestObserver(OBSERVER_NAME_1,
-                PackageHealthObserverImpact.USER_IMPACT_HIGH);
+                PackageHealthObserverImpact.USER_IMPACT_LEVEL_100);
         wd.startObservingHealth(observer, Collections.singletonList(APP_A), SHORT_DURATION);
 
         // Notify of NetworkStack failure
@@ -1073,9 +1077,9 @@ public class PackageWatchdogTest {
     public void testBootLoopMitigationDoneForLowestUserImpact() {
         PackageWatchdog watchdog = createWatchdog();
         TestObserver bootObserver1 = new TestObserver(OBSERVER_NAME_1);
-        bootObserver1.setImpact(PackageHealthObserverImpact.USER_IMPACT_LOW);
+        bootObserver1.setImpact(PackageHealthObserverImpact.USER_IMPACT_LEVEL_10);
         TestObserver bootObserver2 = new TestObserver(OBSERVER_NAME_2);
-        bootObserver2.setImpact(PackageHealthObserverImpact.USER_IMPACT_MEDIUM);
+        bootObserver2.setImpact(PackageHealthObserverImpact.USER_IMPACT_LEVEL_30);
         watchdog.registerHealthObserver(bootObserver1);
         watchdog.registerHealthObserver(bootObserver2);
         for (int i = 0; i < PackageWatchdog.DEFAULT_BOOT_LOOP_TRIGGER_COUNT; i++) {
@@ -1416,6 +1420,8 @@ public class PackageWatchdogTest {
         PackageWatchdog watchdog =
                 new PackageWatchdog(mSpyContext, policyFile, handler, handler, controller,
                         mConnectivityModuleConnector, mTestClock);
+        mockCrashRecoveryProperties(watchdog);
+
         // Verify controller is not automatically started
         assertThat(controller.mIsEnabled).isFalse();
         if (withPackagesReady) {
@@ -1432,6 +1438,71 @@ public class PackageWatchdogTest {
         return watchdog;
     }
 
+    // Mock CrashRecoveryProperties as they cannot be accessed due to SEPolicy restrictions
+    private void mockCrashRecoveryProperties(PackageWatchdog watchdog) {
+        try {
+            mSpyBootThreshold = spy(watchdog.new BootThreshold(
+                PackageWatchdog.DEFAULT_BOOT_LOOP_TRIGGER_COUNT,
+                PackageWatchdog.DEFAULT_BOOT_LOOP_TRIGGER_WINDOW_MS));
+            mCrashRecoveryPropertiesMap = new HashMap<>();
+
+            doAnswer((Answer<Integer>) invocationOnMock -> {
+                String storedValue = mCrashRecoveryPropertiesMap
+                        .getOrDefault("crashrecovery.rescue_boot_count", "0");
+                return Integer.parseInt(storedValue);
+            }).when(mSpyBootThreshold).getCount();
+            doAnswer((Answer<Void>) invocationOnMock -> {
+                int count = invocationOnMock.getArgument(0);
+                mCrashRecoveryPropertiesMap.put("crashrecovery.rescue_boot_count",
+                        Integer.toString(count));
+                return null;
+            }).when(mSpyBootThreshold).setCount(anyInt());
+
+            doAnswer((Answer<Integer>) invocationOnMock -> {
+                String storedValue = mCrashRecoveryPropertiesMap
+                        .getOrDefault("crashrecovery.boot_mitigation_count", "0");
+                return Integer.parseInt(storedValue);
+            }).when(mSpyBootThreshold).getMitigationCount();
+            doAnswer((Answer<Void>) invocationOnMock -> {
+                int count = invocationOnMock.getArgument(0);
+                mCrashRecoveryPropertiesMap.put("crashrecovery.boot_mitigation_count",
+                        Integer.toString(count));
+                return null;
+            }).when(mSpyBootThreshold).setMitigationCount(anyInt());
+
+            doAnswer((Answer<Long>) invocationOnMock -> {
+                String storedValue = mCrashRecoveryPropertiesMap
+                        .getOrDefault("crashrecovery.rescue_boot_start", "0");
+                return Long.parseLong(storedValue);
+            }).when(mSpyBootThreshold).getStart();
+            doAnswer((Answer<Void>) invocationOnMock -> {
+                long count = invocationOnMock.getArgument(0);
+                mCrashRecoveryPropertiesMap.put("crashrecovery.rescue_boot_start",
+                        Long.toString(count));
+                return null;
+            }).when(mSpyBootThreshold).setStart(anyLong());
+
+            doAnswer((Answer<Long>) invocationOnMock -> {
+                String storedValue = mCrashRecoveryPropertiesMap
+                        .getOrDefault("crashrecovery.boot_mitigation_start", "0");
+                return Long.parseLong(storedValue);
+            }).when(mSpyBootThreshold).getMitigationStart();
+            doAnswer((Answer<Void>) invocationOnMock -> {
+                long count = invocationOnMock.getArgument(0);
+                mCrashRecoveryPropertiesMap.put("crashrecovery.boot_mitigation_start",
+                        Long.toString(count));
+                return null;
+            }).when(mSpyBootThreshold).setMitigationStart(anyLong());
+
+            Field mBootThresholdField = watchdog.getClass().getDeclaredField("mBootThreshold");
+            mBootThresholdField.setAccessible(true);
+            mBootThresholdField.set(watchdog, mSpyBootThreshold);
+        } catch (Exception e) {
+            // tests will fail, just printing the error
+            System.out.println("Error detected while spying BootThreshold" + e.getMessage());
+        }
+    }
+
     private static class TestObserver implements PackageHealthObserver {
         private final String mName;
         private int mImpact;
@@ -1446,7 +1517,7 @@ public class PackageWatchdogTest {
 
         TestObserver(String name) {
             mName = name;
-            mImpact = PackageHealthObserverImpact.USER_IMPACT_MEDIUM;
+            mImpact = PackageHealthObserverImpact.USER_IMPACT_LEVEL_30;
         }
 
         TestObserver(String name, int impact) {

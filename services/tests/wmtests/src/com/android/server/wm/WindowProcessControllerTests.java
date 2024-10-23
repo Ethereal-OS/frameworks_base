@@ -18,6 +18,7 @@ package com.android.server.wm;
 
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_HOME;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_UNDEFINED;
+import static android.content.res.Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED;
 import static android.content.res.Configuration.ORIENTATION_LANDSCAPE;
 import static android.content.res.Configuration.ORIENTATION_PORTRAIT;
 
@@ -37,7 +38,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
@@ -158,9 +158,24 @@ public class WindowProcessControllerTests extends WindowTestsBase {
     }
 
     @Test
-    public void testSetRunningRecentsAnimation() {
-        mWpc.setRunningRecentsAnimation(true);
-        mWpc.setRunningRecentsAnimation(false);
+    public void testDestroy_unregistersDisplayAreaListener() {
+        final TestDisplayContent testDisplayContent1 = createTestDisplayContentInContainer();
+        final DisplayArea imeContainer1 = testDisplayContent1.getImeContainer();
+        mWpc.registerDisplayAreaConfigurationListener(imeContainer1);
+
+        mWpc.destroy();
+
+        assertNull(mWpc.getDisplayArea());
+    }
+
+    @Test
+    public void testSetAnimatingReason() {
+        mWpc.addAnimatingReason(WindowProcessController.ANIMATING_REASON_REMOTE_ANIMATION);
+        assertTrue(mWpc.isRunningRemoteTransition());
+        mWpc.addAnimatingReason(WindowProcessController.ANIMATING_REASON_WAKEFULNESS_CHANGE);
+        mWpc.removeAnimatingReason(WindowProcessController.ANIMATING_REASON_REMOTE_ANIMATION);
+        assertFalse(mWpc.isRunningRemoteTransition());
+        mWpc.removeAnimatingReason(WindowProcessController.ANIMATING_REASON_WAKEFULNESS_CHANGE);
         waitHandlerIdle(mAtm.mH);
 
         InOrder orderVerifier = Mockito.inOrder(mMockListener);
@@ -189,7 +204,7 @@ public class WindowProcessControllerTests extends WindowTestsBase {
         waitHandlerIdle(mAtm.mH);
 
         InOrder orderVerifier = Mockito.inOrder(mMockListener);
-        orderVerifier.verify(mMockListener, times(3)).setRunningRemoteAnimation(eq(true));
+        orderVerifier.verify(mMockListener, times(1)).setRunningRemoteAnimation(eq(true));
         orderVerifier.verify(mMockListener, times(1)).setRunningRemoteAnimation(eq(false));
         orderVerifier.verifyNoMoreInteractions();
     }
@@ -290,35 +305,35 @@ public class WindowProcessControllerTests extends WindowTestsBase {
 
     @Test
     public void testCachedStateConfigurationChange() throws RemoteException {
-        final ClientLifecycleManager clientManager = mAtm.getLifecycleManager();
-        doNothing().when(clientManager).scheduleTransaction(any(), any());
+        doNothing().when(mClientLifecycleManager).scheduleTransactionItemNow(any(), any());
         final IApplicationThread thread = mWpc.getThread();
         final Configuration newConfig = new Configuration(mWpc.getConfiguration());
         newConfig.densityDpi += 100;
+        mWpc.mWindowSession = getTestSession();
+        mWpc.mWindowSession.onWindowAdded(mock(WindowState.class));
         // Non-cached state will send the change directly.
         mWpc.setReportedProcState(ActivityManager.PROCESS_STATE_IMPORTANT_BACKGROUND);
-        clearInvocations(clientManager);
+        clearInvocations(mClientLifecycleManager);
         mWpc.onConfigurationChanged(newConfig);
-        verify(clientManager).scheduleTransaction(eq(thread), any());
+        verify(mClientLifecycleManager).scheduleTransactionItem(eq(thread), any());
 
         // Cached state won't send the change.
-        clearInvocations(clientManager);
+        clearInvocations(mClientLifecycleManager);
         mWpc.setReportedProcState(ActivityManager.PROCESS_STATE_CACHED_ACTIVITY);
         newConfig.densityDpi += 100;
         mWpc.onConfigurationChanged(newConfig);
-        verify(clientManager, never()).scheduleTransaction(eq(thread), any());
+        verify(mClientLifecycleManager, never()).scheduleTransactionItem(eq(thread), any());
+        verify(mClientLifecycleManager, never()).scheduleTransactionItemNow(eq(thread), any());
 
         // Cached -> non-cached will send the previous deferred config immediately.
         mWpc.setReportedProcState(ActivityManager.PROCESS_STATE_RECEIVER);
         final ArgumentCaptor<ConfigurationChangeItem> captor =
                 ArgumentCaptor.forClass(ConfigurationChangeItem.class);
-        verify(clientManager).scheduleTransaction(eq(thread), captor.capture());
+        verify(mClientLifecycleManager).scheduleTransactionItemNow(
+                eq(thread), captor.capture());
         final ClientTransactionHandler client = mock(ClientTransactionHandler.class);
-        captor.getValue().preExecute(client, null /* token */);
-        final ArgumentCaptor<Configuration> configCaptor =
-                ArgumentCaptor.forClass(Configuration.class);
-        verify(client).updatePendingConfiguration(configCaptor.capture());
-        assertEquals(newConfig, configCaptor.getValue());
+        captor.getValue().preExecute(client);
+        verify(client).updatePendingConfiguration(newConfig);
     }
 
     @Test
@@ -414,10 +429,11 @@ public class WindowProcessControllerTests extends WindowTestsBase {
     public void testTopActivityUiModeChangeScheduleConfigChange() {
         final ActivityRecord activity = createActivityRecord(mWpc);
         activity.setVisibleRequested(true);
-        doReturn(true).when(activity).applyAppSpecificConfig(anyInt(), any());
+        doReturn(true).when(activity).applyAppSpecificConfig(anyInt(), any(), anyInt());
         mWpc.updateAppSpecificSettingsForAllActivitiesInPackage(DEFAULT_COMPONENT_PACKAGE_NAME,
-                Configuration.UI_MODE_NIGHT_YES, LocaleList.forLanguageTags("en-XA"));
-        verify(activity).ensureActivityConfiguration(anyInt(), anyBoolean());
+                Configuration.UI_MODE_NIGHT_YES, LocaleList.forLanguageTags("en-XA"),
+                GRAMMATICAL_GENDER_NOT_SPECIFIED);
+        verify(activity).ensureActivityConfiguration();
     }
 
     @Test
@@ -425,9 +441,10 @@ public class WindowProcessControllerTests extends WindowTestsBase {
         final ActivityRecord activity = createActivityRecord(mWpc);
         activity.setVisibleRequested(true);
         mWpc.updateAppSpecificSettingsForAllActivitiesInPackage("com.different.package",
-                Configuration.UI_MODE_NIGHT_YES, LocaleList.forLanguageTags("en-XA"));
-        verify(activity, never()).applyAppSpecificConfig(anyInt(), any());
-        verify(activity, never()).ensureActivityConfiguration(anyInt(), anyBoolean());
+                Configuration.UI_MODE_NIGHT_YES, LocaleList.forLanguageTags("en-XA"),
+                GRAMMATICAL_GENDER_NOT_SPECIFIED);
+        verify(activity, never()).applyAppSpecificConfig(anyInt(), any(), anyInt());
+        verify(activity, never()).ensureActivityConfiguration();
     }
 
     @Test

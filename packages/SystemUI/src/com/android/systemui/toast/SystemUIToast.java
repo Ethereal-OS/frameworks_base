@@ -170,10 +170,11 @@ public class SystemUIToast implements ToastPlugin.Toast {
         }
 
         final View toastView = mLayoutInflater.inflate(
-                    com.android.systemui.R.layout.text_toast, null);
-        final TextView textView = toastView.findViewById(com.android.systemui.R.id.text);
-        final ImageView iconView = toastView.findViewById(com.android.systemui.R.id.icon);
+                    com.android.systemui.res.R.layout.text_toast, null);
+        final TextView textView = toastView.findViewById(com.android.systemui.res.R.id.text);
+        final ImageView iconView = toastView.findViewById(com.android.systemui.res.R.id.icon);
         textView.setText(mText);
+        textView.setSelected(true);
 
         ApplicationInfo appInfo = null;
         try {
@@ -189,7 +190,7 @@ public class SystemUIToast implements ToastPlugin.Toast {
             textView.setMaxLines(Integer.MAX_VALUE);
 
             // no app icon
-            toastView.findViewById(com.android.systemui.R.id.icon).setVisibility(View.GONE);
+            toastView.findViewById(com.android.systemui.res.R.id.icon).setVisibility(View.GONE);
         } else {
             Drawable icon = getBadgedIcon(mContext, mPackageName, mUserId);
             if (icon == null) {
@@ -272,10 +273,10 @@ public class SystemUIToast implements ToastPlugin.Toast {
 
     private static boolean showApplicationIcon(ApplicationInfo appInfo,
             PackageManager packageManager) {
-        if (hasFlag(appInfo.flags, FLAG_UPDATED_SYSTEM_APP)) {
+        if (hasFlag(appInfo.flags, FLAG_UPDATED_SYSTEM_APP | FLAG_SYSTEM)) {
             return packageManager.getLaunchIntentForPackage(appInfo.packageName) != null;
         }
-        return !hasFlag(appInfo.flags, FLAG_SYSTEM);
+        return true;
     }
 
     private static boolean hasFlag(int flags, int flag) {

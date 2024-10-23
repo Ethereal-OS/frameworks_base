@@ -20,9 +20,6 @@ import android.animation.Animator.AnimatorListener;
 import android.animation.AnimatorListenerAdapter;
 import android.content.Context;
 import android.content.res.Configuration;
-import android.graphics.Color;
-import android.text.SpannableString;
-import android.text.style.ForegroundColorSpan;
 import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
@@ -36,11 +33,11 @@ import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.DefaultItemAnimator;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.android.systemui.R;
 import com.android.systemui.plugins.qs.QS;
 import com.android.systemui.plugins.qs.QSContainerController;
 import com.android.systemui.qs.QSDetailClipper;
 import com.android.systemui.qs.QSUtils;
+import com.android.systemui.res.R;
 import com.android.systemui.statusbar.phone.LightBarController;
 
 /**
@@ -61,30 +58,29 @@ public class QSCustomizer extends LinearLayout {
     private final RecyclerView mRecyclerView;
     private boolean mCustomizing;
     private QSContainerController mQsContainerController;
+    private final Toolbar mToolbar;
     private QS mQs;
     private int mX;
     private int mY;
     private boolean mOpening;
     private boolean mIsShowingNavBackdrop;
 
+    private boolean mSceneContainerEnabled;
+
     public QSCustomizer(Context context, AttributeSet attrs) {
         super(context, attrs);
 
         LayoutInflater.from(getContext()).inflate(R.layout.qs_customize_panel_content, this);
         mClipper = new QSDetailClipper(findViewById(R.id.customize_container));
-        Toolbar toolbar = findViewById(com.android.internal.R.id.action_bar);
+        mToolbar = findViewById(com.android.internal.R.id.action_bar);
         TypedValue value = new TypedValue();
         mContext.getTheme().resolveAttribute(android.R.attr.homeAsUpIndicator, value, true);
-        toolbar.setNavigationIcon(
+        mToolbar.setNavigationIcon(
                 getResources().getDrawable(value.resourceId, mContext.getTheme()));
 
-        SpannableString resetText = new SpannableString(
-                mContext.getString(com.android.internal.R.string.reset));
-        resetText.setSpan(new ForegroundColorSpan(isNightMode() ?
-                Color.WHITE : Color.BLACK), 0, resetText.length(), 0);
-        toolbar.getMenu().add(Menu.NONE, MENU_RESET, 0, com.android.internal.R.string.reset)
+        mToolbar.getMenu().add(Menu.NONE, MENU_RESET, 0, com.android.internal.R.string.reset)
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
-        toolbar.setTitle(R.string.qs_edit);
+        mToolbar.setTitle(R.string.qs_edit);
         mRecyclerView = findViewById(android.R.id.list);
         mTransparentView = findViewById(R.id.customizer_transparent_view);
         DefaultItemAnimator animator = new DefaultItemAnimator();
@@ -94,9 +90,26 @@ public class QSCustomizer extends LinearLayout {
         updateTransparentViewHeight();
     }
 
-    private boolean isNightMode() {
-        return (mContext.getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+    void applyBottomNavBarToPadding(int padding) {
+        mRecyclerView.setPadding(
+                /* left= */ mRecyclerView.getPaddingLeft(),
+                /* top= */ mRecyclerView.getPaddingTop(),
+                /* right= */ mRecyclerView.getPaddingRight(),
+                /* bottom= */ padding
+        );
+    }
+
+    void setSceneContainerEnabled(boolean enabled) {
+        if (enabled != mSceneContainerEnabled) {
+            mSceneContainerEnabled = enabled;
+            updateTransparentViewHeight();
+            if (mSceneContainerEnabled) {
+                findViewById(R.id.nav_bar_background).setVisibility(View.GONE);
+            } else {
+                findViewById(R.id.nav_bar_background)
+                        .setVisibility(mIsShowingNavBackdrop ? View.VISIBLE : View.GONE);
+            }
+        }
     }
 
     void updateResources() {
@@ -105,8 +118,13 @@ public class QSCustomizer extends LinearLayout {
     }
 
     void updateNavBackDrop(Configuration newConfig, LightBarController lightBarController) {
+        View navBackdrop = findViewById(R.id.nav_bar_background);
         mIsShowingNavBackdrop = newConfig.smallestScreenWidthDp >= 600
                 || newConfig.orientation != Configuration.ORIENTATION_LANDSCAPE;
+        if (navBackdrop != null) {
+            navBackdrop.setVisibility(
+                    mIsShowingNavBackdrop && !mSceneContainerEnabled ? View.VISIBLE : View.GONE);
+        }
         updateNavColors(lightBarController);
     }
 
@@ -122,11 +140,18 @@ public class QSCustomizer extends LinearLayout {
         mQs = qs;
     }
 
+    private void reloadAdapterTileHeight(@Nullable RecyclerView.Adapter adapter) {
+        if (adapter instanceof TileAdapter) {
+            ((TileAdapter) adapter).reloadTileHeight();
+        }
+    }
+
     /** Animate and show QSCustomizer panel.
      * @param x,y Location on screen of {@code edit} button to determine center of animation.
      */
     void show(int x, int y, TileAdapter tileAdapter) {
         if (!isShown) {
+            reloadAdapterTileHeight(tileAdapter);
             mRecyclerView.getLayoutManager().scrollToPosition(0);
             int[] containerLocation = findViewById(R.id.customize_container).getLocationOnScreen();
             mX = x - containerLocation[0];
@@ -136,22 +161,27 @@ public class QSCustomizer extends LinearLayout {
             setVisibility(View.VISIBLE);
             long duration = mClipper.animateCircularClip(
                     mX, mY, true, new ExpandAnimatorListener(tileAdapter));
-            mQsContainerController.setCustomizerAnimating(true);
-            mQsContainerController.setCustomizerShowing(true, duration);
+            if (mQsContainerController != null) {
+                mQsContainerController.setCustomizerAnimating(true);
+                mQsContainerController.setCustomizerShowing(true, duration);
+            }
         }
     }
 
 
     void showImmediately() {
         if (!isShown) {
+            reloadAdapterTileHeight(mRecyclerView.getAdapter());
             mRecyclerView.getLayoutManager().scrollToPosition(0);
             setVisibility(VISIBLE);
             mClipper.cancelAnimator();
             mClipper.showBackground();
             isShown = true;
             setCustomizing(true);
-            mQsContainerController.setCustomizerAnimating(false);
-            mQsContainerController.setCustomizerShowing(true);
+            if (mQsContainerController != null) {
+                mQsContainerController.setCustomizerAnimating(false);
+                mQsContainerController.setCustomizerShowing(true);
+            }
         }
     }
 
@@ -169,8 +199,10 @@ public class QSCustomizer extends LinearLayout {
             } else {
                 setVisibility(View.GONE);
             }
-            mQsContainerController.setCustomizerAnimating(animate);
-            mQsContainerController.setCustomizerShowing(false, duration);
+            if (mQsContainerController != null) {
+                mQsContainerController.setCustomizerAnimating(animate);
+                mQsContainerController.setCustomizerShowing(false, duration);
+            }
         }
     }
 
@@ -178,9 +210,19 @@ public class QSCustomizer extends LinearLayout {
         return isShown;
     }
 
+    @Override
+    protected void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        mToolbar.setTitleTextAppearance(mContext,
+                android.R.style.TextAppearance_DeviceDefault_Widget_ActionBar_Title);
+        updateToolbarMenuFontSize();
+    }
+
     void setCustomizing(boolean customizing) {
         mCustomizing = customizing;
-        mQs.notifyCustomizeChanged();
+        if (mQs != null) {
+            mQs.notifyCustomizeChanged();
+        }
     }
 
     public boolean isCustomizing() {
@@ -208,15 +250,21 @@ public class QSCustomizer extends LinearLayout {
                 setCustomizing(true);
             }
             mOpening = false;
-            mQsContainerController.setCustomizerAnimating(false);
+            if (mQsContainerController != null) {
+                mQsContainerController.setCustomizerAnimating(false);
+            }
             mRecyclerView.setAdapter(mTileAdapter);
         }
 
         @Override
         public void onAnimationCancel(Animator animation) {
             mOpening = false;
-            mQs.notifyCustomizeChanged();
-            mQsContainerController.setCustomizerAnimating(false);
+            if (mQs != null) {
+                mQs.notifyCustomizeChanged();
+            }
+            if (mQsContainerController != null) {
+                mQsContainerController.setCustomizerAnimating(false);
+            }
         }
     }
 
@@ -226,7 +274,9 @@ public class QSCustomizer extends LinearLayout {
             if (!isShown) {
                 setVisibility(View.GONE);
             }
-            mQsContainerController.setCustomizerAnimating(false);
+            if (mQsContainerController != null) {
+                mQsContainerController.setCustomizerAnimating(false);
+            }
         }
 
         @Override
@@ -234,7 +284,9 @@ public class QSCustomizer extends LinearLayout {
             if (!isShown) {
                 setVisibility(View.GONE);
             }
-            mQsContainerController.setCustomizerAnimating(false);
+            if (mQsContainerController != null) {
+                mQsContainerController.setCustomizerAnimating(false);
+            }
         }
     };
 
@@ -248,7 +300,14 @@ public class QSCustomizer extends LinearLayout {
 
     private void updateTransparentViewHeight() {
         LayoutParams lp = (LayoutParams) mTransparentView.getLayoutParams();
-        lp.height = QSUtils.getQsHeaderSystemIconsAreaHeight(mContext);
+        lp.height = mSceneContainerEnabled ? 0 : QSUtils.getQsHeaderSystemIconsAreaHeight(mContext);
         mTransparentView.setLayoutParams(lp);
+    }
+
+    private void updateToolbarMenuFontSize() {
+        // Clearing and re-adding the toolbar action force updates the font size
+        mToolbar.getMenu().clear();
+        mToolbar.getMenu().add(Menu.NONE, MENU_RESET, 0, com.android.internal.R.string.reset)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM);
     }
 }

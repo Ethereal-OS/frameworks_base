@@ -16,6 +16,7 @@
 package com.android.server.net;
 
 import static android.net.ConnectivityManager.BLOCKED_REASON_NONE;
+import static android.net.ConnectivityManager.FIREWALL_CHAIN_BACKGROUND;
 import static android.net.ConnectivityManager.FIREWALL_CHAIN_DOZABLE;
 import static android.net.ConnectivityManager.FIREWALL_CHAIN_LOW_POWER_STANDBY;
 import static android.net.ConnectivityManager.FIREWALL_CHAIN_POWERSAVE;
@@ -24,6 +25,7 @@ import static android.net.ConnectivityManager.FIREWALL_CHAIN_STANDBY;
 import static android.net.INetd.FIREWALL_RULE_ALLOW;
 import static android.net.INetd.FIREWALL_RULE_DENY;
 import static android.net.NetworkPolicyManager.ALLOWED_REASON_NONE;
+import static android.net.NetworkPolicyManager.FIREWALL_CHAIN_NAME_BACKGROUND;
 import static android.net.NetworkPolicyManager.FIREWALL_CHAIN_NAME_DOZABLE;
 import static android.net.NetworkPolicyManager.FIREWALL_CHAIN_NAME_LOW_POWER_STANDBY;
 import static android.net.NetworkPolicyManager.FIREWALL_CHAIN_NAME_POWERSAVE;
@@ -38,6 +40,7 @@ import android.app.ActivityManager;
 import android.app.ActivityManager.ProcessCapability;
 import android.net.NetworkPolicyManager;
 import android.os.UserHandle;
+import android.util.ArraySet;
 import android.util.Log;
 import android.util.Slog;
 
@@ -79,6 +82,8 @@ public class NetworkPolicyLogger {
     private static final int EVENT_APP_IDLE_WL_CHANGED = 14;
     private static final int EVENT_METERED_ALLOWLIST_CHANGED = 15;
     private static final int EVENT_METERED_DENYLIST_CHANGED = 16;
+    private static final int EVENT_ROAMING_CHANGED = 17;
+    private static final int EVENT_INTERFACES_CHANGED = 18;
 
     private final LogBuffer mNetworkBlockedBuffer = new LogBuffer(MAX_NETWORK_BLOCKED_LOG_SIZE);
     private final LogBuffer mUidStateChangeBuffer = new LogBuffer(MAX_LOG_SIZE);
@@ -265,6 +270,24 @@ public class NetworkPolicyLogger {
         }
     }
 
+    void roamingChanged(int netId, boolean newRoaming) {
+        synchronized (mLock) {
+            if (LOGD || mDebugUid != INVALID_UID) {
+                Slog.d(TAG, getRoamingChangedLog(netId, newRoaming));
+            }
+            mEventsBuffer.roamingChanged(netId, newRoaming);
+        }
+    }
+
+    void interfacesChanged(int netId, ArraySet<String> newIfaces) {
+        synchronized (mLock) {
+            if (LOGD || mDebugUid != INVALID_UID) {
+                Slog.d(TAG, getInterfacesChangedLog(netId, newIfaces.toString()));
+            }
+            mEventsBuffer.interfacesChanged(netId, newIfaces.toString());
+        }
+    }
+
     void setDebugUid(int uid) {
         mDebugUid = uid;
     }
@@ -317,8 +340,8 @@ public class NetworkPolicyLogger {
         return "App idle state of uid " + uid + ": " + idle;
     }
 
-    private static String getAppIdleWlChangedLog(int uid, boolean isWhitelisted) {
-        return "App idle whitelist state of uid " + uid + ": " + isWhitelisted;
+    private static String getAppIdleWlChangedLog(int uid, boolean isAllowlisted) {
+        return "App idle whitelist state of uid " + uid + ": " + isAllowlisted;
     }
 
     private static String getParoleStateChanged(boolean paroleOn) {
@@ -348,6 +371,14 @@ public class NetworkPolicyLogger {
         return "metered-denylist for " + uid + " changed to " + added;
     }
 
+    private static String getRoamingChangedLog(int netId, boolean newRoaming) {
+        return "Roaming of netId=" + netId + " changed to " + newRoaming;
+    }
+
+    private static String getInterfacesChangedLog(int netId, String newIfaces) {
+        return "Interfaces of netId=" + netId + " changed to " + newIfaces;
+    }
+
     private static String getFirewallChainName(int chain) {
         switch (chain) {
             case FIREWALL_CHAIN_DOZABLE:
@@ -360,6 +391,8 @@ public class NetworkPolicyLogger {
                 return FIREWALL_CHAIN_NAME_RESTRICTED;
             case FIREWALL_CHAIN_LOW_POWER_STANDBY:
                 return FIREWALL_CHAIN_NAME_LOW_POWER_STANDBY;
+            case FIREWALL_CHAIN_BACKGROUND:
+                return FIREWALL_CHAIN_NAME_BACKGROUND;
             default:
                 return String.valueOf(chain);
         }
@@ -384,7 +417,7 @@ public class NetworkPolicyLogger {
         private static final Date sDate = new Date();
 
         public LogBuffer(int capacity) {
-            super(Data.class, capacity);
+            super(Data::new, Data[]::new, capacity);
         }
 
         public void uidStateChanged(int uid, int procState, long procStateSeq,
@@ -490,14 +523,14 @@ public class NetworkPolicyLogger {
             data.timeStamp = System.currentTimeMillis();
         }
 
-        public void appIdleWlChanged(int uid, boolean isWhitelisted) {
+        public void appIdleWlChanged(int uid, boolean isAllowlisted) {
             final Data data = getNextSlot();
             if (data == null) return;
 
             data.reset();
             data.type = EVENT_APP_IDLE_WL_CHANGED;
             data.ifield1 = uid;
-            data.bfield1 = isWhitelisted;
+            data.bfield1 = isAllowlisted;
             data.timeStamp = System.currentTimeMillis();
         }
 
@@ -570,6 +603,28 @@ public class NetworkPolicyLogger {
             data.timeStamp = System.currentTimeMillis();
         }
 
+        public void roamingChanged(int netId, boolean newRoaming) {
+            final Data data = getNextSlot();
+            if (data == null) return;
+
+            data.reset();
+            data.type = EVENT_ROAMING_CHANGED;
+            data.ifield1 = netId;
+            data.bfield1 = newRoaming;
+            data.timeStamp = System.currentTimeMillis();
+        }
+
+        public void interfacesChanged(int netId, String newIfaces) {
+            final Data data = getNextSlot();
+            if (data == null) return;
+
+            data.reset();
+            data.type = EVENT_INTERFACES_CHANGED;
+            data.ifield1 = netId;
+            data.sfield1 = newIfaces;
+            data.timeStamp = System.currentTimeMillis();
+        }
+
         public void reverseDump(IndentingPrintWriter pw) {
             final Data[] allData = toArray();
             for (int i = allData.length - 1; i >= 0; --i) {
@@ -621,6 +676,10 @@ public class NetworkPolicyLogger {
                     return getMeteredAllowlistChangedLog(data.ifield1, data.bfield1);
                 case EVENT_METERED_DENYLIST_CHANGED:
                     return getMeteredDenylistChangedLog(data.ifield1, data.bfield1);
+                case EVENT_ROAMING_CHANGED:
+                    return getRoamingChangedLog(data.ifield1, data.bfield1);
+                case EVENT_INTERFACES_CHANGED:
+                    return getInterfacesChangedLog(data.ifield1, data.sfield1);
                 default:
                     return String.valueOf(data.type);
             }
@@ -634,11 +693,8 @@ public class NetworkPolicyLogger {
 
     /**
      * Container class for all networkpolicy events data.
-     *
-     * Note: This class needs to be public for RingBuffer class to be able to create
-     * new instances of this.
      */
-    public static final class Data {
+    private static final class Data {
         public int type;
         public long timeStamp;
 

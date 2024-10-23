@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 crDroid Android Project
+ * Copyright (C) 2019-2023 crDroid Android Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,31 +22,28 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.service.quicksettings.Tile;
-import android.widget.ImageView;
-
-import com.android.internal.logging.MetricsLogger;
-import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
-import com.android.systemui.R;
-import com.android.systemui.plugins.qs.QSIconView;
-import com.android.systemui.plugins.qs.QSTile.BooleanState;
-import com.android.systemui.qs.QSHost;
-import com.android.systemui.qs.tileimpl.QSTileImpl;
-import android.service.quicksettings.Tile;
-
 import android.os.Handler;
 import android.os.Looper;
+import android.service.quicksettings.Tile;
 import android.view.View;
+import android.widget.ImageView;
 
 import androidx.annotation.Nullable;
 
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+import com.android.systemui.res.R;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
+import com.android.systemui.plugins.qs.QSIconView;
+import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.qs.QsEventLogger;
+import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.logging.QSLogger;
+import com.android.systemui.qs.tileimpl.QSTileImpl;
 
 import javax.inject.Inject;
 
@@ -71,6 +68,7 @@ public class CompassTile extends QSTileImpl<BooleanState> implements SensorEvent
 
     @Inject
     public CompassTile(QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -79,8 +77,9 @@ public class CompassTile extends QSTileImpl<BooleanState> implements SensorEvent
             ActivityStarter activityStarter,
             QSLogger qsLogger
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
+
         mHandler = mainHandler;
         mSensorManager = (SensorManager) mContext.getSystemService(Context.SENSOR_SERVICE);
         mAccelerationSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
@@ -100,13 +99,6 @@ public class CompassTile extends QSTileImpl<BooleanState> implements SensorEvent
         setListeningSensors(false);
         mSensorManager = null;
         mImage = null;
-    }
-
-    @Override
-    public QSIconView createTileView(Context context) {
-        QSIconView iconView = super.createTileView(context);
-        mImage = (ImageView) iconView.findViewById(android.R.id.icon);
-        return iconView;
     }
 
     @Override
@@ -182,7 +174,7 @@ public class CompassTile extends QSTileImpl<BooleanState> implements SensorEvent
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.ETHEREAL;
+        return MetricsEvent.GEOMETRICS;
     }
 
     @Override

@@ -16,28 +16,44 @@
 
 package com.android.server.pm;
 
+import static android.Manifest.permission.READ_FRAME_BUFFER;
 import static android.app.ActivityOptions.KEY_SPLASH_SCREEN_THEME;
+import static android.app.AppOpsManager.MODE_ALLOWED;
+import static android.app.AppOpsManager.MODE_IGNORED;
+import static android.app.AppOpsManager.OP_ARCHIVE_ICON_OVERLAY;
+import static android.app.AppOpsManager.OP_UNARCHIVAL_CONFIRMATION;
+import static android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED;
+import static android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_SYSTEM_DEFINED;
 import static android.app.PendingIntent.FLAG_IMMUTABLE;
 import static android.app.PendingIntent.FLAG_MUTABLE;
 import static android.app.PendingIntent.FLAG_UPDATE_CURRENT;
 import static android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT;
 import static android.content.Intent.FLAG_ACTIVITY_NO_USER_ACTION;
+import static android.content.PermissionChecker.PERMISSION_GRANTED;
+import static android.content.PermissionChecker.checkCallingOrSelfPermissionForPreflight;
 import static android.content.pm.LauncherApps.FLAG_CACHE_BUBBLE_SHORTCUTS;
 import static android.content.pm.LauncherApps.FLAG_CACHE_NOTIFICATION_SHORTCUTS;
 import static android.content.pm.LauncherApps.FLAG_CACHE_PEOPLE_TILE_SHORTCUTS;
 
+import static com.android.server.pm.PackageArchiver.isArchivingEnabled;
+
+import android.Manifest;
 import android.annotation.AppIdInt;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.annotation.RequiresPermission;
 import android.annotation.UserIdInt;
 import android.app.ActivityManager;
 import android.app.ActivityManagerInternal;
 import android.app.ActivityOptions;
 import android.app.AppGlobals;
+import android.app.AppOpsManager;
 import android.app.IApplicationThread;
 import android.app.PendingIntent;
+import android.app.admin.DevicePolicyCache;
 import android.app.admin.DevicePolicyManager;
+import android.app.role.RoleManager;
 import android.app.usage.UsageStatsManagerInternal;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
@@ -58,6 +74,7 @@ import android.content.pm.IncrementalStatesInfo;
 import android.content.pm.LauncherActivityInfoInternal;
 import android.content.pm.LauncherApps;
 import android.content.pm.LauncherApps.ShortcutQuery;
+import android.content.pm.LauncherUserInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller.SessionInfo;
 import android.content.pm.PackageManager;
@@ -69,23 +86,32 @@ import android.content.pm.ShortcutQueryWrapper;
 import android.content.pm.ShortcutServiceInternal;
 import android.content.pm.ShortcutServiceInternal.ShortcutChangeListener;
 import android.content.pm.UserInfo;
+import android.content.pm.UserProperties;
 import android.graphics.Rect;
+import android.multiuser.Flags;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IInterface;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
+import android.os.ResultReceiver;
 import android.os.ServiceManager;
+import android.os.ShellCallback;
+import android.os.ShellCommand;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.provider.Settings;
+import android.text.TextUtils;
+import android.util.ArrayMap;
 import android.util.Log;
 import android.util.Pair;
 import android.util.Slog;
+import android.window.IDumpCallback;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
@@ -95,28 +121,59 @@ import com.android.internal.os.BackgroundThread;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.CollectionUtils;
 import com.android.internal.util.Preconditions;
+import com.android.internal.util.SizedInputStream;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
 import com.android.server.app.AppLockManagerServiceInternal;
-import com.android.server.pm.parsing.pkg.AndroidPackage;
+import com.android.server.pm.pkg.AndroidPackage;
+import com.android.server.pm.pkg.ArchiveState;
+import com.android.server.pm.pkg.PackageStateInternal;
 import com.android.server.wm.ActivityTaskManagerInternal;
+import com.android.server.euclid.ParallelSpaceManagerService;
 
-import ink.kaleidoscope.server.ParallelSpaceManagerService;
-
+import java.io.DataInputStream;
+import java.io.FileDescriptor;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.BiConsumer;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Service that manages requests and callbacks for launchers that support
  * managed profiles.
  */
 public class LauncherAppsService extends SystemService {
+    private static final String WM_TRACE_DIR = "/data/misc/wmtrace/";
+    private static final String VC_FILE_SUFFIX = ".vc";
+    // TODO(b/310027945): Update the intent name.
+    private static final String PS_SETTINGS_INTENT =
+            "com.android.settings.action.PRIVATE_SPACE_SETUP_FLOW";
+
+    private static final Set<PosixFilePermission> WM_TRACE_FILE_PERMISSIONS = Set.of(
+            PosixFilePermission.OWNER_WRITE,
+            PosixFilePermission.GROUP_READ,
+            PosixFilePermission.OTHERS_READ,
+            PosixFilePermission.OWNER_READ
+    );
 
     private final LauncherAppsImpl mLauncherAppsImpl;
 
@@ -164,6 +221,7 @@ public class LauncherAppsService extends SystemService {
 
         private final Context mContext;
         private final UserManager mUm;
+        private final RoleManager mRoleManager;
         private final IPackageManager mIPM;
         private final UserManagerInternal mUserManagerInternal;
         private final UsageStatsManagerInternal mUsageStatsManagerInternal;
@@ -171,6 +229,7 @@ public class LauncherAppsService extends SystemService {
         private final ActivityTaskManagerInternal mActivityTaskManagerInternal;
         private final ShortcutServiceInternal mShortcutServiceInternal;
         private final PackageManagerInternal mPackageManagerInternal;
+        private final AppOpsManager mAppOpsManager;
         private final PackageCallbackList<IOnAppsChangedListener> mListeners
                 = new PackageCallbackList<IOnAppsChangedListener>();
         private final DevicePolicyManager mDpm;
@@ -185,10 +244,16 @@ public class LauncherAppsService extends SystemService {
         private final ShortcutChangeHandler mShortcutChangeHandler;
 
         private final Handler mCallbackHandler;
+        private final ExecutorService mOnDumpExecutor = Executors.newSingleThreadExecutor();
 
         private PackageInstallerService mPackageInstallerService;
+        private HandlerThread mHandlerThread;
 
         final LauncherAppsServiceInternal mInternal;
+
+        @NonNull
+        private final RemoteCallbackList<IDumpCallback> mDumpCallbacks =
+                new RemoteCallbackList<>();
 
         private final AppLockManagerServiceInternal mAppLockManagerInternal;
 
@@ -196,6 +261,7 @@ public class LauncherAppsService extends SystemService {
             mContext = context;
             mIPM = AppGlobals.getPackageManager();
             mUm = (UserManager) mContext.getSystemService(Context.USER_SERVICE);
+            mRoleManager = mContext.getSystemService(RoleManager.class);
             mUserManagerInternal = Objects.requireNonNull(
                     LocalServices.getService(UserManagerInternal.class));
             mUsageStatsManagerInternal = Objects.requireNonNull(
@@ -208,10 +274,14 @@ public class LauncherAppsService extends SystemService {
                     LocalServices.getService(ShortcutServiceInternal.class));
             mPackageManagerInternal = Objects.requireNonNull(
                     LocalServices.getService(PackageManagerInternal.class));
+            mAppOpsManager = mContext.getSystemService(AppOpsManager.class);
             mShortcutServiceInternal.addListener(mPackageMonitor);
             mShortcutChangeHandler = new ShortcutChangeHandler(mUserManagerInternal);
             mShortcutServiceInternal.addShortcutChangeCallback(mShortcutChangeHandler);
-            mCallbackHandler = BackgroundThread.getHandler();
+            mHandlerThread =
+                    new HandlerThread("LauncherAppsService", Process.THREAD_PRIORITY_BACKGROUND);
+            mHandlerThread.start();
+            mCallbackHandler = new Handler(mHandlerThread.getLooper());
             mDpm = (DevicePolicyManager) mContext.getSystemService(Context.DEVICE_POLICY_SERVICE);
             mAppLockManagerInternal = LocalServices.getService(AppLockManagerServiceInternal.class);
             mInternal = new LocalService();
@@ -293,18 +363,50 @@ public class LauncherAppsService extends SystemService {
         public void registerPackageInstallerCallback(String callingPackage,
                 IPackageInstallerCallback callback) {
             verifyCallingPackage(callingPackage);
-            UserHandle callingIdUserHandle = new UserHandle(getCallingUserId());
-            getPackageInstallerService().registerCallback(callback, eventUserId ->
-                            isEnabledProfileOf(callingIdUserHandle,
-                                    new UserHandle(eventUserId), "shouldReceiveEvent"));
+            BroadcastCookie callerInfo =
+                    new BroadcastCookie(
+                            new UserHandle(getCallingUserId()),
+                            callingPackage,
+                            getCallingPid(),
+                            getCallingUid());
+            getPackageInstallerService()
+                    .registerCallback(
+                            callback,
+                            eventUserId ->
+                                    isEnabledProfileOf(
+                                            callerInfo,
+                                            new UserHandle(eventUserId),
+                                            "shouldReceiveEvent"));
+        }
+
+        @Override
+        public List<UserHandle> getUserProfiles() {
+            int[] userIds;
+            if (!canAccessHiddenProfile(getCallingUid(), getCallingPid())) {
+                userIds = mUm.getProfileIdsExcludingHidden(getCallingUserId(), /* enabled= */ true);
+            } else {
+                userIds = mUm.getEnabledProfileIds(getCallingUserId());
+            }
+            final List<UserHandle> result = new ArrayList<>(userIds.length);
+            for (int userId : userIds) {
+                result.add(UserHandle.of(userId));
+            }
+            return result;
         }
 
         @Override
         public ParceledListSlice<SessionInfo> getAllSessions(String callingPackage) {
             verifyCallingPackage(callingPackage);
             List<SessionInfo> sessionInfos = new ArrayList<>();
-            int[] userIds = mUm.getEnabledProfileIds(getCallingUserId());
             final int callingUid = Binder.getCallingUid();
+
+            int[] userIds;
+            if (!canAccessHiddenProfile(callingUid, Binder.getCallingPid())) {
+                userIds = mUm.getProfileIdsExcludingHidden(getCallingUserId(), /* enabled= */ true);
+            } else {
+                userIds = mUm.getEnabledProfileIds(getCallingUserId());
+            }
+
             final long token = Binder.clearCallingIdentity();
             try {
                 for (int userId : userIds) {
@@ -332,7 +434,7 @@ public class LauncherAppsService extends SystemService {
                     mPackageInstallerService = ((PackageInstallerService) ((IPackageManager)
                             ServiceManager.getService("package")).getPackageInstaller());
                 } catch (RemoteException e) {
-                    Slog.wtf(TAG, "Error gettig IPackageInstaller", e);
+                    Slog.wtf(TAG, "Error getting IPackageInstaller", e);
                 }
             }
             return mPackageInstallerService;
@@ -348,7 +450,12 @@ public class LauncherAppsService extends SystemService {
                 filter.addDataScheme("package");
                 mContext.registerReceiverAsUser(mPackageRemovedListener, UserHandle.ALL, filter,
                         /* broadcastPermission= */ null, mCallbackHandler);
-                mPackageMonitor.register(mContext, UserHandle.ALL, true, mCallbackHandler);
+                final long identity = Binder.clearCallingIdentity();
+                try {
+                    mPackageMonitor.register(mContext, UserHandle.ALL, mCallbackHandler);
+                } finally {
+                    Binder.restoreCallingIdentity(identity);
+                }
                 mIsWatchingPackageBroadcasts = true;
             }
         }
@@ -395,7 +502,6 @@ public class LauncherAppsService extends SystemService {
 
         private boolean canAccessProfile(int callingUid, int callingUserId, int callingPid,
                 int targetUserId, String message) {
-
             if (targetUserId == callingUserId) return true;
             if (injectHasInteractAcrossUsersFullPermission(callingPid, callingUid)) {
                 return true;
@@ -413,12 +519,82 @@ public class LauncherAppsService extends SystemService {
                 injectRestoreCallingIdentity(ident);
             }
 
+            if (isHiddenProfile(UserHandle.of(targetUserId))
+                    && !canAccessHiddenProfile(callingUid, callingPid)) {
+                return false;
+            }
+
             return mUserManagerInternal.isProfileAccessible(callingUserId, targetUserId,
                     message, true);
         }
 
+        private boolean isHiddenProfile(UserHandle targetUser) {
+            if (!Flags.enableLauncherAppsHiddenProfileChecks()) {
+                return false;
+            }
+
+            long identity = injectClearCallingIdentity();
+            try {
+                UserProperties properties = mUm.getUserProperties(targetUser);
+                if (properties == null) {
+                    return false;
+                }
+
+                return properties.getProfileApiVisibility()
+                        == UserProperties.PROFILE_API_VISIBILITY_HIDDEN;
+            } catch (IllegalArgumentException e) {
+                return false;
+            } finally {
+                injectRestoreCallingIdentity(identity);
+            }
+        }
+
         private void verifyCallingPackage(String callingPackage) {
             verifyCallingPackage(callingPackage, injectBinderCallingUid());
+        }
+
+        private boolean canAccessHiddenProfile(int callingUid, int callingPid) {
+            if (!areHiddenApisChecksEnabled()) {
+                return true;
+            }
+
+            long ident = injectClearCallingIdentity();
+            try {
+                AndroidPackage callingPackage = mPackageManagerInternal.getPackage(callingUid);
+                if (callingPackage == null) {
+                    return false;
+                }
+
+                if (!mRoleManager
+                        .getRoleHoldersAsUser(
+                                RoleManager.ROLE_HOME, UserHandle.getUserHandleForUid(callingUid))
+                        .contains(callingPackage.getPackageName())) {
+                    return false;
+                }
+                if (mContext.checkPermission(
+                                Manifest.permission.ACCESS_HIDDEN_PROFILES_FULL,
+                                callingPid,
+                                callingUid)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    return true;
+                }
+
+                // TODO(b/321988638): add option to disable with a flag
+                return mContext.checkPermission(
+                                android.Manifest.permission.ACCESS_HIDDEN_PROFILES,
+                                callingPid,
+                                callingUid)
+                        == PackageManager.PERMISSION_GRANTED;
+            } finally {
+                injectRestoreCallingIdentity(ident);
+            }
+        }
+
+        private boolean areHiddenApisChecksEnabled() {
+            return android.os.Flags.allowPrivateProfile()
+                    && Flags.enableHidingProfiles()
+                    && Flags.enableLauncherAppsHiddenProfileChecks()
+                    && Flags.enablePermissionToAccessHiddenProfiles();
         }
 
         @VisibleForTesting // We override it in unit tests
@@ -459,6 +635,10 @@ public class LauncherAppsService extends SystemService {
             if (!canAccessProfile(userId, "cannot get shouldHideFromSuggestions")) {
                 return false;
             }
+            if (isArchivingEnabled() && packageName != null
+                    && isPackageArchived(packageName, user)) {
+                return true;
+            }
             if (mPackageManagerInternal.filterAppAccess(
                     packageName, Binder.getCallingUid(), userId)) {
                 return false;
@@ -470,15 +650,24 @@ public class LauncherAppsService extends SystemService {
 
         @Override
         public ParceledListSlice<LauncherActivityInfoInternal> getLauncherActivities(
-                String callingPackage, String packageName, UserHandle user) throws RemoteException {
+                String callingPackage, @Nullable String packageName, UserHandle user)
+                throws RemoteException {
             ParceledListSlice<LauncherActivityInfoInternal> launcherActivities =
-                    queryActivitiesForUser(callingPackage,
+                    queryActivitiesForUser(
+                            callingPackage,
                             new Intent(Intent.ACTION_MAIN)
                                     .addCategory(Intent.CATEGORY_LAUNCHER)
                                     .setPackage(packageName),
                             user);
-            if (Settings.Global.getInt(mContext.getContentResolver(),
-                    Settings.Global.SHOW_HIDDEN_LAUNCHER_ICON_APPS_ENABLED, 1) == 0) {
+            if (isArchivingEnabled()) {
+                launcherActivities =
+                        getActivitiesForArchivedApp(packageName, user, launcherActivities);
+            }
+            if (Settings.Global.getInt(
+                            mContext.getContentResolver(),
+                            Settings.Global.SHOW_HIDDEN_LAUNCHER_ICON_APPS_ENABLED,
+                            1)
+                    == 0) {
                 return launcherActivities;
             }
             if (launcherActivities == null) {
@@ -522,15 +711,16 @@ public class LauncherAppsService extends SystemService {
                     visiblePackages.add(info.getActivityInfo().packageName);
                 }
                 final List<ApplicationInfo> installedPackages =
-                        mPackageManagerInternal.getInstalledApplications(/* flags= */ 0,
-                                user.getIdentifier(), callingUid);
+                        mPackageManagerInternal.getInstalledApplications(
+                                /* flags= */ 0, user.getIdentifier(), callingUid);
                 for (ApplicationInfo applicationInfo : installedPackages) {
                     if (!visiblePackages.contains(applicationInfo.packageName)) {
                         if (!shouldShowSyntheticActivity(user, applicationInfo)) {
                             continue;
                         }
-                        LauncherActivityInfoInternal info = getHiddenAppActivityInfo(
-                                applicationInfo.packageName, callingUid, user);
+                        LauncherActivityInfoInternal info =
+                                getHiddenAppActivityInfo(
+                                        applicationInfo.packageName, callingUid, user);
                         if (info != null) {
                             result.add(info);
                         }
@@ -540,6 +730,23 @@ public class LauncherAppsService extends SystemService {
             } finally {
                 injectRestoreCallingIdentity(ident);
             }
+        }
+
+        private ParceledListSlice<LauncherActivityInfoInternal> getActivitiesForArchivedApp(
+                @Nullable String packageName,
+                UserHandle user,
+                ParceledListSlice<LauncherActivityInfoInternal> launcherActivities) {
+            final List<LauncherActivityInfoInternal> archivedActivities =
+                    generateLauncherActivitiesForArchivedApp(packageName, user);
+            if (archivedActivities.isEmpty()) {
+                return launcherActivities;
+            }
+            if (launcherActivities == null) {
+                return new ParceledListSlice(archivedActivities);
+            }
+            List<LauncherActivityInfoInternal> result = launcherActivities.getList();
+            result.addAll(archivedActivities);
+            return new ParceledListSlice(result);
         }
 
         private boolean shouldShowSyntheticActivity(UserHandle user, ApplicationInfo appInfo) {
@@ -607,37 +814,68 @@ public class LauncherAppsService extends SystemService {
                 return null;
             }
 
+            if (component == null || component.getPackageName() == null) {
+                // should not happen
+                return null;
+            }
+
             final int callingUid = injectBinderCallingUid();
             final long ident = Binder.clearCallingIdentity();
             try {
-                final ActivityInfo activityInfo = mPackageManagerInternal.getActivityInfo(component,
-                        PackageManager.MATCH_DIRECT_BOOT_AWARE
-                                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE,
-                        callingUid, user.getIdentifier());
+                ActivityInfo activityInfo =
+                        mPackageManagerInternal.getActivityInfo(
+                                component,
+                                PackageManager.MATCH_DIRECT_BOOT_AWARE
+                                        | PackageManager.MATCH_DIRECT_BOOT_UNAWARE,
+                                callingUid,
+                                user.getIdentifier());
                 if (activityInfo == null) {
-                    return null;
-                }
-                if (component == null || component.getPackageName() == null) {
-                    // should not happen
+                    if (isArchivingEnabled()) {
+                        return getMatchingArchivedAppActivityInfo(component, user);
+                    }
                     return null;
                 }
                 final IncrementalStatesInfo incrementalStatesInfo =
-                        mPackageManagerInternal.getIncrementalStatesInfo(component.getPackageName(),
-                                callingUid, user.getIdentifier());
+                        mPackageManagerInternal.getIncrementalStatesInfo(
+                                component.getPackageName(), callingUid, user.getIdentifier());
                 if (incrementalStatesInfo == null) {
                     // package does not exist; should not happen
                     return null;
                 }
-                return new LauncherActivityInfoInternal(activityInfo, incrementalStatesInfo);
+                return new LauncherActivityInfoInternal(activityInfo, incrementalStatesInfo, user);
             } finally {
                 Binder.restoreCallingIdentity(ident);
             }
+        }
+
+        private @Nullable LauncherActivityInfoInternal getMatchingArchivedAppActivityInfo(
+                @NonNull ComponentName component, UserHandle user) {
+            List<LauncherActivityInfoInternal> archivedActivities =
+                    generateLauncherActivitiesForArchivedApp(component.getPackageName(), user);
+            if (archivedActivities.isEmpty()) {
+                return null;
+            }
+            for (int i = 0; i < archivedActivities.size(); i++) {
+                if (archivedActivities.get(i).getComponentName().equals(component)) {
+                    return archivedActivities.get(i);
+                }
+            }
+            Slog.w(
+                    TAG,
+                    TextUtils.formatSimple(
+                            "Expected archived app component name: %s" + " is not available!",
+                            component));
+            return null;
         }
 
         @Override
         public ParceledListSlice getShortcutConfigActivities(
                 String callingPackage, String packageName, UserHandle user)
                 throws RemoteException {
+            // Not supported for user-profiles with items restricted on home screen.
+            if (!mShortcutServiceInternal.areShortcutsSupportedOnHomeScreen(user.getIdentifier())) {
+                return null;
+            }
             return queryActivitiesForUser(callingPackage,
                     new Intent(Intent.ACTION_CREATE_SHORTCUT).setPackage(packageName), user);
         }
@@ -655,6 +893,104 @@ public class LauncherAppsService extends SystemService {
             } finally {
                 injectRestoreCallingIdentity(ident);
             }
+        }
+
+        private boolean isPackageArchived(@NonNull String packageName, UserHandle user) {
+            return !getApplicationInfoForArchivedApp(packageName, user).isEmpty();
+        }
+
+        @NonNull
+        private List<LauncherActivityInfoInternal> generateLauncherActivitiesForArchivedApp(
+                @Nullable String packageName, UserHandle user) {
+            if (!canAccessProfile(user.getIdentifier(), "Cannot retrieve activities")) {
+                return List.of();
+            }
+            List<ApplicationInfo> applicationInfoList =
+                    (packageName == null)
+                            ? getApplicationInfoListForAllArchivedApps(user)
+                            : getApplicationInfoForArchivedApp(packageName, user);
+            List<LauncherActivityInfoInternal> launcherActivityList = new ArrayList<>();
+            for (int i = 0; i < applicationInfoList.size(); i++) {
+                ApplicationInfo applicationInfo = applicationInfoList.get(i);
+                PackageStateInternal packageState =
+                        mPackageManagerInternal.getPackageStateInternal(
+                                applicationInfo.packageName);
+                if (packageState == null) {
+                    continue;
+                }
+                ArchiveState archiveState =
+                        packageState.getUserStateOrDefault(user.getIdentifier()).getArchiveState();
+                if (archiveState == null) {
+                    Slog.w(
+                            TAG,
+                            TextUtils.formatSimple(
+                                    "Expected package: %s to be archived but missing ArchiveState"
+                                            + " in PackageState.",
+                                    applicationInfo.packageName));
+                    continue;
+                }
+                List<ArchiveState.ArchiveActivityInfo> archiveActivityInfoList =
+                        archiveState.getActivityInfos();
+                for (int j = 0; j < archiveActivityInfoList.size(); j++) {
+                    launcherActivityList.add(
+                            constructLauncherActivityInfoForArchivedApp(
+                                    user, applicationInfo, archiveActivityInfoList.get(j)));
+                }
+            }
+            return launcherActivityList;
+        }
+
+        private static LauncherActivityInfoInternal constructLauncherActivityInfoForArchivedApp(
+                UserHandle user,
+                ApplicationInfo applicationInfo,
+                ArchiveState.ArchiveActivityInfo archiveActivityInfo) {
+            ActivityInfo activityInfo = new ActivityInfo();
+            activityInfo.isArchived = applicationInfo.isArchived;
+            activityInfo.applicationInfo = applicationInfo;
+            activityInfo.packageName =
+                    archiveActivityInfo.getOriginalComponentName().getPackageName();
+            activityInfo.name = archiveActivityInfo.getOriginalComponentName().getClassName();
+            activityInfo.nonLocalizedLabel = archiveActivityInfo.getTitle();
+
+            return new LauncherActivityInfoInternal(
+                    activityInfo,
+                    new IncrementalStatesInfo(
+                            false /* isLoading */, 0 /* progress */, 0 /* loadingCompletedTime */),
+                    user);
+        }
+
+        @NonNull
+        private List<ApplicationInfo> getApplicationInfoListForAllArchivedApps(UserHandle user) {
+            final int callingUid = injectBinderCallingUid();
+            List<ApplicationInfo> installedApplicationInfoList =
+                    mPackageManagerInternal.getInstalledApplicationsCrossUser(
+                            PackageManager.MATCH_ARCHIVED_PACKAGES,
+                            user.getIdentifier(),
+                            callingUid);
+            List<ApplicationInfo> archivedApplicationInfos = new ArrayList<>();
+            for (int i = 0; i < installedApplicationInfoList.size(); i++) {
+                ApplicationInfo installedApplicationInfo = installedApplicationInfoList.get(i);
+                if (installedApplicationInfo != null && installedApplicationInfo.isArchived) {
+                    archivedApplicationInfos.add(installedApplicationInfo);
+                }
+            }
+            return archivedApplicationInfos;
+        }
+
+        @NonNull
+        private List<ApplicationInfo> getApplicationInfoForArchivedApp(
+                @NonNull String packageName, UserHandle user) {
+            final int callingUid = injectBinderCallingUid();
+            ApplicationInfo applicationInfo = Binder.withCleanCallingIdentity(() ->
+                    mPackageManagerInternal.getApplicationInfo(
+                            packageName,
+                            PackageManager.MATCH_ARCHIVED_PACKAGES,
+                            callingUid,
+                            user.getIdentifier()));
+            if (applicationInfo == null || !applicationInfo.isArchived) {
+                return Collections.EMPTY_LIST;
+            }
+            return List.of(applicationInfo);
         }
 
         private List<LauncherActivityInfoInternal> queryIntentLauncherActivities(
@@ -686,7 +1022,7 @@ public class LauncherAppsService extends SystemService {
                     continue;
                 }
                 results.add(new LauncherActivityInfoInternal(ri.activityInfo,
-                        incrementalStatesInfo));
+                        incrementalStatesInfo, user));
             }
             return results;
         }
@@ -783,11 +1119,17 @@ public class LauncherAppsService extends SystemService {
             final int callingUid = injectBinderCallingUid();
             final long ident = Binder.clearCallingIdentity();
             try {
-                final PackageInfo info = mPackageManagerInternal.getPackageInfo(packageName,
+                long callingFlag =
                         PackageManager.MATCH_DIRECT_BOOT_AWARE
-                                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE,
-                        callingUid, user.getIdentifier());
-                return info != null && info.applicationInfo.enabled;
+                                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+                if (isArchivingEnabled()) {
+                    callingFlag |= PackageManager.MATCH_ARCHIVED_PACKAGES;
+                }
+                final PackageInfo info =
+                        mPackageManagerInternal.getPackageInfo(
+                                packageName, callingFlag, callingUid, user.getIdentifier());
+                return info != null
+                        && (info.applicationInfo.enabled || info.applicationInfo.isArchived);
             } finally {
                 Binder.restoreCallingIdentity(ident);
             }
@@ -997,6 +1339,14 @@ public class LauncherAppsService extends SystemService {
         @Override
         public void pinShortcuts(String callingPackage, String packageName, List<String> ids,
                 UserHandle targetUser) {
+            if (!mShortcutServiceInternal
+                    .areShortcutsSupportedOnHomeScreen(targetUser.getIdentifier())) {
+                // Requires strict ACCESS_SHORTCUTS permission for user-profiles with items
+                // restricted on home screen.
+                ensureStrictAccessShortcutsPermission(callingPackage);
+            } else {
+                ensureShortcutPermission(callingPackage);
+            }
             ensureShortcutPermission(callingPackage);
             if (!canAccessProfile(targetUser.getIdentifier(), "Cannot pin shortcuts")) {
                 return;
@@ -1088,6 +1438,56 @@ public class LauncherAppsService extends SystemService {
         }
 
         @Override
+        @NonNull
+        public Map<String, LauncherActivityInfoInternal> getActivityOverrides(String callingPackage,
+                int userId) {
+            ensureShortcutPermission(callingPackage);
+            int callingUid = Binder.getCallingUid();
+            final long callerIdentity = Binder.clearCallingIdentity();
+            try {
+                Map<String, LauncherActivityInfoInternal> shortcutOverridesInfo = new ArrayMap<>();
+                UserHandle managedUserHandle = getManagedProfile(userId);
+                if (managedUserHandle == null) {
+                    return shortcutOverridesInfo;
+                }
+
+                Map<String, String> packagesToOverride =
+                        DevicePolicyCache.getInstance().getLauncherShortcutOverrides();
+                for (Map.Entry<String, String> packageNames : packagesToOverride.entrySet()) {
+                    Intent intent = new Intent(Intent.ACTION_MAIN)
+                            .addCategory(Intent.CATEGORY_LAUNCHER)
+                            .setPackage(packageNames.getValue());
+
+                    List<LauncherActivityInfoInternal> possibleShortcutOverrides =
+                            queryIntentLauncherActivities(
+                                    intent,
+                                    callingUid,
+                                    managedUserHandle
+                            );
+
+                    if (!possibleShortcutOverrides.isEmpty()) {
+                        shortcutOverridesInfo.put(packageNames.getKey(),
+                                possibleShortcutOverrides.get(0));
+                    }
+                }
+                return shortcutOverridesInfo;
+            } finally {
+                Binder.restoreCallingIdentity(callerIdentity);
+            }
+        }
+
+
+        @Nullable
+        private UserHandle getManagedProfile(int userId) {
+            for (UserInfo profile : mUm.getProfiles(userId)) {
+                if (profile.isManagedProfile()) {
+                    return profile.getUserHandle();
+                }
+            }
+            return null;
+        }
+
+        @Override
         public boolean startShortcut(String callingPackage, String packageName, String featureId,
                 String shortcutId, Rect sourceBounds, Bundle startActivityOptions,
                 int targetUserId) {
@@ -1163,7 +1563,8 @@ public class LauncherAppsService extends SystemService {
             final int code;
             try {
                 code = mActivityTaskManagerInternal.startActivitiesAsPackage(publisherPackage,
-                        publishedFeatureId, userId, intents, startActivityOptions);
+                        publishedFeatureId, userId, intents,
+                        getActivityOptionsForLauncher(startActivityOptions));
                 if (ActivityManager.isStartResultSuccessful(code)) {
                     return true; // Success
                 } else {
@@ -1178,6 +1579,23 @@ public class LauncherAppsService extends SystemService {
             }
         }
 
+        private Bundle getActivityOptionsForLauncher(Bundle startActivityOptions) {
+            // starting a shortcut implies the user's consent, so grant the launchers/senders BAL
+            // privileges (unless the caller explicitly defined the behavior)
+            if (startActivityOptions == null) {
+                return ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(
+                                MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle();
+            }
+            ActivityOptions activityOptions = ActivityOptions.fromBundle(startActivityOptions);
+            if (activityOptions.getPendingIntentBackgroundActivityStartMode()
+                    == MODE_BACKGROUND_ACTIVITY_START_SYSTEM_DEFINED) {
+                // only override if the property was not explicitly set
+                return activityOptions.setPendingIntentBackgroundActivityStartMode(
+                        MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle();
+            }
+            return startActivityOptions;
+        }
+
         @Override
         public boolean isActivityEnabled(
                 String callingPackage, ComponentName component, UserHandle user)
@@ -1185,7 +1603,18 @@ public class LauncherAppsService extends SystemService {
             if (!canAccessProfile(user.getIdentifier(), "Cannot check component")) {
                 return false;
             }
-
+            if (isArchivingEnabled() && component != null && component.getPackageName() != null) {
+                List<LauncherActivityInfoInternal> archiveActivities =
+                        generateLauncherActivitiesForArchivedApp(component.getPackageName(), user);
+                if (!archiveActivities.isEmpty()) {
+                    for (int i = 0; i < archiveActivities.size(); i++) {
+                        if (archiveActivities.get(i).getComponentName().equals(component)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            }
             final int callingUid = injectBinderCallingUid();
             final int state = mPackageManagerInternal.getComponentEnabledSetting(component,
                     callingUid, user.getIdentifier());
@@ -1236,19 +1665,24 @@ public class LauncherAppsService extends SystemService {
             i.setSourceBounds(sourceBounds);
 
             mActivityTaskManagerInternal.startActivityAsUser(caller, callingPackage,
-                    callingFeatureId, i, /* resultTo= */ null, Intent.FLAG_ACTIVITY_NEW_TASK, opts,
-                    userId);
+                    callingFeatureId, i, /* resultTo= */ null, Intent.FLAG_ACTIVITY_NEW_TASK,
+                    getActivityOptionsForLauncher(opts), userId);
         }
 
         @Override
         public PendingIntent getActivityLaunchIntent(String callingPackage, ComponentName component,
                 UserHandle user) {
-            ensureShortcutPermission(callingPackage);
+            if (mContext.checkPermission(android.Manifest.permission.START_TASKS_FROM_RECENTS,
+                    injectBinderCallingPid(), injectBinderCallingUid())
+                            != PackageManager.PERMISSION_GRANTED) {
+                throw new SecurityException("Permission START_TASKS_FROM_RECENTS required");
+            }
             if (!canAccessProfile(user.getIdentifier(), "Cannot start activity")) {
                 throw new ActivityNotFoundException("Activity could not be found");
             }
 
-            final Intent launchIntent = getMainActivityLaunchIntent(component, user);
+            final Intent launchIntent = getMainActivityLaunchIntent(component, user,
+                    false /* includeArchivedApps */);
             if (launchIntent == null) {
                 throw new SecurityException("Attempt to launch activity without "
                         + " category Intent.CATEGORY_LAUNCHER " + component);
@@ -1268,6 +1702,181 @@ public class LauncherAppsService extends SystemService {
         }
 
         @Override
+        public @Nullable LauncherUserInfo getLauncherUserInfo(@NonNull UserHandle user) {
+            if (!canAccessProfile(user.getIdentifier(),
+                    "Can't access LauncherUserInfo for another user")) {
+                return null;
+            }
+            long ident = injectClearCallingIdentity();
+            try {
+                return mUserManagerInternal.getLauncherUserInfo(user.getIdentifier());
+            } finally {
+                injectRestoreCallingIdentity(ident);
+            }
+        }
+
+        @Override
+        @NonNull
+        public List<String> getPreInstalledSystemPackages(UserHandle user) {
+            if (!canAccessProfile(user.getIdentifier(),
+                    "Can't access preinstalled packages for another user")) {
+                return new ArrayList<>();
+            }
+            final long identity = Binder.clearCallingIdentity();
+            try {
+                String userType = mUm.getUserInfo(user.getIdentifier()).userType;
+                Set<String> preInstalledPackages = mUm.getPreInstallableSystemPackages(userType);
+                if (preInstalledPackages == null) {
+                    return new ArrayList<>();
+                }
+                return List.copyOf(preInstalledPackages);
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+
+        @Override
+        public @Nullable IntentSender getAppMarketActivityIntent(@NonNull String callingPackage,
+                @Nullable String packageName, @NonNull UserHandle user) {
+            if (!canAccessProfile(user.getIdentifier(),
+                    "Can't access AppMarketActivity for another user")) {
+                return null;
+            }
+            final int callingUser = getCallingUserId();
+            final long identity = Binder.clearCallingIdentity();
+
+            try {
+                if (packageName == null) {
+                    return buildAppMarketIntentSenderForUser(user);
+                }
+
+                String installerPackageName = getInstallerPackage(packageName, callingUser);
+                if (installerPackageName == null
+                        || mPackageManagerInternal.getPackageUid(
+                                        installerPackageName, /* flags= */ 0, user.getIdentifier())
+                                < 0) {
+                    if (DEBUG) {
+                        Log.d(
+                                TAG,
+                                "Can't find installer for "
+                                        + packageName
+                                        + " in user: "
+                                        + user.getIdentifier());
+                    }
+                    return buildAppMarketIntentSenderForUser(user);
+                }
+
+                Intent packageInfoIntent =
+                        buildMarketPackageInfoIntent(
+                                packageName, installerPackageName, callingPackage);
+                if (mPackageManagerInternal
+                        .queryIntentActivities(
+                                packageInfoIntent,
+                                packageInfoIntent.resolveTypeIfNeeded(
+                                        mContext.getContentResolver()),
+                                PackageManager.MATCH_ALL,
+                                Process.myUid(),
+                                user.getIdentifier())
+                        .isEmpty()) {
+                    if (DEBUG) {
+                        Log.d(
+                                TAG,
+                                "Can't resolve package info intent for package "
+                                        + packageName
+                                        + " and installer:  "
+                                        + installerPackageName);
+                    }
+                    return buildAppMarketIntentSenderForUser(user);
+                }
+
+                return buildIntentSenderForUser(packageInfoIntent, user);
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+
+        @Override
+        public @Nullable IntentSender getPrivateSpaceSettingsIntent() {
+            if (!canAccessHiddenProfile(getCallingUid(), getCallingPid())) {
+                Slog.e(TAG, "Caller cannot access hidden profiles");
+                return null;
+            }
+            final long identity = Binder.clearCallingIdentity();
+            try {
+                Intent psSettingsIntent = new Intent(PS_SETTINGS_INTENT);
+                psSettingsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                final PendingIntent pi = PendingIntent.getActivity(mContext,
+                        /* requestCode */ 0,
+                        psSettingsIntent,
+                        PendingIntent.FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT);
+                return pi == null ? null : pi.getIntentSender();
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+
+        @Nullable
+        private IntentSender buildAppMarketIntentSenderForUser(@NonNull UserHandle user) {
+            Intent appMarketIntent = new Intent(Intent.ACTION_MAIN);
+            appMarketIntent.addCategory(Intent.CATEGORY_APP_MARKET);
+            appMarketIntent.setFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            return buildIntentSenderForUser(appMarketIntent, user);
+        }
+
+        @Nullable
+        private IntentSender buildIntentSenderForUser(
+                @NonNull Intent intent, @NonNull UserHandle user) {
+            final PendingIntent pi =
+                    PendingIntent.getActivityAsUser(
+                            mContext,
+                            /* requestCode */ 0,
+                            intent,
+                            PendingIntent.FLAG_IMMUTABLE
+                                    | FLAG_UPDATE_CURRENT,
+                            /* options */ null,
+                            user);
+            return pi == null ? null : pi.getIntentSender();
+        }
+
+        @Nullable
+        private String getInstallerPackage(@NonNull String packageName, int callingUserId) {
+            String installerPackageName = null;
+            try {
+                installerPackageName =
+                        mIPM.getInstallSourceInfo(packageName, callingUserId)
+                                .getInstallingPackageName();
+            } catch (RemoteException re) {
+                Slog.e(TAG, "Couldn't find installer for " + packageName, re);
+            }
+
+            return installerPackageName;
+        }
+
+        @NonNull
+        private Intent buildMarketPackageInfoIntent(
+                @NonNull String packageName,
+                @NonNull String installerPackageName,
+                @NonNull String callingPackage) {
+            return new Intent(Intent.ACTION_VIEW)
+                    .setData(
+                            new Uri.Builder()
+                                    .scheme("market")
+                                    .authority("details")
+                                    .appendQueryParameter("id", packageName)
+                                    .build())
+                    .putExtra(
+                            Intent.EXTRA_REFERRER,
+                            new Uri.Builder()
+                                    .scheme("android-app")
+                                    .authority(callingPackage)
+                                    .build())
+                    .setPackage(installerPackageName)
+                    .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+
+        @Override
         public void startActivityAsUser(IApplicationThread caller, String callingPackage,
                 String callingFeatureId, ComponentName component, Rect sourceBounds,
                 Bundle opts, UserHandle user) throws RemoteException {
@@ -1275,7 +1884,8 @@ public class LauncherAppsService extends SystemService {
                 return;
             }
 
-            Intent launchIntent = getMainActivityLaunchIntent(component, user);
+            Intent launchIntent = getMainActivityLaunchIntent(component, user,
+                    true /* includeArchivedApps */);
             if (launchIntent == null) {
                 throw new SecurityException("Attempt to launch activity without "
                         + " category Intent.CATEGORY_LAUNCHER " + component);
@@ -1284,13 +1894,15 @@ public class LauncherAppsService extends SystemService {
 
             mActivityTaskManagerInternal.startActivityAsUser(caller, callingPackage,
                     callingFeatureId, launchIntent, /* resultTo= */ null,
-                    Intent.FLAG_ACTIVITY_NEW_TASK, opts, user.getIdentifier());
+                    Intent.FLAG_ACTIVITY_NEW_TASK, getActivityOptionsForLauncher(opts),
+                    user.getIdentifier());
         }
 
         /**
          * Returns the main activity launch intent for the given component package.
          */
-        private Intent getMainActivityLaunchIntent(ComponentName component, UserHandle user) {
+        private Intent getMainActivityLaunchIntent(ComponentName component, UserHandle user,
+                boolean includeArchivedApps) {
             Intent launchIntent = new Intent(Intent.ACTION_MAIN);
             launchIntent.addCategory(Intent.CATEGORY_LAUNCHER);
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
@@ -1328,6 +1940,14 @@ public class LauncherAppsService extends SystemService {
                         canLaunch = true;
                         break;
                     }
+                }
+                if (!canLaunch
+                        && includeArchivedApps
+                        && isArchivingEnabled()
+                        && getMatchingArchivedAppActivityInfo(component, user) != null) {
+                    launchIntent.setPackage(null);
+                    launchIntent.setComponent(component);
+                    canLaunch = true;
                 }
                 if (!canLaunch) {
                     return null;
@@ -1367,22 +1987,215 @@ public class LauncherAppsService extends SystemService {
             }
             mActivityTaskManagerInternal.startActivityAsUser(caller, callingPackage,
                     callingFeatureId, intent, /* resultTo= */ null, Intent.FLAG_ACTIVITY_NEW_TASK,
-                    opts, user.getIdentifier());
+                    getActivityOptionsForLauncher(opts), user.getIdentifier());
         }
 
-        /** Checks if user is a profile of or same as listeningUser.
-         * and the user is enabled. */
-        private boolean isEnabledProfileOf(UserHandle listeningUser, UserHandle user,
-                String debugMsg) {
-            return mUserManagerInternal.isProfileAccessible(listeningUser.getIdentifier(),
-                    user.getIdentifier(), debugMsg, false) ||
+        @Override
+        public void onShellCommand(FileDescriptor in, @NonNull FileDescriptor out,
+                @NonNull FileDescriptor err, @Nullable String[] args, ShellCallback cb,
+                @Nullable ResultReceiver receiver) {
+            final int callingUid = injectBinderCallingUid();
+            if (!(callingUid == Process.SHELL_UID || callingUid == Process.ROOT_UID)) {
+                throw new SecurityException("Caller must be shell");
+            }
+
+            final long token = injectClearCallingIdentity();
+            try {
+                int status = (new LauncherAppsShellCommand())
+                        .exec(this, in, out, err, args, cb, receiver);
+                if (receiver != null) {
+                    receiver.send(status, null);
+                }
+            } finally {
+                injectRestoreCallingIdentity(token);
+            }
+        }
+
+        /** Handles Shell commands for LauncherAppsService */
+        private class LauncherAppsShellCommand extends ShellCommand {
+            @Override
+            public int onCommand(@Nullable String cmd) {
+                if ("dump-view-hierarchies".equals(cmd)) {
+                    dumpViewCaptureDataToShell();
+                    return 0;
+                } else {
+                    return handleDefaultCommands(cmd);
+                }
+            }
+
+            private void dumpViewCaptureDataToShell() {
+                try (ZipOutputStream zipOs = new ZipOutputStream(getRawOutputStream())) {
+                    forEachViewCaptureWindow((fileName, is) -> {
+                        try {
+                            zipOs.putNextEntry(new ZipEntry("FS" + fileName));
+                            transferViewCaptureData(is, zipOs);
+                            zipOs.closeEntry();
+                        } catch (IOException e) {
+                            getErrPrintWriter().write("Failed to output " + fileName
+                                    + " data to shell: " + e.getMessage());
+                        }
+                    });
+                } catch (IOException e) {
+                    getErrPrintWriter().write("Failed to create or close zip output stream: "
+                            + e.getMessage());
+                }
+            }
+
+            @Override
+            public void onHelp() {
+                final PrintWriter pw = getOutPrintWriter();
+                pw.println("Usage: cmd launcherapps COMMAND [options ...]");
+                pw.println();
+                pw.println("cmd launcherapps dump-view-hierarchies");
+                pw.println("    Output captured view hierarchies. Files will be generated in ");
+                pw.println("    `"  + WM_TRACE_DIR + "`. After pulling the data to your device,");
+                pw.println("     you can upload / visualize it at `go/winscope`.");
+                pw.println();
+            }
+        }
+
+        /**
+         * Using a pipe, outputs view capture data to the wmtrace dir
+         */
+        protected void dump(@NonNull FileDescriptor fd, @NonNull PrintWriter pw,
+                @Nullable String[] args) {
+            super.dump(fd, pw, args);
+
+            // Before the wmtrace directory is picked up by dumpstate service, some processes need
+            // to write their data to that location. They can do that via these dumpCallbacks.
+            forEachViewCaptureWindow(this::dumpViewCaptureDataToWmTrace);
+        }
+
+        private void dumpViewCaptureDataToWmTrace(@NonNull String fileName,
+                @NonNull InputStream is) {
+            Path outPath = Paths.get(fileName);
+            try (OutputStream os = Files.newOutputStream(outPath, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING)) {
+                transferViewCaptureData(is, os);
+                Files.setPosixFilePermissions(outPath, WM_TRACE_FILE_PERMISSIONS);
+            } catch (IOException e) {
+                Log.d(TAG, "failed to write data to " + fileName + " in wmtrace dir", e);
+            }
+        }
+
+        /**
+         * Raw input stream reads hang on the final read when transferring data in via the pipe.
+         * The fix used below is to count and read the exact amount of bytes being sent.
+         */
+        private void transferViewCaptureData(InputStream is, OutputStream os) throws IOException {
+            DataInputStream dataInputStream = new DataInputStream(is);
+            new SizedInputStream(dataInputStream, dataInputStream.readInt()).transferTo(os);
+        }
+
+        /**
+         * IDumpCallback.onDump alerts the in-process ViewCapture instance to start sending data
+         * to LauncherAppsService via the pipe's input provided. This data (as well as an output
+         * file name) is provided to the consumer via an InputStream to output where it wants (for
+         * example, the winscope trace directory or the shell's stdout).
+         */
+        private void forEachViewCaptureWindow(
+                @NonNull BiConsumer<String, InputStream> outputtingConsumer) {
+            try {
+                // This multi-threading prevents ctrl-C command line command aborting from putting
+                // the mDumpCallbacks RemoteCallbackList in a bad Broadcast state. We need to wait
+                // for it to complete even though it is on a background thread.
+                mOnDumpExecutor.submit(() -> {
+                    try {
+                        for (int i = mDumpCallbacks.beginBroadcast() - 1; i >= 0; i--) {
+                            String packageName = (String) mDumpCallbacks.getBroadcastCookie(i);
+                            String fileName = WM_TRACE_DIR + packageName + "_" + i + VC_FILE_SUFFIX;
+
+                            try {
+                                // Order is important here. OnDump needs to be called before the
+                                // BiConsumer accepts & starts blocking on reading the input stream.
+                                ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
+                                mDumpCallbacks.getBroadcastItem(i).onDump(pipe[1]);
+
+                                InputStream is = new ParcelFileDescriptor.AutoCloseInputStream(
+                                        pipe[0]);
+                                outputtingConsumer.accept(fileName, is);
+                                is.close();
+                            } catch (Exception e) {
+                                Log.d(TAG, "failed to pipe view capture data", e);
+                            }
+                        }
+                    } finally {
+                        mDumpCallbacks.finishBroadcast();
+                    }
+                }).get();
+            } catch (InterruptedException | ExecutionException e) {
+                Log.e(TAG, "background work was interrupted", e);
+            }
+        }
+
+        @RequiresPermission(READ_FRAME_BUFFER)
+        @Override
+        public void registerDumpCallback(@NonNull IDumpCallback cb) {
+            int status = checkCallingOrSelfPermissionForPreflight(mContext, READ_FRAME_BUFFER);
+            if (PERMISSION_GRANTED == status) {
+                String name = mContext.getPackageManager().getNameForUid(Binder.getCallingUid());
+                mDumpCallbacks.register(cb, name);
+            } else {
+                Log.w(TAG, "caller lacks permissions to registerDumpCallback");
+            }
+        }
+
+        @RequiresPermission(READ_FRAME_BUFFER)
+        @Override
+        public void unRegisterDumpCallback(@NonNull IDumpCallback cb) {
+            int status = checkCallingOrSelfPermissionForPreflight(mContext, READ_FRAME_BUFFER);
+            if (PERMISSION_GRANTED == status) {
+                mDumpCallbacks.unregister(cb);
+            } else {
+                Log.w(TAG, "caller lacks permissions to unRegisterDumpCallback");
+            }
+        }
+
+        @Override
+        public void setArchiveCompatibilityOptions(boolean enableIconOverlay,
+                boolean enableUnarchivalConfirmation) {
+            int callingUid = Binder.getCallingUid();
+            Binder.withCleanCallingIdentity(
+                    () -> {
+                        mAppOpsManager.setUidMode(
+                                OP_ARCHIVE_ICON_OVERLAY,
+                                callingUid,
+                                enableIconOverlay ? MODE_ALLOWED : MODE_IGNORED);
+                        mAppOpsManager.setUidMode(
+                                OP_UNARCHIVAL_CONFIRMATION,
+                                callingUid,
+                                enableUnarchivalConfirmation ? MODE_ALLOWED : MODE_IGNORED);
+                    });
+        }
+
+        /**
+         * Checks if user is a profile of or same as listeningUser and the target user is enabled
+         * and accessible for caller.
+         */
+        private boolean isEnabledProfileOf(
+                BroadcastCookie cookie, UserHandle user, String debugMsg) {
+            if (isHiddenProfile(user)
+                    && !canAccessHiddenProfile(cookie.callingUid, cookie.callingPid)) {
+                return false;
+            }
+            return mUserManagerInternal.isProfileAccessible(
+                    cookie.user.getIdentifier(), user.getIdentifier(), debugMsg, false) ||
                     ParallelSpaceManagerService.isCurrentParallelUser(user.getIdentifier());
         }
 
-        /** Returns whether or not the result to the listener should be filtered. */
-        private boolean isPackageVisibleToListener(String packageName, BroadcastCookie cookie) {
+        /**
+         * Returns whether or not the result to the listener should be filtered.
+         *
+         * @param packageName The package to be accessed by the listener.
+         * @param cookie      The listener
+         * @param user        The user where the package resides.
+         */
+        private boolean isPackageVisibleToListener(String packageName, BroadcastCookie cookie,
+                UserHandle user) {
+            // Do not filter the uninstalled package access since it might break callbacks such as
+            // shortcut changes and unavailable packages events.
             return !mPackageManagerInternal.filterAppAccess(packageName, cookie.callingUid,
-                    cookie.user.getIdentifier());
+                    user.getIdentifier(), false /* filterUninstalled */);
         }
 
         /** Returns whether or not the given appId is in allow list */
@@ -1393,10 +2206,11 @@ public class LauncherAppsService extends SystemService {
             return Arrays.binarySearch(appIdAllowList, appId) > -1;
         }
 
-        private String[] getFilteredPackageNames(String[] packageNames, BroadcastCookie cookie) {
+        private String[] getFilteredPackageNames(String[] packageNames, BroadcastCookie cookie,
+                UserHandle user) {
             final List<String> filteredPackageNames = new ArrayList<>();
             for (String packageName : packageNames) {
-                if (!isPackageVisibleToListener(packageName, cookie)) {
+                if (!isPackageVisibleToListener(packageName, cookie, user)) {
                     continue;
                 }
                 filteredPackageNames.add(packageName);
@@ -1435,8 +2249,10 @@ public class LauncherAppsService extends SystemService {
             for (UserHandle user : users) {
                 mPackageManagerInternal.forEachInstalledPackage(pkg -> {
                     final String packageName = pkg.getPackageName();
-                    if (mPackageManagerInternal.getIncrementalStatesInfo(packageName,
-                            Process.myUid(), user.getIdentifier()).isLoading()) {
+                    final IncrementalStatesInfo info =
+                            mPackageManagerInternal.getIncrementalStatesInfo(packageName,
+                                    Process.myUid(), user.getIdentifier());
+                    if (info != null && info.isLoading()) {
                         mPackageManagerInternal.registerInstalledLoadingProgressCallback(
                                 packageName, new PackageLoadingProgressCallback(packageName, user),
                                 user.getIdentifier());
@@ -1598,7 +2414,7 @@ public class LauncherAppsService extends SystemService {
                                         mListeners.getBroadcastItem(i);
                                 final BroadcastCookie cookie =
                                         (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                                if (!isEnabledProfileOf(cookie.user, user, "onPackageRemoved")) {
+                                if (!isEnabledProfileOf(cookie, user, "onPackageRemoved")) {
                                     continue;
                                 }
                                 if (!isCallingAppIdAllowed(appIdAllowList, UserHandle.getAppId(
@@ -1637,10 +2453,10 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, user, "onPackageAdded")) {
+                        if (!isEnabledProfileOf(cookie, user, "onPackageAdded")) {
                             continue;
                         }
-                        if (!isPackageVisibleToListener(packageName, cookie)) {
+                        if (!isPackageVisibleToListener(packageName, cookie, user)) {
                             continue;
                         }
                         try {
@@ -1671,10 +2487,10 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, user, "onPackageModified")) {
+                        if (!isEnabledProfileOf(cookie, user, "onPackageModified")) {
                             continue;
                         }
-                        if (!isPackageVisibleToListener(packageName, cookie)) {
+                        if (!isPackageVisibleToListener(packageName, cookie, user)) {
                             continue;
                         }
                         try {
@@ -1696,10 +2512,11 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, user, "onPackagesAvailable")) {
+                        if (!isEnabledProfileOf(cookie, user, "onPackagesAvailable")) {
                             continue;
                         }
-                        final String[] filteredPackages = getFilteredPackageNames(packages, cookie);
+                        final String[] filteredPackages =
+                                getFilteredPackageNames(packages, cookie, user);
                         // If all packages are filtered, skip notifying listener.
                         if (ArrayUtils.isEmpty(filteredPackages)) {
                             continue;
@@ -1725,10 +2542,11 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, user, "onPackagesUnavailable")) {
+                        if (!isEnabledProfileOf(cookie, user, "onPackagesUnavailable")) {
                             continue;
                         }
-                        final String[] filteredPackages = getFilteredPackageNames(packages, cookie);
+                        final String[] filteredPackages =
+                                getFilteredPackageNames(packages, cookie, user);
                         // If all packages are filtered, skip notifying listener.
                         if (ArrayUtils.isEmpty(filteredPackages)) {
                             continue;
@@ -1768,11 +2586,11 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, user, "onPackagesSuspended")) {
+                        if (!isEnabledProfileOf(cookie, user, "onPackagesSuspended")) {
                             continue;
                         }
                         final String[] filteredPackagesWithoutExtras =
-                                getFilteredPackageNames(packagesNullExtras, cookie);
+                                getFilteredPackageNames(packagesNullExtras, cookie, user);
                         try {
                             if (!ArrayUtils.isEmpty(filteredPackagesWithoutExtras)) {
                                 listener.onPackagesSuspended(user, filteredPackagesWithoutExtras,
@@ -1780,7 +2598,8 @@ public class LauncherAppsService extends SystemService {
                             }
                             for (int idx = 0; idx < packagesWithExtras.size(); idx++) {
                                 Pair<String, Bundle> packageExtraPair = packagesWithExtras.get(idx);
-                                if (!isPackageVisibleToListener(packageExtraPair.first, cookie)) {
+                                if (!isPackageVisibleToListener(
+                                        packageExtraPair.first, cookie, user)) {
                                     continue;
                                 }
                                 listener.onPackagesSuspended(user,
@@ -1804,10 +2623,11 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, user, "onPackagesUnsuspended")) {
+                        if (!isEnabledProfileOf(cookie, user, "onPackagesUnsuspended")) {
                             continue;
                         }
-                        final String[] filteredPackages = getFilteredPackageNames(packages, cookie);
+                        final String[] filteredPackages =
+                                getFilteredPackageNames(packages, cookie, user);
                         // If all packages are filtered, skip notifying listener.
                         if (ArrayUtils.isEmpty(filteredPackages)) {
                             continue;
@@ -1840,10 +2660,10 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, user, "onShortcutChanged")) {
+                        if (!isEnabledProfileOf(cookie, user, "onShortcutChanged")) {
                             continue;
                         }
-                        if (!isPackageVisibleToListener(packageName, cookie)) {
+                        if (!isPackageVisibleToListener(packageName, cookie, user)) {
                             continue;
                         }
                         final int launcherUserId = cookie.user.getIdentifier();
@@ -1856,7 +2676,7 @@ public class LauncherAppsService extends SystemService {
                         }
                         // Each launcher has a different set of pinned shortcuts, so we need to do a
                         // query in here.
-                        // (As of now, only one launcher has the permission at a time, so it's bit
+                        // (As of now, only one launcher has the permission at a time, so it's a bit
                         // moot, but we may change the permission model eventually.)
                         final List<ShortcutInfo> list =
                                 mShortcutServiceInternal.getShortcuts(launcherUserId,
@@ -1898,8 +2718,8 @@ public class LauncherAppsService extends SystemService {
 
         class PackageLoadingProgressCallback extends
                 PackageManagerInternal.InstalledLoadingProgressCallback {
-            private String mPackageName;
-            private UserHandle mUser;
+            private final String mPackageName;
+            private final UserHandle mUser;
 
             PackageLoadingProgressCallback(String packageName, UserHandle user) {
                 super(mCallbackHandler);
@@ -1914,10 +2734,10 @@ public class LauncherAppsService extends SystemService {
                     for (int i = 0; i < n; i++) {
                         IOnAppsChangedListener listener = mListeners.getBroadcastItem(i);
                         BroadcastCookie cookie = (BroadcastCookie) mListeners.getBroadcastCookie(i);
-                        if (!isEnabledProfileOf(cookie.user, mUser, "onLoadingProgressChanged")) {
+                        if (!isEnabledProfileOf(cookie, mUser, "onLoadingProgressChanged")) {
                             continue;
                         }
-                        if (!isPackageVisibleToListener(mPackageName, cookie)) {
+                        if (!isPackageVisibleToListener(mPackageName, cookie, mUser)) {
                             continue;
                         }
                         try {

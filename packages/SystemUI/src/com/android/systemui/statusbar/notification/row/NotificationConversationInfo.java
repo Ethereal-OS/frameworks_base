@@ -25,24 +25,20 @@ import static android.app.NotificationManager.IMPORTANCE_UNSPECIFIED;
 import static android.app.NotificationManager.Policy.CONVERSATION_SENDERS_ANYONE;
 import static android.app.NotificationManager.Policy.CONVERSATION_SENDERS_IMPORTANT;
 
-import static com.android.systemui.animation.Interpolators.FAST_OUT_SLOW_IN;
+import static com.android.app.animation.Interpolators.FAST_OUT_SLOW_IN;
 
 import static java.lang.annotation.RetentionPolicy.SOURCE;
 
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
-import android.app.ActivityManager;
 import android.app.INotificationManager;
-import android.app.KeyguardManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationChannelGroup;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
@@ -52,7 +48,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.RemoteException;
 import android.os.UserHandle;
-import android.provider.Settings;
+import android.os.UserManager;
 import android.service.notification.StatusBarNotification;
 import android.text.TextUtils;
 import android.transition.ChangeBounds;
@@ -69,16 +65,14 @@ import android.widget.TextView;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.settingslib.notification.ConversationIconFactory;
-import com.android.systemui.R;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.people.widget.PeopleSpaceWidgetManager;
+import com.android.systemui.res.R;
 import com.android.systemui.shade.ShadeController;
 import com.android.systemui.statusbar.notification.NotificationChannelHelper;
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 import com.android.systemui.statusbar.notification.stack.StackStateAnimator;
-import com.android.systemui.statusbar.phone.CentralSurfaces;
-import com.android.systemui.statusbar.phone.SystemUIDialog;
 import com.android.systemui.wmshell.BubblesManager;
 
 import java.lang.annotation.Retention;
@@ -125,6 +119,8 @@ public class NotificationConversationInfo extends LinearLayout implements
     private NotificationGuts mGutsContainer;
     private OnConversationSettingsClickListener mOnConversationSettingsClickListener;
 
+    private UserManager mUm;
+
     @VisibleForTesting
     boolean mSkipPost = false;
     private int mActualHeight;
@@ -162,7 +158,9 @@ public class NotificationConversationInfo extends LinearLayout implements
         // People Tile add request.
         if (mSelectedAction == ACTION_FAVORITE && getPriority() != mSelectedAction) {
             mShadeController.animateCollapseShade();
-            mPeopleSpaceWidgetManager.requestPinAppWidget(mShortcutInfo, new Bundle());
+            if (mUm.isSameProfileGroup(UserHandle.USER_SYSTEM, mSbn.getNormalizedUserId())) {
+                mPeopleSpaceWidgetManager.requestPinAppWidget(mShortcutInfo, new Bundle());
+            }
         }
         mGutsContainer.closeControls(v, /* save= */ true);
     };
@@ -195,6 +193,7 @@ public class NotificationConversationInfo extends LinearLayout implements
     public void bindNotification(
             ShortcutManager shortcutManager,
             PackageManager pm,
+            UserManager um,
             PeopleSpaceWidgetManager peopleSpaceWidgetManager,
             INotificationManager iNotificationManager,
             OnUserInteractionCallback onUserInteractionCallback,
@@ -218,6 +217,7 @@ public class NotificationConversationInfo extends LinearLayout implements
         mEntry = entry;
         mSbn = entry.getSbn();
         mPm = pm;
+        mUm = um;
         mAppName = mPackageName;
         mOnSettingsClickListener = onSettingsClick;
         mNotificationChannel = notificationChannel;
@@ -256,21 +256,6 @@ public class NotificationConversationInfo extends LinearLayout implements
         done.setAccessibilityDelegate(mGutsContainer.getAccessibilityDelegate());
     }
 
-    private boolean isSystemPackage(String packageName) {
-        try {
-            final UserHandle userHandle = mSbn.getUser();
-            PackageManager pm = CentralSurfaces.getPackageManagerForUser(mContext,
-                    userHandle.getIdentifier());
-            PackageInfo packageInfo = pm.getPackageInfo(packageName,
-                    PackageManager.GET_SIGNATURES);
-            PackageInfo sys = pm.getPackageInfo("android", PackageManager.GET_SIGNATURES);
-            return (packageInfo != null && packageInfo.signatures != null &&
-                    sys.signatures[0].equals(packageInfo.signatures[0]));
-        } catch (PackageManager.NameNotFoundException e) {
-            return false;
-        }
-    }
-
     private void bindActions() {
 
         // TODO: b/152050825
@@ -302,43 +287,6 @@ public class NotificationConversationInfo extends LinearLayout implements
         final View settingsButton = findViewById(R.id.info);
         settingsButton.setOnClickListener(getSettingsOnClickListener());
         settingsButton.setVisibility(settingsButton.hasOnClickListeners() ? VISIBLE : GONE);
-
-        // Force stop button
-        final View killButton = findViewById(R.id.force_stop);
-        boolean killButtonEnabled = Settings.System.getIntForUser(
-                mContext.getContentResolver(),
-                Settings.System.NOTIFICATION_GUTS_KILL_APP_BUTTON, 0,
-                UserHandle.USER_CURRENT) != 0;
-        if (killButtonEnabled && !isSystemPackage(mPackageName)) {
-            killButton.setVisibility(View.VISIBLE);
-            killButton.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View v) {
-                    KeyguardManager keyguardManager = (KeyguardManager)
-                            mContext.getSystemService(Context.KEYGUARD_SERVICE);
-                    if (keyguardManager.inKeyguardRestrictedInputMode()) {
-                        // Don't do anything
-                        return;
-                    }
-                    final SystemUIDialog killDialog = new SystemUIDialog(mContext);
-                    killDialog.setTitle(mContext.getText(R.string.force_stop_dlg_title));
-                    killDialog.setMessage(mContext.getText(R.string.force_stop_dlg_text));
-                    killDialog.setPositiveButton(
-                            android.R.string.ok, new DialogInterface.OnClickListener() {
-                        public void onClick(DialogInterface dialog, int which) {
-                            // kill pkg
-                            ActivityManager actMan =
-                                    (ActivityManager) mContext.getSystemService(
-                                    Context.ACTIVITY_SERVICE);
-                            actMan.forceStopPackage(mPackageName);
-                        }
-                    });
-                    killDialog.setNegativeButton(android.R.string.cancel, null);
-                    killDialog.show();
-                }
-            });
-        } else {
-            killButton.setVisibility(View.GONE);
-        }
 
         updateToggleActions(mSelectedAction == -1 ? getPriority() : mSelectedAction,
                 false);
@@ -388,10 +336,11 @@ public class NotificationConversationInfo extends LinearLayout implements
         Drawable person =  mIconFactory.getBaseIconDrawable(mShortcutInfo);
         if (person == null) {
             person = mContext.getDrawable(R.drawable.ic_person).mutate();
-            TypedArray ta = mContext.obtainStyledAttributes(new int[]{android.R.attr.colorAccent});
-            int colorAccent = ta.getColor(0, 0);
+            TypedArray ta = mContext.obtainStyledAttributes(
+                    new int[]{com.android.internal.R.attr.materialColorPrimary});
+            int colorPrimary = ta.getColor(0, 0);
             ta.recycle();
-            person.setTint(colorAccent);
+            person.setTint(colorPrimary);
         }
         ImageView image = findViewById(R.id.conversation_icon);
         image.setImageDrawable(person);

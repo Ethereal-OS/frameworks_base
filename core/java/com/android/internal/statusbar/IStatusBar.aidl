@@ -23,13 +23,13 @@ import android.graphics.Rect;
 import android.hardware.biometrics.IBiometricContextListener;
 import android.hardware.biometrics.IBiometricSysuiReceiver;
 import android.hardware.biometrics.PromptInfo;
-import android.hardware.fingerprint.IUdfpsHbmListener;
+import android.hardware.fingerprint.IUdfpsRefreshRateRequestCallback;
 import android.media.INearbyMediaDevicesProvider;
 import android.media.MediaRoute2Info;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.view.KeyEvent;
 import android.service.notification.StatusBarNotification;
-import android.view.InsetsVisibilities;
 
 import com.android.internal.statusbar.IAddTileResultCallback;
 import com.android.internal.statusbar.IUndoMediaTransferCallback;
@@ -58,10 +58,24 @@ oneway interface IStatusBar
     void showRecentApps(boolean triggeredFromAltTab);
     void hideRecentApps(boolean triggeredFromAltTab, boolean triggeredFromHomeKey);
     void toggleRecentApps();
+    void toggleTaskbar();
     void toggleSplitScreen();
     void preloadRecentApps();
     void cancelPreloadRecentApps();
     void showScreenPinningRequest(int taskId);
+
+    /**
+     * Notify system UI the immersive prompt should be dismissed as confirmed, and the confirmed
+     * status should be saved without user clicking on the button. This could happen when a user
+     * swipe on the edge with the confirmation prompt showing.
+     */
+    void confirmImmersivePrompt();
+
+    /**
+     * Notify system UI the immersive mode changed. This shall be removed when client immersive is
+     * enabled.
+     */
+    void immersiveModeChanged(int rootDisplayAreaId, boolean isImmersiveMode);
 
     void dismissKeyboardShortcutsMenu();
     void toggleKeyboardShortcutsMenu(int deviceId);
@@ -138,11 +152,21 @@ oneway interface IStatusBar
      * @param hidesStatusBar whether it is being hidden
      */
     void setTopAppHidesStatusBar(boolean hidesStatusBar);
-
+    /**
+     * Add a tile to the Quick Settings Panel to the first item in the QS Panel
+     * @param tile the ComponentName of the {@link android.service.quicksettings.TileService}
+     */
     void addQsTile(in ComponentName tile);
+    /**
+     * Add a tile to the Quick Settings Panel
+     * @param tile the ComponentName of the {@link android.service.quicksettings.TileService}
+     * @param end if true, the tile will be added at the end. If false, at the beginning.
+     */
+    void addQsTileToFrontOrEnd(in ComponentName tile, boolean end);
     void remQsTile(in ComponentName tile);
+    void setQsTiles(in String[] tiles);
     void clickQsTile(in ComponentName tile);
-    void handleSystemKey(in int key);
+    void handleSystemKey(in KeyEvent key);
 
     /**
      * Methods to show toast messages for screen pinning
@@ -157,7 +181,7 @@ oneway interface IStatusBar
     */
     void showAuthenticationDialog(in PromptInfo promptInfo, IBiometricSysuiReceiver sysuiReceiver,
             in int[] sensorIds, boolean credentialAllowed, boolean requireConfirmation, int userId,
-            long operationId, String opPackageName, long requestId, int multiSensorConfig);
+            long operationId, String opPackageName, long requestId);
     /**
     * Used to notify the authentication dialog that a biometric has been authenticated.
     */
@@ -176,9 +200,9 @@ oneway interface IStatusBar
     void setBiometicContextListener(in IBiometricContextListener listener);
 
     /**
-     * Sets an instance of IUdfpsHbmListener for UdfpsController.
+     * Sets an instance of IUdfpsRefreshRateRequestCallback for UdfpsController.
      */
-    void setUdfpsHbmListener(in IUdfpsHbmListener listener);
+    void setUdfpsRefreshRateCallback(in IUdfpsRefreshRateRequestCallback callback);
 
     /**
      * Notifies System UI that the display is ready to show system decorations.
@@ -202,13 +226,13 @@ oneway interface IStatusBar
      *                         stacks.
      * @param navbarColorManagedByIme {@code true} if navigation bar color is managed by IME.
      * @param behavior the behavior of the focused window.
-     * @param requestedVisibilities the collection of the requested visibilities of system insets.
+     * @param requestedVisibleTypes the collection of insets types requested visible.
      * @param packageName the package name of the focused app.
      * @param letterboxDetails a set of letterbox details of apps visible on the screen.
      */
     void onSystemBarAttributesChanged(int displayId, int appearance,
             in AppearanceRegion[] appearanceRegions, boolean navbarColorManagedByIme,
-            int behavior, in InsetsVisibilities requestedVisibilities, String packageName,
+            int behavior, int requestedVisibleTypes, String packageName,
             in LetterboxDetails[] letterboxDetails);
 
     /**
@@ -216,11 +240,11 @@ oneway interface IStatusBar
      * bar and navigation bar which are temporarily visible to the user.
      *
      * @param displayId the ID of the display to notify.
-     * @param types the internal insets types of the bars are about to show transiently.
+     * @param types the insets types of the bars are about to show transiently.
      * @param isGestureOnSystemBar whether the gesture to show the transient bar was a gesture on
      *        one of the bars itself.
      */
-    void showTransient(int displayId, in int[] types, boolean isGestureOnSystemBar);
+    void showTransient(int displayId, int types, boolean isGestureOnSystemBar);
 
     /**
      * Notifies System UI to abort the transient state of system bars, which prevents the bars being
@@ -228,9 +252,9 @@ oneway interface IStatusBar
      * bars again.
      *
      * @param displayId the ID of the display to notify.
-     * @param types the internal insets types of the bars are about to abort the transient state.
+     * @param types the insets types of the bars are about to abort the transient state.
      */
-    void abortTransient(int displayId, in int[] types);
+    void abortTransient(int displayId, int types);
 
     /**
      * Show a warning that the device is about to go to sleep due to user inactivity.
@@ -271,12 +295,12 @@ oneway interface IStatusBar
     void suppressAmbientDisplay(boolean suppress);
 
     /**
-     * Requests {@link WindowMagnification} to set window magnification connection through
-     * {@link AccessibilityManager#setWindowMagnificationConnection(IWindowMagnificationConnection)}
+     * Requests {@link Magnification} to set magnification connection to SystemUI through
+     * {@link AccessibilityManager#setMagnificationConnection(IMagnificationConnection)}
      *
      * @param connect {@code true} if needs connection, otherwise set the connection to null.
      */
-    void requestWindowMagnificationConnection(boolean connect);
+    void requestMagnificationConnection(boolean connect);
 
     /**
      * Allow for pass-through arguments from `adb shell cmd statusbar <args>`, and write to the
@@ -302,7 +326,14 @@ oneway interface IStatusBar
      */
     void requestTileServiceListeningState(in ComponentName componentName);
 
-    void requestAddTile(in ComponentName componentName, in CharSequence appName, in CharSequence label, in Icon icon, in IAddTileResultCallback callback);
+    void requestAddTile(
+        int callingUid,
+        in ComponentName componentName,
+        in CharSequence appName,
+        in CharSequence label,
+        in Icon icon,
+        in IAddTileResultCallback callback
+    );
     void cancelRequestAddTile(in String packageName);
 
     /** Notifies System UI about an update to the media tap-to-transfer sender state. */
@@ -330,8 +361,12 @@ oneway interface IStatusBar
     /** Shows rear display educational dialog */
     void showRearDisplayDialog(int currentBaseState);
 
-    /** Called when requested to go to fullscreen from the active split app. */
-    void goToFullscreenFromSplit();
+    /**
+     *  Called when requested to go to fullscreen from the focused app.
+     *
+     *  @param displayId the id of the current display.
+     */
+    void moveFocusedTaskToFullscreen(int displayId);
 
     /**
      * Enters stage split from a current running app.
@@ -347,11 +382,19 @@ oneway interface IStatusBar
      */
     void showMediaOutputSwitcher(String packageName);
 
-    /** Ethereal additions. */
+    /** Enters desktop mode.
+    *
+    * @param displayId the id of the current display.
+    */
+    void enterDesktop(int displayId);
+
+    /** StagOS additions. */
     void toggleCameraFlash();
 
-    void screenPinningStateChanged(boolean enabled);
-    void leftInLandscapeChanged(boolean isLeft);
     void killForegroundApp();
 
+    /**
+     * Used to block or unblock usage of gestural navigation
+     */
+    void setBlockedGesturalNavigation(boolean blocked);
 }

@@ -26,7 +26,12 @@ import android.util.Slog;
 import android.view.Choreographer;
 import android.view.Display;
 
+import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.os.BackgroundThread;
+import com.android.server.display.utils.DebugUtils;
+
 import java.io.PrintWriter;
+import java.util.concurrent.Executor;
 
 /**
  * Controls the display power state.
@@ -48,12 +53,15 @@ import java.io.PrintWriter;
 final class DisplayPowerState {
     private static final String TAG = "DisplayPowerState";
 
-    private static final boolean DEBUG = false;
+    // To enable these logs, run:
+    // 'adb shell setprop persist.log.tag.DisplayPowerState DEBUG && adb reboot'
+    private static final boolean DEBUG = DebugUtils.isDebuggable(TAG);
     private static String COUNTER_COLOR_FADE = "ColorFadeLevel";
 
     private final Handler mHandler;
     private final Choreographer mChoreographer;
     private final DisplayBlanker mBlanker;
+    private final ColorFade mColorFade;
     private final PhotonicModulator mPhotonicModulator;
     private final int mDisplayId;
 
@@ -70,19 +78,27 @@ final class DisplayPowerState {
 
     private Runnable mCleanListener;
 
+    private Executor mAsyncDestroyExecutor;
+
     private volatile boolean mStopped;
 
-    private ScreenStateAnimator mColorFade;
-
     DisplayPowerState(
-            DisplayBlanker blanker, int screenAnimatorMode, int displayId, int displayState) {
+            DisplayBlanker blanker, ColorFade colorFade, int displayId, int displayState) {
+        this(blanker, colorFade, displayId, displayState, BackgroundThread.getExecutor());
+    }
+
+    @VisibleForTesting
+    DisplayPowerState(
+            DisplayBlanker blanker, ColorFade colorFade, int displayId, int displayState,
+            Executor asyncDestroyExecutor) {
         mHandler = new Handler(true /*async*/);
         mChoreographer = Choreographer.getInstance();
         mBlanker = blanker;
-        setScreenStateAnimator(screenAnimatorMode);
+        mColorFade = colorFade;
         mPhotonicModulator = new PhotonicModulator();
         mPhotonicModulator.start();
         mDisplayId = displayId;
+        mAsyncDestroyExecutor = asyncDestroyExecutor;
 
         // At boot time, we don't know the screen's brightness,
         // so prepare to set it to a known state when the state is next applied.
@@ -98,17 +114,6 @@ final class DisplayPowerState {
         mColorFadePrepared = false;
         mColorFadeLevel = 1.0f;
         mColorFadeReady = true;
-    }
-
-    public void setScreenStateAnimator(int mode) {
-        if (mColorFade != null) {
-            mColorFade.dismiss();
-        }
-        if (mode == DisplayPowerController.SCREEN_OFF_FADE) {
-            mColorFade = new ColorFade(Display.DEFAULT_DISPLAY);
-        } else {
-            mColorFade = new ElectronBeam(Display.DEFAULT_DISPLAY);
-        }
     }
 
     public static final FloatProperty<DisplayPowerState> COLOR_FADE_LEVEL =
@@ -328,7 +333,11 @@ final class DisplayPowerState {
     public void stop() {
         mStopped = true;
         mPhotonicModulator.interrupt();
-        dismissColorFade();
+        mColorFadePrepared = false;
+        mColorFadeReady = true;
+        if (mColorFade != null) {
+            mAsyncDestroyExecutor.execute(mColorFade::destroy);
+        }
         mCleanListener = null;
         mHandler.removeCallbacksAndMessages(null);
     }
@@ -412,7 +421,8 @@ final class DisplayPowerState {
         }
     };
 
-    private final Runnable mColorFadeDrawRunnable = new Runnable() {
+    @VisibleForTesting
+    final Runnable mColorFadeDrawRunnable = new Runnable() {
         @Override
         public void run() {
             mColorFadeDrawPending = false;

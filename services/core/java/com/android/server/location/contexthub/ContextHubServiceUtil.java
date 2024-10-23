@@ -31,6 +31,9 @@ import android.hardware.location.NanoAppRpcService;
 import android.hardware.location.NanoAppState;
 import android.util.Log;
 
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -48,6 +51,18 @@ import java.util.List;
      * A host endpoint that is reserved to identify a broadcasted message.
      */
     private static final char HOST_ENDPOINT_BROADCAST = 0xFFFF;
+
+
+    /*
+     * The format for printing to logs.
+     */
+    private static final String DATE_FORMAT = "MM/dd HH:mm:ss.SSS";
+
+    /**
+     * The DateTimeFormatter for printing to logs.
+     */
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern(DATE_FORMAT)
+            .withZone(ZoneId.systemDefault());
 
     /**
      * Creates a ConcurrentHashMap of the Context Hub ID to the ContextHubInfo object given an
@@ -261,6 +276,8 @@ import java.util.List;
         aidlMessage.messageBody = message.getMessageBody();
         // This explicit definition is required to avoid erroneous behavior at the binder.
         aidlMessage.permissions = new String[0];
+        aidlMessage.isReliable = message.isReliable();
+        aidlMessage.messageSequenceNumber = message.getMessageSequenceNumber();
 
         return aidlMessage;
     }
@@ -291,7 +308,8 @@ import java.util.List;
             android.hardware.contexthub.ContextHubMessage message) {
         return NanoAppMessage.createMessageFromNanoApp(
                 message.nanoappId, message.messageType, message.messageBody,
-                message.hostEndPoint == HOST_ENDPOINT_BROADCAST);
+                message.hostEndPoint == HOST_ENDPOINT_BROADCAST,
+                message.isReliable, message.messageSequenceNumber);
     }
 
     /**
@@ -385,5 +403,16 @@ import java.util.List;
                 Log.e(TAG, "toContextHubEventFromAidl: Unknown event type: " + aidlEventType);
                 return ContextHubService.CONTEXT_HUB_EVENT_UNKNOWN;
         }
+    }
+
+    /**
+     * Converts a timestamp in milliseconds to a properly-formatted date string for log output.
+     *
+     * @param timeStampInMs     the timestamp in milliseconds
+     * @return                  the formatted date string
+     */
+    /* package */
+    static String formatDateFromTimestamp(long timeStampInMs) {
+        return DATE_FORMATTER.format(Instant.ofEpochMilli(timeStampInMs));
     }
 }

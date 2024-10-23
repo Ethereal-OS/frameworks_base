@@ -45,6 +45,9 @@ public class SettingsValidators {
         }
     };
 
+    public static final Validator FONT_SCALE_VALIDATOR = new InclusiveFloatRangeValidator(0.25f,
+            5.0f);
+
     public static final Validator NON_NEGATIVE_INTEGER_VALIDATOR = new Validator() {
         @Override
         public boolean validate(@Nullable String value) {
@@ -233,6 +236,54 @@ public class SettingsValidators {
             } catch (NumberFormatException e) {
                 return false;
             }
+        }
+    };
+
+    static final Validator CREDENTIAL_SERVICE_VALIDATOR = new Validator() {
+        @Override
+        public boolean validate(String value) {
+            if (value == null || value.equals("")) {
+                return true;
+            }
+
+            return COLON_SEPARATED_COMPONENT_LIST_VALIDATOR.validate(value);
+        }
+    };
+
+    static final Validator AUTOFILL_SERVICE_VALIDATOR = new Validator() {
+        @Override
+        public boolean validate(String value) {
+            if (value == null || value.equals("")) {
+                return true;
+            }
+
+            if (value.equals("credential-provider")) {
+               return true;
+            }
+
+            return NULLABLE_COMPONENT_NAME_VALIDATOR.validate(value);
+        }
+    };
+
+    static final Validator TIME_RANGE_VALIDATOR = new Validator() {
+        @Override
+        public boolean validate(String value) {
+            String[] values = value.split(",", 0);
+            if (values.length != 2) return false;
+            for (String str : values) {
+                String[] time = str.split(":", 0);
+                if (time.length != 2) return false;
+                int hour, minute;
+                try {
+                    hour = Integer.valueOf(time[0]);
+                    minute = Integer.valueOf(time[1]);
+                } catch (NumberFormatException e) {
+                    return false;
+                }
+                if (hour < 0 || hour > 23 || minute < 0 || minute > 59)
+                    return false;
+            }
+            return true;
         }
     };
 }

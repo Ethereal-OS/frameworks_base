@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2019-2023 crDroid Android Project
+ * Copyright (C) 2019-2024 crDroid Android Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,10 @@ import android.graphics.drawable.Drawable;
 import android.graphics.PorterDuff;
 import android.graphics.Typeface;
 import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.TrafficStats;
 import android.os.Handler;
 import android.os.Message;
@@ -44,9 +48,13 @@ import com.android.systemui.tuner.TunerService;
 
 import java.text.DecimalFormat;
 import java.util.HashMap;
+import java.util.stream.Stream;
 
 public class NetworkTraffic extends TextView implements TunerService.Tunable {
     private static final String TAG = "NetworkTraffic";
+
+    // This must match the interface prefix in Connectivity's clatd.c.
+    private static final String CLAT_PREFIX = "v4-";
 
     private static final int MODE_UPSTREAM_AND_DOWNSTREAM = 0;
     private static final int MODE_UPSTREAM_ONLY = 1;
@@ -58,6 +66,8 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
 
     private static final int MESSAGE_TYPE_PERIODIC_REFRESH = 0;
     private static final int MESSAGE_TYPE_UPDATE_VIEW = 1;
+    private static final int MESSAGE_TYPE_ADD_NETWORK = 2;
+    private static final int MESSAGE_TYPE_REMOVE_NETWORK = 3;
 
     private static final int Kilo = 1000;
     private static final int Mega = Kilo * Kilo;
@@ -98,7 +108,7 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
 
     private int mRefreshInterval = 2;
 
-    private boolean mAttached;
+    protected boolean mAttached;
     private boolean mHideArrows;
 
     protected boolean mVisible = true;
@@ -112,6 +122,11 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
     protected boolean mEnabled = false;
     private boolean mConnectionAvailable = true;
     private boolean mChipVisible;
+
+    private final HashMap<Network, LinkProperties> mLinkPropertiesMap = new HashMap<>();
+    // Used to indicate that the set of sources contributing
+    // to current stats have changed.
+    private boolean mNetworksChanged = true;
 
     public NetworkTraffic(Context context) {
         this(context, null);
@@ -138,6 +153,17 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
                     case MESSAGE_TYPE_UPDATE_VIEW:
                         displayStatsAndReschedule();
                         break;
+
+                    case MESSAGE_TYPE_ADD_NETWORK:
+                        final LinkPropertiesHolder lph = (LinkPropertiesHolder) msg.obj;
+                        mLinkPropertiesMap.put(lph.getNetwork(), lph.getLinkProperties());
+                        mNetworksChanged = true;
+                        break;
+
+                    case MESSAGE_TYPE_REMOVE_NETWORK:
+                        mLinkPropertiesMap.remove((Network) msg.obj);
+                        mNetworksChanged = true;
+                        break;
                 }
             }
 
@@ -149,15 +175,31 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
                     return;
                 }
                 // Sum tx and rx bytes from all sources of interest
-                final long txBytes = TrafficStats.getTotalTxBytes();
-                final long rxBytes = TrafficStats.getTotalRxBytes();
+                long txBytes = 0;
+                long rxBytes = 0;
+                // Add interface stats, including stats from Clat's IPv4 interface
+                // (for applicable IPv6 networks). Stats are 0 if it doesn't exist.
+                final String[] ifaces = mLinkPropertiesMap.values().stream()
+                        .map(link -> link.getInterfaceName()).filter(iface -> iface != null)
+                        .flatMap(iface -> Stream.of(iface, CLAT_PREFIX + iface))
+                        .toArray(String[]::new);
+                for (String iface : ifaces) {
+                    final long ifaceTxBytes = TrafficStats.getTxBytes(iface);
+                    final long ifaceRxBytes = TrafficStats.getRxBytes(iface);
+                    txBytes += ifaceTxBytes;
+                    rxBytes += ifaceRxBytes;
+                }
 
                 final long txBytesDelta = txBytes - mLastTxBytes;
                 final long rxBytesDelta = rxBytes - mLastRxBytes;
 
-                if (timeDelta > 0 && txBytesDelta >= 0 && rxBytesDelta >= 0) {
+                if (!mNetworksChanged && timeDelta > 0 && txBytesDelta >= 0 && rxBytesDelta >= 0) {
                     mTxBytes = (long) (txBytesDelta / (timeDelta / 1000f));
                     mRxBytes = (long) (rxBytesDelta / (timeDelta / 1000f));
+                } else if (mNetworksChanged) {
+                    mTxBytes = 0;
+                    mRxBytes = 0;
+                    mNetworksChanged = false;
                 }
                 mLastTxBytes = txBytes;
                 mLastRxBytes = rxBytes;
@@ -279,6 +321,49 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
         };
     }
 
+    // Network tracking related variables
+    private NetworkRequest mRequest = new NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build();
+
+    private ConnectivityManager.NetworkCallback mNetworkCallback =
+            new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onLinkPropertiesChanged(Network network,
+                        LinkProperties linkProperties) {
+                    if (mTrafficHandler != null) {
+                        Message msg = new Message();
+                        msg.what = MESSAGE_TYPE_ADD_NETWORK;
+                        msg.obj = new LinkPropertiesHolder(network, linkProperties);
+                        mTrafficHandler.sendMessage(msg);
+                    }
+                }
+
+                @Override
+                public void onLost(Network network) {
+                    if (mTrafficHandler != null) {
+                        Message msg = new Message();
+                        msg.what = MESSAGE_TYPE_REMOVE_NETWORK;
+                        msg.obj = network;
+                        mTrafficHandler.sendMessage(msg);
+                    }
+                }
+            };
+
+    private ConnectivityManager.NetworkCallback mDefaultNetworkCallback =
+            new ConnectivityManager.NetworkCallback() {
+        @Override
+        public void onAvailable(Network network) {
+            updateViews();
+        }
+
+        @Override
+        public void onLost(Network network) {
+            updateViews();
+        }
+    };
+
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -293,6 +378,9 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
             tunerService.addTunable(this, NETWORK_TRAFFIC_UNITS);
             tunerService.addTunable(this, NETWORK_TRAFFIC_REFRESH_INTERVAL);
             tunerService.addTunable(this, NETWORK_TRAFFIC_HIDEARROW);
+
+            mConnectivityManager.registerNetworkCallback(mRequest, mNetworkCallback);
+            mConnectivityManager.registerDefaultNetworkCallback(mDefaultNetworkCallback);
 
             mConnectionAvailable = mConnectivityManager.getActiveNetworkInfo() != null;
 
@@ -310,6 +398,8 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
         if (mAttached) {
             clearHandlerCallbacks();
             mContext.unregisterReceiver(mIntentReceiver);
+            mConnectivityManager.unregisterNetworkCallback(mDefaultNetworkCallback);
+            mConnectivityManager.unregisterNetworkCallback(mNetworkCallback);
             Dependency.get(TunerService.class).removeTunable(this);
             mAttached = false;
         }
@@ -460,5 +550,23 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
             mDrawable.setColorFilter(mIconTint, PorterDuff.Mode.MULTIPLY);
         }
         setTextColor(mIconTint);
+    }
+
+    private static class LinkPropertiesHolder {
+        private final Network mNetwork;
+        private final LinkProperties mLinkProperties;
+
+        public LinkPropertiesHolder(Network network, LinkProperties linkProperties) {
+            mNetwork = network;
+            mLinkProperties = linkProperties;
+        }
+
+        public Network getNetwork() {
+            return mNetwork;
+        }
+
+        public LinkProperties getLinkProperties() {
+            return mLinkProperties;
+        }
     }
 }

@@ -70,7 +70,7 @@ public class BaseClientMonitorTest {
         mClientMonitor.binderDied();
 
         assertThat(mClientMonitor.mCanceled).isTrue();
-        assertThat(mClientMonitor.getListener()).isNull();
+        assertThat(mClientMonitor.getListener()).isNotNull();
     }
 
     @Test
@@ -107,7 +107,7 @@ public class BaseClientMonitorTest {
         assertThat(mClientMonitor.getRequestId()).isEqualTo(id);
     }
 
-    private class TestClientMonitor extends BaseClientMonitor implements Interruptable {
+    private class TestClientMonitor extends BaseClientMonitor {
         public boolean mCanceled = false;
 
         TestClientMonitor() {
@@ -128,6 +128,11 @@ public class BaseClientMonitorTest {
         @Override
         public void cancelWithoutStarting(@NonNull ClientMonitorCallback callback) {
             mCanceled = true;
+        }
+
+        @Override
+        public boolean isInterruptable() {
+            return true;
         }
     }
 }

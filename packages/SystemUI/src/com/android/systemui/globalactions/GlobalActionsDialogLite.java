@@ -21,9 +21,12 @@ import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 import static android.view.WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
 import static android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
 import static android.view.WindowManager.ScreenshotSource.SCREENSHOT_GLOBAL_ACTIONS;
-import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_2BUTTON;
 import static android.view.WindowManager.TAKE_SCREENSHOT_FULLSCREEN;
+import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_2BUTTON;
 
+import android.view.CrossWindowBlurListeners;
+import com.android.systemui.statusbar.BlurUtils;
+import com.android.systemui.dump.DumpManager;
 import static com.android.internal.widget.LockPatternUtils.StrongAuthTracker.SOME_AUTH_REQUIRED_AFTER_USER_REQUEST;
 import static com.android.internal.widget.LockPatternUtils.StrongAuthTracker.STRONG_AUTH_NOT_REQUIRED;
 import static com.android.internal.widget.LockPatternUtils.StrongAuthTracker.STRONG_AUTH_REQUIRED_AFTER_USER_LOCKDOWN;
@@ -52,7 +55,6 @@ import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
-import android.hardware.camera2.CameraManager;
 import android.media.AudioManager;
 import android.os.Binder;
 import android.os.Build;
@@ -64,14 +66,13 @@ import android.os.PowerManager;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.SystemProperties;
+import android.os.Trace;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.service.dreams.IDreamManager;
 import android.sysprop.TelephonyProperties;
 import android.telecom.TelecomManager;
-import android.telephony.ServiceState;
-import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
 import android.util.ArraySet;
 import android.util.Log;
@@ -101,6 +102,7 @@ import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleOwner;
 import androidx.lifecycle.LifecycleRegistry;
 
+import com.android.app.animation.Interpolators;
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.colorextraction.ColorExtractor;
@@ -118,24 +120,30 @@ import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.systemui.MultiListLayout;
 import com.android.systemui.MultiListLayout.MultiListAdapter;
 import com.android.systemui.animation.DialogCuj;
-import com.android.systemui.animation.DialogLaunchAnimator;
+import com.android.systemui.animation.DialogTransitionAnimator;
 import com.android.systemui.animation.Expandable;
-import com.android.systemui.animation.Interpolators;
 import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.colorextraction.SysuiColorExtractor;
+import com.android.systemui.controls.dagger.ControlsComponent;
+import com.android.systemui.controls.management.ControlsListingController;
+import com.android.systemui.controls.ui.ControlsActivity;
+import com.android.systemui.controls.ui.ControlsUiController;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
+import com.android.systemui.globalactions.domain.interactor.GlobalActionsInteractor;
 import com.android.systemui.plugins.GlobalActions.GlobalActionsManager;
 import com.android.systemui.plugins.GlobalActionsPanelPlugin;
 import com.android.systemui.scrim.ScrimDrawable;
 import com.android.systemui.settings.UserTracker;
+import com.android.systemui.shade.ShadeController;
 import com.android.systemui.statusbar.NotificationShadeWindowController;
 import com.android.systemui.statusbar.VibratorHelper;
-import com.android.systemui.statusbar.phone.CentralSurfaces;
+import com.android.systemui.statusbar.phone.LightBarController;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
-import com.android.systemui.telephony.TelephonyListenerManager;
+import com.android.systemui.statusbar.window.StatusBarWindowController;
+import com.android.systemui.user.domain.interactor.SelectedUserInteractor;
 import com.android.systemui.util.EmergencyDialerConstants;
 import com.android.systemui.util.RingerModeTracker;
 import com.android.systemui.util.settings.GlobalSettings;
@@ -143,7 +151,6 @@ import com.android.systemui.util.settings.SecureSettings;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.Executor;
 
 import javax.inject.Inject;
@@ -187,7 +194,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     static final String GLOBAL_ACTION_KEY_EMERGENCY = "emergency";
     static final String GLOBAL_ACTION_KEY_SCREENSHOT = "screenshot";
     private static final String GLOBAL_ACTION_KEY_ADVANCED_RESTART = "advanced";
-    private static final String GLOBAL_ACTION_KEY_TORCH = "torch";
+    static final String GLOBAL_ACTION_KEY_DEVICE_CONTROLS = "devicecontrols";
 
     // See NotificationManagerService#scheduleDurationReachedLocked
     private static final long TOAST_FADE_TIME = 333;
@@ -204,7 +211,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     private final IDreamManager mDreamManager;
     private final DevicePolicyManager mDevicePolicyManager;
     private final LockPatternUtils mLockPatternUtils;
-    private final TelephonyListenerManager mTelephonyListenerManager;
+    private final SelectedUserInteractor mSelectedUserInteractor;
     private final KeyguardStateController mKeyguardStateController;
     private final BroadcastDispatcher mBroadcastDispatcher;
     protected final GlobalSettings mGlobalSettings;
@@ -250,17 +257,21 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     private final ScreenshotHelper mScreenshotHelper;
     private final SysuiColorExtractor mSysuiColorExtractor;
     private final IStatusBarService mStatusBarService;
+    protected final LightBarController mLightBarController;
     protected final NotificationShadeWindowController mNotificationShadeWindowController;
+    private final StatusBarWindowController mStatusBarWindowController;
     private final IWindowManager mIWindowManager;
     private final Executor mBackgroundExecutor;
     private final RingerModeTracker mRingerModeTracker;
     private int mDialogPressDelay = DIALOG_PRESS_DELAY; // ms
     protected Handler mMainHandler;
     private int mSmallestScreenWidthDp;
-    private final Optional<CentralSurfaces> mCentralSurfacesOptional;
+    private int mOrientation;
+    private final ShadeController mShadeController;
     private final KeyguardUpdateMonitor mKeyguardUpdateMonitor;
-    private final DialogLaunchAnimator mDialogLaunchAnimator;
-    private boolean mTorchEnabled = false;
+    private final DialogTransitionAnimator mDialogTransitionAnimator;
+    private final GlobalActionsInteractor mInteractor;
+    private final ControlsComponent mControlsComponent;
 
     @VisibleForTesting
     public enum GlobalActionsEvent implements UiEventLogger.UiEventEnum {
@@ -345,7 +356,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             DevicePolicyManager devicePolicyManager,
             LockPatternUtils lockPatternUtils,
             BroadcastDispatcher broadcastDispatcher,
-            TelephonyListenerManager telephonyListenerManager,
             GlobalSettings globalSettings,
             SecureSettings secureSettings,
             @NonNull VibratorHelper vibrator,
@@ -360,23 +370,27 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             MetricsLogger metricsLogger,
             SysuiColorExtractor colorExtractor,
             IStatusBarService statusBarService,
+            LightBarController lightBarController,
             NotificationShadeWindowController notificationShadeWindowController,
+            StatusBarWindowController statusBarWindowController,
             IWindowManager iWindowManager,
             @Background Executor backgroundExecutor,
             UiEventLogger uiEventLogger,
             RingerModeTracker ringerModeTracker,
             @Main Handler handler,
             PackageManager packageManager,
-            Optional<CentralSurfaces> centralSurfacesOptional,
+            ShadeController shadeController,
             KeyguardUpdateMonitor keyguardUpdateMonitor,
-            DialogLaunchAnimator dialogLaunchAnimator) {
+            DialogTransitionAnimator dialogTransitionAnimator,
+            SelectedUserInteractor selectedUserInteractor,
+            GlobalActionsInteractor interactor,
+            ControlsComponent controlsComponent) {
         mContext = context;
         mWindowManagerFuncs = windowManagerFuncs;
         mAudioManager = audioManager;
         mDreamManager = iDreamManager;
         mDevicePolicyManager = devicePolicyManager;
         mLockPatternUtils = lockPatternUtils;
-        mTelephonyListenerManager = telephonyListenerManager;
         mKeyguardStateController = keyguardStateController;
         mBroadcastDispatcher = broadcastDispatcher;
         mGlobalSettings = globalSettings;
@@ -392,15 +406,21 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         mUiEventLogger = uiEventLogger;
         mSysuiColorExtractor = colorExtractor;
         mStatusBarService = statusBarService;
+        mLightBarController = lightBarController;
         mNotificationShadeWindowController = notificationShadeWindowController;
+        mStatusBarWindowController = statusBarWindowController;
         mIWindowManager = iWindowManager;
         mBackgroundExecutor = backgroundExecutor;
         mRingerModeTracker = ringerModeTracker;
         mMainHandler = handler;
         mSmallestScreenWidthDp = resources.getConfiguration().smallestScreenWidthDp;
-        mCentralSurfacesOptional = centralSurfacesOptional;
+        mOrientation = resources.getConfiguration().orientation;
+        mShadeController = shadeController;
         mKeyguardUpdateMonitor = keyguardUpdateMonitor;
-        mDialogLaunchAnimator = dialogLaunchAnimator;
+        mDialogTransitionAnimator = dialogTransitionAnimator;
+        mSelectedUserInteractor = selectedUserInteractor;
+        mInteractor = interactor;
+        mControlsComponent = controlsComponent;
 
         // receive broadcasts
         IntentFilter filter = new IntentFilter();
@@ -412,7 +432,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         mHasTelephony = packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY);
 
         // get notified of phone state changes
-        mTelephonyListenerManager.addServiceStateListener(mPhoneStateListener);
         mGlobalSettings.registerContentObserver(
                 Settings.Global.getUriFor(Settings.Global.AIRPLANE_MODE_ON), true,
                 mAirplaneModeObserver);
@@ -430,10 +449,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         mScreenshotHelper = new ScreenshotHelper(context);
 
         mConfigurationController.addCallback(this);
-
-        // get notified of torch state changes
-        mCameraManager = (CameraManager) mContext.getSystemService(Context.CAMERA_SERVICE);
-        mCameraManager.registerTorchCallback(torchCallback, null);
     }
 
     /**
@@ -441,7 +456,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
      */
     public void destroy() {
         mBroadcastDispatcher.unregisterReceiver(mBroadcastReceiver);
-        mTelephonyListenerManager.removeServiceStateListener(mPhoneStateListener);
         mGlobalSettings.unregisterContentObserver(mAirplaneModeObserver);
         mConfigurationController.removeCallback(this);
     }
@@ -452,10 +466,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
     protected UiEventLogger getEventLogger() {
         return mUiEventLogger;
-    }
-
-    protected Optional<CentralSurfaces> getCentralSurfaces() {
-        return mCentralSurfacesOptional;
     }
 
     protected KeyguardUpdateMonitor getKeyguardUpdateMonitor() {
@@ -527,16 +537,18 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         // Don't acquire soft keyboard focus, to avoid destroying state when capturing bugreports
         mDialog.getWindow().addFlags(FLAG_ALT_FOCUSABLE_IM);
 
-        DialogLaunchAnimator.Controller controller =
-                expandable != null ? expandable.dialogLaunchController(
+        DialogTransitionAnimator.Controller controller =
+                expandable != null ? expandable.dialogTransitionController(
                         new DialogCuj(InteractionJankMonitor.CUJ_SHADE_DIALOG_OPEN,
                                 INTERACTION_JANK_TAG)) : null;
         if (controller != null) {
-            mDialogLaunchAnimator.show(mDialog, controller);
+            mDialogTransitionAnimator.show(mDialog, controller);
         } else {
             mDialog.show();
         }
         mWindowManagerFuncs.onGlobalActionsShown();
+
+        rescheduleBurninTimeout();
     }
 
     @VisibleForTesting
@@ -556,8 +568,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
      */
     @VisibleForTesting
     protected int getMaxShownPowerItems() {
-        return mResources.getInteger(com.android.systemui.R.integer.power_menu_lite_max_columns)
-                * mResources.getInteger(com.android.systemui.R.integer.power_menu_lite_max_rows);
+        return mResources.getInteger(com.android.systemui.res.R.integer.power_menu_lite_max_columns)
+                * mResources.getInteger(com.android.systemui.res.R.integer.power_menu_lite_max_rows);
     }
 
     /**
@@ -653,7 +665,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         // make sure emergency affordance action is first, if needed
         if (Settings.System.getInt(mContext.getContentResolver(),
-                Settings.System.POWERMENU_EMERGENCY, 0) == 1) {
+                Settings.System.GLOBAL_ACTIONS_EMERGENCY, 0) == 1) {
             addIfShouldShowAction(tempActions, new EmergencyAffordanceAction());
             addedKeys.add(GLOBAL_ACTION_KEY_EMERGENCY);
         }
@@ -666,12 +678,12 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             }
             if (GLOBAL_ACTION_KEY_POWER.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_POWER, 1) == 1) {
+                        Settings.System.GLOBAL_ACTIONS_POWER, 1) == 1) {
                     addIfShouldShowAction(tempActions, shutdownAction);
                 }
             } else if (GLOBAL_ACTION_KEY_AIRPLANE.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_AIRPLANE, 0) == 1) {
+                        Settings.System.GLOBAL_ACTIONS_AIRPLANE, 0) == 1) {
                     addIfShouldShowAction(tempActions, mAirplaneModeOn);
                 }
             } else if (GLOBAL_ACTION_KEY_BUGREPORT.equals(actionKey)) {
@@ -680,28 +692,23 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 }
             } else if (GLOBAL_ACTION_KEY_SILENT.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_SOUNDPANEL, 0) == 1) {
+                        Settings.System.GLOBAL_ACTIONS_SOUNDPANEL, 0) == 1) {
                     addIfShouldShowAction(tempActions, mSilentModeAction);
                 }
             } else if (GLOBAL_ACTION_KEY_USERS.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_USERS, 0) == 1) {
+                        Settings.System.GLOBAL_ACTIONS_USERS, 0) == 1) {
                     addUserActions(tempActions, currentUser.get());
                 }
             } else if (GLOBAL_ACTION_KEY_SETTINGS.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_SETTINGS, 0) != 0) {
+                        Settings.System.GLOBAL_ACTIONS_SETTINGS, 0) == 1) {
                     addIfShouldShowAction(tempActions, getSettingsAction());
                 }
             } else if (GLOBAL_ACTION_KEY_LOCKDOWN.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_LOCKDOWN, 0) != 0) {
+                        Settings.System.GLOBAL_ACTIONS_LOCKDOWN, 0) == 1) {
                     addIfShouldShowAction(tempActions, new LockDownAction());
-                }
-            } else if (GLOBAL_ACTION_KEY_TORCH.equals(actionKey)) {
-                if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_TORCH, 0) != 0) {
-                    addIfShouldShowAction(tempActions, getTorchToggleAction());
                 }
             } else if (GLOBAL_ACTION_KEY_VOICEASSIST.equals(actionKey)) {
                 addIfShouldShowAction(tempActions, getVoiceAssistAction());
@@ -709,12 +716,12 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 addIfShouldShowAction(tempActions, getAssistAction());
             } else if (GLOBAL_ACTION_KEY_RESTART.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_RESTART, 1) == 1) {
+                        Settings.System.GLOBAL_ACTIONS_RESTART, 1) == 1) {
                     addIfShouldShowAction(tempActions, restartAction);
                 }
             } else if (GLOBAL_ACTION_KEY_ADVANCED_RESTART.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_ADVANCED, 1) == 1) {
+                        Settings.System.GLOBAL_ACTIONS_ADVANCED, 1) == 1) {
                     mPowerItems.add(restartRecoveryAction);
                     mPowerItems.add(restartBootloaderAction);
                     mPowerItems.add(restartSystemUiAction);
@@ -722,7 +729,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 }
             } else if (GLOBAL_ACTION_KEY_SCREENSHOT.equals(actionKey)) {
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_SCREENSHOT, 0) == 1) {
+                        Settings.System.GLOBAL_ACTIONS_SCREENSHOT, 0) == 1) {
                     addIfShouldShowAction(tempActions, new ScreenshotAction());
                 }
             } else if (GLOBAL_ACTION_KEY_LOGOUT.equals(actionKey)) {
@@ -730,7 +737,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 // hardcode it to USER_SYSTEM so it properly supports headless system user mode
                 // (and then call mDevicePolicyManager.clearLogoutUser() after switched)
                 if (Settings.System.getInt(mContext.getContentResolver(),
-                        Settings.System.POWERMENU_LOGOUT, 0) == 1
+                        Settings.System.GLOBAL_ACTIONS_LOGOUT, 0) == 1
                         && currentUser.get() != null
                         && currentUser.get().id != UserHandle.USER_SYSTEM) {
                     addIfShouldShowAction(tempActions, new LogoutAction());
@@ -738,9 +745,14 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             } else if (GLOBAL_ACTION_KEY_EMERGENCY.equals(actionKey)) {
                 if (shouldDisplayEmergency()) {
                     if (Settings.System.getInt(mContext.getContentResolver(),
-                            Settings.System.POWERMENU_EMERGENCY, 0) == 1) {
+                            Settings.System.GLOBAL_ACTIONS_EMERGENCY, 0) == 1) {
                         addIfShouldShowAction(tempActions, new EmergencyDialerAction());
                     }
+                }
+            } else if (GLOBAL_ACTION_KEY_DEVICE_CONTROLS.equals(actionKey)) {
+                if (Settings.System.getInt(mContext.getContentResolver(),
+                        Settings.System.GLOBAL_ACTIONS_DEVICE_CONTROLS, 0) == 1) {
+                    addIfShouldShowAction(tempActions, new DeviceControlsAction());
                 }
             } else {
                 Log.e(TAG, "Invalid global action key " + actionKey);
@@ -774,17 +786,41 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     protected ActionsDialogLite createDialog() {
         initDialogItems();
 
-        ActionsDialogLite dialog = new ActionsDialogLite(mContext,
-                com.android.systemui.R.style.Theme_SystemUI_Dialog_GlobalActionsLite,
-                mAdapter, mOverflowAdapter, mSysuiColorExtractor, mStatusBarService,
-                mNotificationShadeWindowController, this::onRefresh, mKeyguardShowing,
-                mPowerAdapter, mUiEventLogger, mCentralSurfacesOptional, mKeyguardUpdateMonitor,
-                mLockPatternUtils);
+        ActionsDialogLite dialog = new ActionsDialogLite(
+                mContext,
+                com.android.systemui.res.R.style.Theme_SystemUI_Dialog_GlobalActionsLite,
+                mAdapter,
+                mOverflowAdapter,
+                mSysuiColorExtractor,
+                mStatusBarService,
+                mLightBarController,
+                mKeyguardStateController,
+                mNotificationShadeWindowController,
+                mStatusBarWindowController,
+                this::onRefresh,
+                mKeyguardShowing,
+                mPowerAdapter,
+                mUiEventLogger,
+                mShadeController,
+                mKeyguardUpdateMonitor,
+                mLockPatternUtils,
+                mSelectedUserInteractor) {
+            @Override
+            public boolean dispatchTouchEvent(MotionEvent event) {
+                rescheduleBurninTimeout();
+                return super.dispatchTouchEvent(event);
+            }
+        };
 
         dialog.setOnDismissListener(this);
         dialog.setOnShowListener(this);
 
         return dialog;
+    }
+
+    private void rescheduleBurninTimeout() {
+        mHandler.removeMessages(MESSAGE_DISMISS);
+        mHandler.sendEmptyMessageDelayed(MESSAGE_DISMISS, BURNIN_DISMISS_DELAY);
     }
 
     @VisibleForTesting
@@ -813,16 +849,28 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     }
 
     @VisibleForTesting
-    boolean shouldDisplayBugReport(UserInfo currentUser) {
-        return mGlobalSettings.getInt(Settings.Global.BUGREPORT_IN_POWER_MENU, 0) != 0
-                && (currentUser == null || currentUser.isPrimary());
+    boolean shouldDisplayBugReport(@Nullable UserInfo user) {
+        return user != null && user.isAdmin()
+                && mSecureSettings.getIntForUser(Settings.Secure.BUGREPORT_IN_POWER_MENU, 0,
+                user.id) != 0;
+    }
+
+    @Override
+    public void onUiModeChanged() {
+        // Colors may change, depending on UI mode
+        mContext.getTheme().applyStyle(mContext.getThemeResId(), true);
+        if (mDialog != null) {
+            mDialog.refreshDialog();
+        }
     }
 
     @Override
     public void onConfigChanged(Configuration newConfig) {
         if (mDialog != null && mDialog.isShowing()
-                && (newConfig.smallestScreenWidthDp != mSmallestScreenWidthDp)) {
+                && (newConfig.smallestScreenWidthDp != mSmallestScreenWidthDp
+                || newConfig.orientation != mOrientation)) {
             mSmallestScreenWidthDp = newConfig.smallestScreenWidthDp;
+            mOrientation = newConfig.orientation;
             mDialog.refreshDialog();
         }
     }
@@ -839,8 +887,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     protected final class PowerOptionsAction extends SinglePressAction {
         private PowerOptionsAction() {
-            super(com.android.systemui.R.drawable.ic_restart_advanced,
-                    com.android.systemui.R.string.global_action_restart_advanced);
+            super(com.android.systemui.res.R.drawable.ic_restart_advanced,
+                    com.android.systemui.res.R.string.global_action_restart_advanced);
         }
 
         @Override
@@ -870,6 +918,11 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         @Override
         public boolean onLongPress() {
+            // don't actually trigger the reboot if we are running stability
+            // tests via monkey
+            if (ActivityManager.isUserAMonkey()) {
+                return false;
+            }
             mUiEventLogger.log(GlobalActionsEvent.GA_SHUTDOWN_LONG_PRESS);
             if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_SAFE_BOOT)) {
                 mWindowManagerFuncs.reboot(true);
@@ -890,6 +943,11 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         @Override
         public void onPress() {
+            // don't actually trigger the shutdown if we are running stability
+            // tests via monkey
+            if (ActivityManager.isUserAMonkey()) {
+                return;
+            }
             mUiEventLogger.log(GlobalActionsEvent.GA_SHUTDOWN_PRESS);
             // shutdown by making sure radio and power are handled accordingly.
             mWindowManagerFuncs.shutdown();
@@ -937,17 +995,17 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
     protected int getEmergencyTextColor(Context context) {
         return context.getResources().getColor(
-                com.android.systemui.R.color.global_actions_lite_text);
+                com.android.systemui.res.R.color.global_actions_lite_text);
     }
 
     protected int getEmergencyIconColor(Context context) {
         return context.getResources().getColor(
-                com.android.systemui.R.color.global_actions_lite_emergency_icon);
+                com.android.systemui.res.R.color.global_actions_lite_emergency_icon);
     }
 
     protected int getEmergencyBackgroundColor(Context context) {
         return context.getResources().getColor(
-                com.android.systemui.R.color.global_actions_lite_emergency_background);
+                com.android.systemui.res.R.color.global_actions_lite_emergency_background);
     }
 
     private class EmergencyAffordanceAction extends EmergencyAction {
@@ -965,7 +1023,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     class EmergencyDialerAction extends EmergencyAction {
         private EmergencyDialerAction() {
-            super(com.android.systemui.R.drawable.ic_emergency_star,
+            super(com.android.systemui.res.R.drawable.ic_emergency_star,
                     R.string.global_action_emergency);
         }
 
@@ -975,7 +1033,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             mUiEventLogger.log(GlobalActionsEvent.GA_EMERGENCY_DIALER_PRESS);
             if (mTelecomManager != null) {
                 // Close shade so user sees the activity
-                mCentralSurfacesOptional.ifPresent(CentralSurfaces::collapseShade);
+                mShadeController.cancelExpansionAndCollapseShade();
                 Intent intent = mTelecomManager.createLaunchEmergencyDialerIntent(
                         null /* number */);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
@@ -1001,6 +1059,11 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         @Override
         public boolean onLongPress() {
+            // don't actually trigger the reboot if we are running stability
+            // tests via monkey
+            if (ActivityManager.isUserAMonkey()) {
+                return false;
+            }
             mUiEventLogger.log(GlobalActionsEvent.GA_REBOOT_LONG_PRESS);
             if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_SAFE_BOOT)) {
                 mWindowManagerFuncs.reboot(true);
@@ -1021,13 +1084,18 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         @Override
         public void onPress() {
+            // don't actually trigger the reboot if we are running stability
+            // tests via monkey
+            if (ActivityManager.isUserAMonkey()) {
+                return;
+            }
             mUiEventLogger.log(GlobalActionsEvent.GA_REBOOT_PRESS);
             mWindowManagerFuncs.reboot(false);
         }
     }
 
     @VisibleForTesting
-    class ScreenshotAction extends SinglePressAction {
+    class ScreenshotAction extends SinglePressAction implements LongPressAction {
         ScreenshotAction() {
             super(R.drawable.ic_screenshot, R.string.global_action_screenshot);
         }
@@ -1049,6 +1117,12 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         }
 
         @Override
+        public boolean onLongPress() {
+            mScreenshotHelper.takeScreenshot(SCREENSHOT_GLOBAL_ACTIONS, mHandler, null);
+            return true;
+        }
+
+        @Override
         public boolean showDuringKeyguard() {
             return true;
         }
@@ -1062,44 +1136,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     @VisibleForTesting
     ScreenshotAction makeScreenshotActionForTesting() {
         return new ScreenshotAction();
-    }
-
-    private CameraManager mCameraManager;
-    CameraManager.TorchCallback torchCallback = new CameraManager.TorchCallback() {
-        @Override
-        public void onTorchModeUnavailable(String cameraId) {
-            super.onTorchModeUnavailable(cameraId);
-        }
-
-        @Override
-        public void onTorchModeChanged(String cameraId, boolean enabled) {
-            super.onTorchModeChanged(cameraId, enabled);
-            mTorchEnabled = enabled;
-        }
-    };
-
-    private Action getTorchToggleAction() {
-        return new SinglePressAction(com.android.systemui.R.drawable.ic_lock_torch,
-                com.android.systemui.R.string.quick_settings_flashlight_label) {
-
-            public void onPress() {
-                if (mStatusBarService != null) {
-                    try {
-                        mStatusBarService.toggleCameraFlash();
-                    } catch (RemoteException e) {
-                    // do nothing.
-                    }
-                }
-            }
-
-            public boolean showDuringKeyguard() {
-                return true;
-            }
-
-            public boolean showBeforeProvisioning() {
-                return false;
-            }
-        };
     }
 
     @VisibleForTesting
@@ -1116,6 +1152,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             if (ActivityManager.isUserAMonkey()) {
                 return;
             }
+            Trace.instantForTrack(Trace.TRACE_TAG_APP, "bugreport", "BugReportAction#onPress");
+            Log.d(TAG, "BugReportAction#onPress");
             // Add a little delay before executing, to give the
             // dialog a chance to go away before it takes a
             // screenshot.
@@ -1129,11 +1167,11 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                         mUiEventLogger.log(GlobalActionsEvent.GA_BUGREPORT_PRESS);
                         if (!mIActivityManager.launchBugReportHandlerApp()) {
                             Log.w(TAG, "Bugreport handler could not be launched");
+                            Trace.instantForTrack(Trace.TRACE_TAG_APP, "bugreport",
+                                    "BugReportAction#requestingInteractiveBugReport");
+                            Log.d(TAG, "BugReportAction#requestingInteractiveBugReport");
                             mIActivityManager.requestInteractiveBugReport();
                         }
-                        // Maybe close shade (depends on a flag) so user sees the activity
-                        mCentralSurfacesOptional.ifPresent(
-                                CentralSurfaces::collapseShadeForBugreport);
                     } catch (RemoteException e) {
                     }
                 }
@@ -1151,9 +1189,10 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 // Take a "full" bugreport.
                 mMetricsLogger.action(MetricsEvent.ACTION_BUGREPORT_FROM_POWER_MENU_FULL);
                 mUiEventLogger.log(GlobalActionsEvent.GA_BUGREPORT_LONG_PRESS);
+                Trace.instantForTrack(Trace.TRACE_TAG_APP, "bugreport",
+                        "BugReportAction#requestingFullBugReport");
+                Log.d(TAG, "BugReportAction#requestingFullBugReport");
                 mIActivityManager.requestFullBugReport();
-                // Maybe close shade (depends on a flag) so user sees the activity
-                mCentralSurfacesOptional.ifPresent(CentralSurfaces::collapseShadeForBugreport);
             } catch (RemoteException e) {
             }
             return false;
@@ -1165,8 +1204,9 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         @Override
         public boolean showBeforeProvisioning() {
-            return Build.isDebuggable() && mGlobalSettings.getInt(
-                    Settings.Global.BUGREPORT_IN_POWER_MENU, 0) != 0;
+            return Build.isDebuggable() && mSecureSettings.getIntForUser(
+                    Settings.Secure.BUGREPORT_IN_POWER_MENU, 0, getCurrentUser().id) != 0
+                    && getCurrentUser().isAdmin();
         }
     }
 
@@ -1391,6 +1431,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         mUiEventLogger.log(GlobalActionsEvent.GA_POWER_MENU_CLOSE);
         mWindowManagerFuncs.onGlobalActionsHidden();
         mLifecycle.setCurrentState(Lifecycle.State.CREATED);
+        mInteractor.onDismissed();
     }
 
     /**
@@ -1400,6 +1441,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     public void onShow(DialogInterface dialog) {
         mMetricsLogger.visible(MetricsEvent.POWER_MENU);
         mUiEventLogger.log(GlobalActionsEvent.GA_POWER_MENU_OPEN);
+        mInteractor.onShown();
     }
 
     /**
@@ -1492,7 +1534,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     // Usually clicking an item shuts down the phone, locks, or starts an activity.
                     // We don't want to animate back into the power button when that happens, so we
                     // disable the dialog animation before dismissing.
-                    mDialogLaunchAnimator.disableAllCurrentDialogsExitAnimations();
+                    mDialogTransitionAnimator.disableAllCurrentDialogsExitAnimations();
                     mDialog.dismiss();
                 } else {
                     Log.w(TAG, "Action long-clicked while mDialog is null.");
@@ -1512,7 +1554,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                         // Usually clicking an item shuts down the phone, locks, or starts an
                         // activity. We don't want to animate back into the power button when that
                         // happens, so we disable the dialog animation before dismissing.
-                        mDialogLaunchAnimator.disableAllCurrentDialogsExitAnimations();
+                        mDialogTransitionAnimator.disableAllCurrentDialogsExitAnimations();
                         mDialog.dismiss();
                     }
                 } else {
@@ -1554,7 +1596,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 Log.w(TAG, "No power options action found at position: " + position);
                 return null;
             }
-            int viewLayoutResource = com.android.systemui.R.layout.global_actions_grid_item_lite;
+            int viewLayoutResource = com.android.systemui.res.R.layout.global_actions_grid_item_lite;
             View view = convertView != null ? convertView
                     : LayoutInflater.from(mContext).inflate(viewLayoutResource, parent, false);
             view.setOnClickListener(v -> onClickItem(position));
@@ -1583,7 +1625,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     // Usually clicking an item shuts down the phone, locks, or starts an activity.
                     // We don't want to animate back into the power button when that happens, so we
                     // disable the dialog animation before dismissing.
-                    mDialogLaunchAnimator.disableAllCurrentDialogsExitAnimations();
+                    mDialogTransitionAnimator.disableAllCurrentDialogsExitAnimations();
                     mDialog.dismiss();
                 } else {
                     Log.w(TAG, "Action long-clicked while mDialog is null.");
@@ -1600,7 +1642,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     // Usually clicking an item shuts down the phone, locks, or starts an activity.
                     // We don't want to animate back into the power button when that happens, so we
                     // disable the dialog animation before dismissing.
-                    mDialogLaunchAnimator.disableAllCurrentDialogsExitAnimations();
+                    mDialogTransitionAnimator.disableAllCurrentDialogsExitAnimations();
                     mDialog.dismiss();
                 } else {
                     Log.w(TAG, "Action clicked while mDialog is null.");
@@ -1636,7 +1678,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 Log.w(TAG, "No overflow action found at position: " + position);
                 return null;
             }
-            int viewLayoutResource = com.android.systemui.R.layout.controls_more_item;
+            int viewLayoutResource = com.android.systemui.res.R.layout.controls_more_item;
             View view = convertView != null ? convertView
                     : LayoutInflater.from(mContext).inflate(viewLayoutResource, parent, false);
             TextView textView = (TextView) view;
@@ -1655,7 +1697,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     // Usually clicking an item shuts down the phone, locks, or starts an activity.
                     // We don't want to animate back into the power button when that happens, so we
                     // disable the dialog animation before dismissing.
-                    mDialogLaunchAnimator.disableAllCurrentDialogsExitAnimations();
+                    mDialogTransitionAnimator.disableAllCurrentDialogsExitAnimations();
                     mDialog.dismiss();
                 } else {
                     Log.w(TAG, "Action long-clicked while mDialog is null.");
@@ -1672,7 +1714,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     // Usually clicking an item shuts down the phone, locks, or starts an activity.
                     // We don't want to animate back into the power button when that happens, so we
                     // disable the dialog animation before dismissing.
-                    mDialogLaunchAnimator.disableAllCurrentDialogsExitAnimations();
+                    mDialogTransitionAnimator.disableAllCurrentDialogsExitAnimations();
                     mDialog.dismiss();
                 } else {
                     Log.w(TAG, "Action clicked while mDialog is null.");
@@ -1843,7 +1885,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     }
 
     protected int getGridItemLayoutResource() {
-        return com.android.systemui.R.layout.global_actions_grid_item_lite;
+        return com.android.systemui.res.R.layout.global_actions_grid_item_lite;
     }
 
     private enum ToggleState {
@@ -1935,7 +1977,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                 LayoutInflater inflater) {
             willCreate();
 
-            View v = inflater.inflate(com.android.systemui.R.layout.global_actions_grid_item_v2,
+            View v = inflater.inflate(com.android.systemui.res.R.layout.global_actions_grid_item_v2,
                     parent, false /* attach */);
             ViewGroup.LayoutParams p = v.getLayoutParams();
             p.width = WRAP_CONTENT;
@@ -2252,6 +2294,31 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         }
     }
 
+    private final class DeviceControlsAction extends SinglePressAction {
+        private DeviceControlsAction() {
+            super(com.android.systemui.R.drawable.controls_icon,
+                    com.android.systemui.R.string.quick_controls_title);
+        }
+
+        @Override
+        public boolean showDuringKeyguard() {
+            return true;
+        }
+
+        @Override
+        public boolean showBeforeProvisioning() {
+            return false;
+        }
+
+        @Override
+        public void onPress() {
+            Intent intent = new Intent(mContext, ControlsActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(ControlsUiController.EXTRA_ANIMATE, true);
+            mContext.startActivity(intent);
+        }
+    }
+
     private BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -2262,7 +2329,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     // These broadcasts are usually received when locking the device, swiping up to
                     // home (which collapses the shade), etc. In those cases, we usually don't want
                     // to animate this dialog back into the view, so we disable the exit animations.
-                    mDialogLaunchAnimator.disableAllCurrentDialogsExitAnimations();
+                    mDialogTransitionAnimator.disableAllCurrentDialogsExitAnimations();
                     mHandler.sendMessage(mHandler.obtainMessage(MESSAGE_DISMISS, reason));
                 }
             } else if (TelephonyManager.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED.equals(action)) {
@@ -2277,24 +2344,6 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         }
     };
 
-    private final TelephonyCallback.ServiceStateListener mPhoneStateListener =
-            new TelephonyCallback.ServiceStateListener() {
-        @Override
-        public void onServiceStateChanged(ServiceState serviceState) {
-            if (!mHasTelephony) return;
-            if (mAirplaneModeOn == null) {
-                Log.d(TAG, "Service changed before actions created");
-                return;
-            }
-            final boolean inAirplaneMode = serviceState.getState() == ServiceState.STATE_POWER_OFF;
-            mAirplaneState = inAirplaneMode ? ToggleState.On : ToggleState.Off;
-            mAirplaneModeOn.updateState(mAirplaneState);
-            mAdapter.notifyDataSetChanged();
-            mOverflowAdapter.notifyDataSetChanged();
-            mPowerAdapter.notifyDataSetChanged();
-        }
-    };
-
     private final ContentObserver mAirplaneModeObserver = new ContentObserver(mMainHandler) {
         @Override
         public void onChange(boolean selfChange) {
@@ -2306,6 +2355,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
     private static final int MESSAGE_REFRESH = 1;
     private static final int DIALOG_DISMISS_DELAY = 300; // ms
     private static final int DIALOG_PRESS_DELAY = 850; // ms
+    private static final int BURNIN_DISMISS_DELAY = 60000; // ms
 
     @VisibleForTesting void setZeroDialogPressDelayForTesting() {
         mDialogPressDelay = 0; // ms
@@ -2336,7 +2386,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
     private void onAirplaneModeChanged() {
         // Let the service state callbacks handle the state.
-        if (mHasTelephony || mAirplaneModeOn == null) return;
+        if (mAirplaneModeOn == null) return;
 
         boolean airplaneModeOn = mGlobalSettings.getInt(
                 Settings.Global.AIRPLANE_MODE_ON,
@@ -2379,17 +2429,21 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         protected Drawable mBackgroundDrawable;
         protected final SysuiColorExtractor mColorExtractor;
         private boolean mKeyguardShowing;
-        protected float mScrimAlpha;
+        protected final LightBarController mLightBarController;
+        private final KeyguardStateController mKeyguardStateController;
         protected final NotificationShadeWindowController mNotificationShadeWindowController;
+        private final StatusBarWindowController mStatusBarWindowController;
         private ListPopupWindow mOverflowPopup;
         private Dialog mPowerOptionsDialog;
         protected final Runnable mOnRefreshCallback;
         private UiEventLogger mUiEventLogger;
         private GestureDetector mGestureDetector;
-        private Optional<CentralSurfaces> mCentralSurfacesOptional;
+        private final ShadeController mShadeController;
         private KeyguardUpdateMonitor mKeyguardUpdateMonitor;
+        private SelectedUserInteractor mSelectedUserInteractor;
         private LockPatternUtils mLockPatternUtils;
         private float mWindowDimAmount;
+        private BlurUtils mBlurUtils;
 
         protected ViewGroup mContainer;
 
@@ -2419,8 +2473,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX,
                             float distanceY) {
                         if (distanceY < 0 && distanceY > distanceX
-                                && e1.getY() <= mCentralSurfacesOptional.map(
-                                        CentralSurfaces::getStatusBarHeight).orElse(0)) {
+                                && e1.getY() <= mStatusBarWindowController.getStatusBarHeight()) {
                             // Downwards scroll from top
                             openShadeAndDismiss();
                             return true;
@@ -2432,8 +2485,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
                             float velocityY) {
                         if (velocityY > 0 && Math.abs(velocityY) > Math.abs(velocityX)
-                                && e1.getY() <= mCentralSurfacesOptional.map(
-                                        CentralSurfaces::getStatusBarHeight).orElse(0)) {
+                                && e1.getY() <= mStatusBarWindowController.getStatusBarHeight()) {
                             // Downwards fling from top
                             openShadeAndDismiss();
                             return true;
@@ -2452,15 +2504,24 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             mOverriddenBackDispatcher = mockDispatcher;
         }
 
-        ActionsDialogLite(Context context, int themeRes, MyAdapter adapter,
+        ActionsDialogLite(Context context,
+                int themeRes,
+                MyAdapter adapter,
                 MyOverflowAdapter overflowAdapter,
-                SysuiColorExtractor sysuiColorExtractor, IStatusBarService statusBarService,
+                SysuiColorExtractor sysuiColorExtractor,
+                IStatusBarService statusBarService,
+                LightBarController lightBarController,
+                KeyguardStateController keyguardStateController,
                 NotificationShadeWindowController notificationShadeWindowController,
-                Runnable onRefreshCallback, boolean keyguardShowing,
-                MyPowerOptionsAdapter powerAdapter, UiEventLogger uiEventLogger,
-                Optional<CentralSurfaces> centralSurfacesOptional,
+                StatusBarWindowController statusBarWindowController,
+                Runnable onRefreshCallback,
+                boolean keyguardShowing,
+                MyPowerOptionsAdapter powerAdapter,
+                UiEventLogger uiEventLogger,
+                ShadeController shadeController,
                 KeyguardUpdateMonitor keyguardUpdateMonitor,
-                LockPatternUtils lockPatternUtils) {
+                LockPatternUtils lockPatternUtils,
+                SelectedUserInteractor selectedUserInteractor) {
             // We set dismissOnDeviceLock to false because we have a custom broadcast receiver to
             // dismiss this dialog when the device is locked.
             super(context, themeRes, false /* dismissOnDeviceLock */);
@@ -2470,19 +2531,27 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             mPowerOptionsAdapter = powerAdapter;
             mColorExtractor = sysuiColorExtractor;
             mStatusBarService = statusBarService;
+            mLightBarController = lightBarController;
+            mKeyguardStateController = keyguardStateController;
             mNotificationShadeWindowController = notificationShadeWindowController;
+            mStatusBarWindowController = statusBarWindowController;
             mOnRefreshCallback = onRefreshCallback;
             mKeyguardShowing = keyguardShowing;
             mUiEventLogger = uiEventLogger;
-            mCentralSurfacesOptional = centralSurfacesOptional;
+            mShadeController = shadeController;
             mKeyguardUpdateMonitor = keyguardUpdateMonitor;
             mLockPatternUtils = lockPatternUtils;
             mGestureDetector = new GestureDetector(mContext, mGestureListener);
+            mSelectedUserInteractor = selectedUserInteractor;
+            mBlurUtils = new BlurUtils(mContext.getResources(),
+                    CrossWindowBlurListeners.getInstance(), new DumpManager());
         }
 
         @Override
         protected void onCreate(Bundle savedInstanceState) {
             super.onCreate(savedInstanceState);
+            getWindow().setTitle(getContext().getString(
+                    com.android.systemui.res.R.string.accessibility_quick_settings_power_menu));
             initializeLayout();
             mWindowDimAmount = getWindow().getAttributes().dimAmount;
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -2520,14 +2589,12 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
 
         private void openShadeAndDismiss() {
             mUiEventLogger.log(GlobalActionsEvent.GA_CLOSE_TAP_OUTSIDE);
-            if (mCentralSurfacesOptional.map(CentralSurfaces::isKeyguardShowing).orElse(false)) {
+            if (mKeyguardStateController.isShowing()) {
                 // match existing lockscreen behavior to open QS when swiping from status bar
-                mCentralSurfacesOptional.ifPresent(
-                        centralSurfaces -> centralSurfaces.animateExpandSettingsPanel(null));
+                mShadeController.animateExpandQs();
             } else {
                 // otherwise, swiping down should expand notification shade
-                mCentralSurfacesOptional.ifPresent(
-                        centralSurfaces -> centralSurfaces.animateExpandNotificationsPanel());
+                mShadeController.animateExpandShade();
             }
             dismiss();
         }
@@ -2536,14 +2603,14 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             GlobalActionsPopupMenu popup = new GlobalActionsPopupMenu(
                     new ContextThemeWrapper(
                             mContext,
-                            com.android.systemui.R.style.Control_ListPopupWindow
+                            com.android.systemui.res.R.style.Control_ListPopupWindow
                     ), false /* isDropDownMode */);
             popup.setOnItemClickListener(
                     (parent, view, position, id) -> mOverflowAdapter.onClickItem(position));
             popup.setOnItemLongClickListener(
                     (parent, view, position, id) -> mOverflowAdapter.onLongClickItem(position));
             View overflowButton =
-                    findViewById(com.android.systemui.R.id.global_actions_overflow_button);
+                    findViewById(com.android.systemui.res.R.id.global_actions_overflow_button);
             popup.setAnchorView(overflowButton);
             popup.setAdapter(mOverflowAdapter);
             return popup;
@@ -2560,14 +2627,14 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         }
 
         protected int getLayoutResource() {
-            return com.android.systemui.R.layout.global_actions_grid_lite;
+            return com.android.systemui.res.R.layout.global_actions_grid_lite;
         }
 
         protected void initializeLayout() {
             setContentView(getLayoutResource());
             fixNavBarClipping();
 
-            mGlobalActionsLayout = findViewById(com.android.systemui.R.id.global_actions_view);
+            mGlobalActionsLayout = findViewById(com.android.systemui.res.R.id.global_actions_view);
             mGlobalActionsLayout.setListViewAccessibilityDelegate(new View.AccessibilityDelegate() {
                 @Override
                 public boolean dispatchPopulateAccessibilityEvent(
@@ -2577,16 +2644,17 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     return true;
                 }
             });
+            mGlobalActionsLayout.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             mGlobalActionsLayout.setRotationListener(this::onRotate);
             mGlobalActionsLayout.setAdapter(mAdapter);
-            mContainer = findViewById(com.android.systemui.R.id.global_actions_container);
+            mContainer = findViewById(com.android.systemui.res.R.id.global_actions_container);
             mContainer.setOnTouchListener((v, event) -> {
                 mGestureDetector.onTouchEvent(event);
                 return v.onTouchEvent(event);
             });
 
             View overflowButton = findViewById(
-                    com.android.systemui.R.id.global_actions_overflow_button);
+                    com.android.systemui.res.R.id.global_actions_overflow_button);
             if (overflowButton != null) {
                 if (mOverflowAdapter.getCount() > 0) {
                     overflowButton.setOnClickListener((view) -> showPowerOverflowMenu());
@@ -2599,21 +2667,35 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
                     LinearLayout.LayoutParams params =
                             (LinearLayout.LayoutParams) mGlobalActionsLayout.getLayoutParams();
                     params.setMarginEnd(mContext.getResources().getDimensionPixelSize(
-                            com.android.systemui.R.dimen.global_actions_side_margin));
+                            com.android.systemui.res.R.dimen.global_actions_side_margin));
                     mGlobalActionsLayout.setLayoutParams(params);
                 }
             }
 
             if (mBackgroundDrawable == null) {
                 mBackgroundDrawable = new ScrimDrawable();
-                mScrimAlpha = 1.0f;
+            }
+
+            Window window = getWindow();
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            if (mBlurUtils.supportsBlursOnWindows()) {
+                // Enable blur behind
+                // Enable dim behind since we are setting some amount dim for the blur.
+                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                // Set blur behind radius
+                int blurBehindRadius = mContext.getResources()
+                        .getDimensionPixelSize(com.android.systemui.R.dimen.max_window_blur_radius);
+                window.getAttributes().setBlurBehindRadius(blurBehindRadius);
+                window.setDimAmount(0.54f);
+            } else {
+                window.setDimAmount(0.88f);
             }
 
             // If user entered from the lock screen and smart lock was enabled, disable it
-            int user = KeyguardUpdateMonitor.getCurrentUser();
+            int user = mSelectedUserInteractor.getSelectedUserId();
             boolean userHasTrust = mKeyguardUpdateMonitor.getUserHasTrust(user);
             if (mKeyguardShowing && userHasTrust) {
-                mLockPatternUtils.requireCredentialEntry(KeyguardUpdateMonitor.getCurrentUser());
+                mLockPatternUtils.requireCredentialEntry(user);
                 showSmartLockDisabledMessage();
             }
         }
@@ -2630,7 +2712,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         private void showSmartLockDisabledMessage() {
             // Since power menu is the top window, make a Toast-like view that will show up
             View message = LayoutInflater.from(mContext)
-                    .inflate(com.android.systemui.R.layout.global_actions_toast, mContainer, false);
+                    .inflate(com.android.systemui.res.R.layout.global_actions_toast, mContainer, false);
 
             // Set up animation
             AccessibilityManager mAccessibilityManager =
@@ -2660,9 +2742,9 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         }
 
         @Override
-        protected void onStart() {
-            super.onStart();
+        protected void start() {
             mGlobalActionsLayout.updateList();
+            mLightBarController.setGlobalActionsVisible(true);
 
             if (mBackgroundDrawable instanceof ScrimDrawable) {
                 mColorExtractor.addOnColorsChangedListener(this);
@@ -2692,8 +2774,8 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
         }
 
         @Override
-        protected void onStop() {
-            super.onStop();
+        protected void stop() {
+            mLightBarController.setGlobalActionsVisible(false);
             mColorExtractor.removeOnColorsChangedListener(this);
         }
 
@@ -2716,7 +2798,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
             // By default this dialog windowAnimationStyle is null, and therefore windowAnimations
             // should be equal to 0 which means we need to animate the dialog in-window. If it's not
             // equal to 0, it means it has been overridden to animate (e.g. by the
-            // DialogLaunchAnimator) so we don't run the animation.
+            // DialogTransitionAnimator) so we don't run the animation.
             boolean shouldAnimateInWindow = getWindow().getAttributes().windowAnimations == 0;
             if (shouldAnimateInWindow) {
                 startAnimation(true /* isEnter */, null /* then */);

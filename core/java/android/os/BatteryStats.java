@@ -19,6 +19,7 @@ package android.os;
 import static android.os.BatteryStatsManager.NUM_WIFI_STATES;
 import static android.os.BatteryStatsManager.NUM_WIFI_SUPPL_STATES;
 
+import android.annotation.CurrentTimeMillisLong;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -30,12 +31,14 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.location.GnssSignalQuality;
+import android.net.NetworkCapabilities;
 import android.os.BatteryStatsManager.WifiState;
 import android.os.BatteryStatsManager.WifiSupplState;
 import android.server.ServerProtoEnums;
 import android.service.batterystats.BatteryStatsServiceDumpHistoryProto;
 import android.service.batterystats.BatteryStatsServiceDumpProto;
 import android.telephony.CellSignalStrength;
+import android.telephony.ModemActivityInfo;
 import android.telephony.ServiceState;
 import android.telephony.TelephonyManager;
 import android.text.format.DateFormat;
@@ -44,6 +47,7 @@ import android.util.LongSparseArray;
 import android.util.MutableBoolean;
 import android.util.Pair;
 import android.util.Printer;
+import android.util.Slog;
 import android.util.SparseArray;
 import android.util.SparseDoubleArray;
 import android.util.SparseIntArray;
@@ -52,7 +56,11 @@ import android.util.proto.ProtoOutputStream;
 import android.view.Display;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.internal.os.BatteryUsageStatsProvider;
+import com.android.internal.os.BatteryStatsHistoryIterator;
+import com.android.internal.os.CpuScalingPolicies;
+import com.android.internal.os.MonotonicClock;
+import com.android.internal.os.PowerStats;
+import com.android.net.module.util.NetworkCapabilitiesUtils;
 
 import com.google.android.collect.Lists;
 
@@ -78,7 +86,8 @@ import java.util.Map;
  * except where indicated otherwise.
  * @hide
  */
-public abstract class BatteryStats implements Parcelable {
+@android.ravenwood.annotation.RavenwoodKeepWholeClass
+public abstract class BatteryStats {
 
     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
     public BatteryStats() {}
@@ -297,8 +306,10 @@ public abstract class BatteryStats implements Parcelable {
      * New in version 35:
      *   - Fixed bug that was not reporting high cellular tx power correctly
      *   - Added out of service and emergency service modes to data connection types
+     * New in version 36:
+     *   - Added PowerStats and CPU time-in-state data
      */
-    static final int CHECKIN_VERSION = 35;
+    static final int CHECKIN_VERSION = 36;
 
     /**
      * Old version, we hit 9 and ran out of room, need to remove.
@@ -456,6 +467,7 @@ public abstract class BatteryStats implements Parcelable {
     /**
      * State for keeping track of long counting information.
      */
+    @android.ravenwood.annotation.RavenwoodKeepWholeClass
     public static abstract class LongCounter {
 
         /**
@@ -1005,9 +1017,11 @@ public abstract class BatteryStats implements Parcelable {
          * @param cluster the index of the CPU cluster.
          * @param step the index of the CPU speed. This is not the actual speed of the CPU.
          * @param which one of STATS_SINCE_CHARGED, STATS_SINCE_UNPLUGGED, or STATS_CURRENT.
-         * @see com.android.internal.os.PowerProfile#getNumCpuClusters()
-         * @see com.android.internal.os.PowerProfile#getNumSpeedStepsInCpuCluster(int)
+         * @see com.android.internal.os.CpuScalingPolicies#getPolicies
+         * @see com.android.internal.os.CpuScalingPolicies#getFrequencies
+         * @deprecated Unused except in tests
          */
+        @Deprecated
         public abstract long getTimeAtCpuSpeed(int cluster, int step, int which);
 
         /**
@@ -1040,12 +1054,13 @@ public abstract class BatteryStats implements Parcelable {
 
         /**
          * Returns the battery consumption (in microcoulombs) of bluetooth for this uid,
-         * derived from on device power measurement data.
+         * derived from {@link android.hardware.power.stats.EnergyConsumerType#BLUETOOTH} bucket
+         * provided by the PowerStats service.
          * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
          *
          * {@hide}
          */
-        public abstract long getBluetoothMeasuredBatteryConsumptionUC();
+        public abstract long getBluetoothEnergyConsumptionUC();
 
         /**
          * Returns the battery consumption (in microcoulombs) of the uid's bluetooth usage
@@ -1054,17 +1069,18 @@ public abstract class BatteryStats implements Parcelable {
          *
          * {@hide}
          */
-        public abstract long getBluetoothMeasuredBatteryConsumptionUC(
+        public abstract long getBluetoothEnergyConsumptionUC(
                 @BatteryConsumer.ProcessState int processState);
 
         /**
          * Returns the battery consumption (in microcoulombs) of the uid's cpu usage, derived from
-         * on device power measurement data.
+         * derived from {@link android.hardware.power.stats.EnergyConsumerType#CPU} bucket
+         * provided by the PowerStats service.
          * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
          *
          * {@hide}
          */
-        public abstract long getCpuMeasuredBatteryConsumptionUC();
+        public abstract long getCpuEnergyConsumptionUC();
 
         /**
          * Returns the battery consumption (in microcoulombs) of the uid's cpu usage when in the
@@ -1073,26 +1089,28 @@ public abstract class BatteryStats implements Parcelable {
          *
          * {@hide}
          */
-        public abstract long getCpuMeasuredBatteryConsumptionUC(
+        public abstract long getCpuEnergyConsumptionUC(
                 @BatteryConsumer.ProcessState int processState);
 
         /**
          * Returns the battery consumption (in microcoulombs) of the uid's GNSS usage, derived from
-         * on device power measurement data.
+         * derived from {@link android.hardware.power.stats.EnergyConsumerType#GNSS} bucket
+         * provided by the PowerStats service.
          * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
          *
          * {@hide}
          */
-        public abstract long getGnssMeasuredBatteryConsumptionUC();
+        public abstract long getGnssEnergyConsumptionUC();
 
         /**
          * Returns the battery consumption (in microcoulombs) of the uid's radio usage, derived from
-         * on device power measurement data.
+         * derived from {@link android.hardware.power.stats.EnergyConsumerType#MOBILE_RADIO}
+         * bucket provided by the PowerStats service.
          * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
          *
          * {@hide}
          */
-        public abstract long getMobileRadioMeasuredBatteryConsumptionUC();
+        public abstract long getMobileRadioEnergyConsumptionUC();
 
         /**
          * Returns the battery consumption (in microcoulombs) of the uid's radio usage when in the
@@ -1101,26 +1119,28 @@ public abstract class BatteryStats implements Parcelable {
          *
          * {@hide}
          */
-        public abstract long getMobileRadioMeasuredBatteryConsumptionUC(
+        public abstract long getMobileRadioEnergyConsumptionUC(
                 @BatteryConsumer.ProcessState int processState);
 
         /**
          * Returns the battery consumption (in microcoulombs) of the screen while on and uid active,
-         * derived from on device power measurement data.
+         * derived from {@link android.hardware.power.stats.EnergyConsumerType#DISPLAY} bucket
+         * provided by the PowerStats service.
          * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
          *
          * {@hide}
          */
-        public abstract long getScreenOnMeasuredBatteryConsumptionUC();
+        public abstract long getScreenOnEnergyConsumptionUC();
 
         /**
          * Returns the battery consumption (in microcoulombs) of wifi for this uid,
-         * derived from on device power measurement data.
+         * derived from {@link android.hardware.power.stats.EnergyConsumerType#WIFI} bucket
+         * provided by the PowerStats service.
          * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
          *
          * {@hide}
          */
-        public abstract long getWifiMeasuredBatteryConsumptionUC();
+        public abstract long getWifiEnergyConsumptionUC();
 
         /**
          * Returns the battery consumption (in microcoulombs) of the uid's wifi usage when in the
@@ -1129,9 +1149,19 @@ public abstract class BatteryStats implements Parcelable {
          *
          * {@hide}
          */
-        public abstract long getWifiMeasuredBatteryConsumptionUC(
+        public abstract long getWifiEnergyConsumptionUC(
                 @BatteryConsumer.ProcessState int processState);
 
+
+
+        /**
+         * Returns the battery consumption (in microcoulombs) of UID's camera usage, derived from
+         * on-device power measurement data.
+         * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
+         *
+         * {@hide}
+         */
+        public abstract long getCameraEnergyConsumptionUC();
 
         /**
          * Returns the battery consumption (in microcoulombs) used by this uid for each
@@ -1144,7 +1174,7 @@ public abstract class BatteryStats implements Parcelable {
          *
          * {@hide}
          */
-        public abstract @Nullable long[] getCustomConsumerMeasuredBatteryConsumptionUC();
+        public abstract @Nullable long[] getCustomEnergyConsumerBatteryConsumptionUC();
 
         public static abstract class Sensor {
 
@@ -1557,7 +1587,7 @@ public abstract class BatteryStats implements Parcelable {
                 outNumOfInterest[0] = numOfInterest;
             }
 
-            // The estimated time is the average time we spend in each level, multipled
+            // The estimated time is the average time we spend in each level, multiplied
             // by 100 -- the total number of battery levels
             return (total / numOfInterest) * 100;
         }
@@ -1629,13 +1659,14 @@ public abstract class BatteryStats implements Parcelable {
     public abstract long getNextMaxDailyDeadline();
 
     /**
-     * Returns the total number of frequencies across all CPU clusters.
+     * Returns the CPU scaling policies.
      */
-    public abstract int getCpuFreqCount();
+    public abstract CpuScalingPolicies getCpuScalingPolicies();
 
-    public abstract long[] getCpuFreqs();
-
+    @android.ravenwood.annotation.RavenwoodKeepWholeClass
     public final static class HistoryTag {
+        public static final int HISTORY_TAG_POOL_OVERFLOW = -1;
+
         public String string;
         public int uid;
 
@@ -1689,6 +1720,7 @@ public abstract class BatteryStats implements Parcelable {
      * Optional detailed information that can go into a history step.  This is typically
      * generated each time the battery level changes.
      */
+    @android.ravenwood.annotation.RavenwoodKeepWholeClass
     public final static class HistoryStepDetails {
         // Time (in 1/100 second) spent in user space and the kernel since the last step.
         public int userTime;
@@ -1771,13 +1803,68 @@ public abstract class BatteryStats implements Parcelable {
     }
 
     /**
+     * An extension to the history item describing a proc state change for a UID.
+     */
+    @android.ravenwood.annotation.RavenwoodKeepWholeClass
+    public static final class ProcessStateChange {
+        public int uid;
+        public @BatteryConsumer.ProcessState int processState;
+
+        private static final int LARGE_UID_FLAG = 0x80000000;
+        private static final int SMALL_UID_MASK = 0x00FFFFFF;
+        private static final int PROC_STATE_MASK = 0x7F000000;
+        private static final int PROC_STATE_SHIFT = Integer.numberOfTrailingZeros(PROC_STATE_MASK);
+
+        /**
+         * Writes this object to the supplied parcel.
+         */
+        public void writeToParcel(Parcel out) {
+            int bits = processState << PROC_STATE_SHIFT;
+            if ((uid & ~SMALL_UID_MASK) == 0) {
+                bits |= uid;
+                out.writeInt(bits);
+            } else {
+                bits |= LARGE_UID_FLAG;
+                out.writeInt(bits);
+                out.writeInt(uid);
+            }
+        }
+
+        /**
+         * Reads this object from the supplied parcel.
+         */
+        public void readFromParcel(Parcel in) {
+            int bits = in.readInt();
+            processState = (bits & PROC_STATE_MASK) >>> PROC_STATE_SHIFT;
+            if (processState >= BatteryConsumer.PROCESS_STATE_COUNT) {
+                Slog.e(TAG, "Unrecognized proc state in battery history: " + processState);
+                processState = BatteryConsumer.PROCESS_STATE_UNSPECIFIED;
+            }
+            if ((bits & LARGE_UID_FLAG) == 0) {
+                uid = bits & ~PROC_STATE_MASK;
+            } else {
+                uid = in.readInt();
+            }
+        }
+
+        /**
+         * String representation for inclusion in the battery history dump.
+         */
+        public String formatForBatteryHistory() {
+            return UserHandle.formatUid(uid) + ": "
+                    + BatteryConsumer.processStateToString(processState);
+        }
+    }
+
+    /**
      * Battery history record.
      */
+    @android.ravenwood.annotation.RavenwoodKeepWholeClass
     public static final class HistoryItem {
         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
         public HistoryItem next;
 
-        // The time of this event in milliseconds, as per SystemClock.elapsedRealtime().
+        // The time of this event in milliseconds, as per MonotonicClock.monotonicTime().
         @UnsupportedAppUsage
         public long time;
 
@@ -1812,7 +1899,7 @@ public abstract class BatteryStats implements Parcelable {
         public short batteryTemperature;
         // Battery voltage in millivolts (mV).
         @UnsupportedAppUsage
-        public char batteryVoltage;
+        public short batteryVoltage;
 
         // The charge of the battery in micro-Ampere-hours.
         public int batteryChargeUah;
@@ -1874,7 +1961,10 @@ public abstract class BatteryStats implements Parcelable {
         // Values for NUM_GPS_SIGNAL_QUALITY_LEVELS
         public static final int STATE2_GPS_SIGNAL_QUALITY_SHIFT = 7;
         public static final int STATE2_GPS_SIGNAL_QUALITY_MASK =
-            0x1 << STATE2_GPS_SIGNAL_QUALITY_SHIFT;
+                0x3 << STATE2_GPS_SIGNAL_QUALITY_SHIFT;
+        // Values for NR_STATE_*
+        public static final int STATE2_NR_STATE_SHIFT = 9;
+        public static final int STATE2_NR_STATE_MASK = 0x3 << STATE2_NR_STATE_SHIFT;
 
         public static final int STATE2_POWER_SAVE_FLAG = 1<<31;
         public static final int STATE2_VIDEO_ON_FLAG = 1<<30;
@@ -1890,6 +1980,7 @@ public abstract class BatteryStats implements Parcelable {
         public static final int STATE2_BLUETOOTH_SCAN_FLAG = 1 << 20;
         public static final int STATE2_CELLULAR_HIGH_TX_POWER_FLAG = 1 << 19;
         public static final int STATE2_USB_DATA_LINK_FLAG = 1 << 18;
+        public static final int STATE2_EXTENSIONS_FLAG = 1 << 17;
 
         public static final int MOST_INTERESTING_STATES2 =
                 STATE2_POWER_SAVE_FLAG | STATE2_WIFI_ON_FLAG | STATE2_DEVICE_IDLE_MASK
@@ -1909,6 +2000,12 @@ public abstract class BatteryStats implements Parcelable {
         // Non-null when there is more detailed information at this step.
         public HistoryStepDetails stepDetails;
 
+        // Non-null when there are power stats to be written to history
+        public PowerStats powerStats;
+
+        // Non-null when there is procstate change to be written to history
+        public ProcessStateChange processStateChange;
+
         public static final int EVENT_FLAG_START = 0x8000;
         public static final int EVENT_FLAG_FINISH = 0x4000;
 
@@ -1922,7 +2019,7 @@ public abstract class BatteryStats implements Parcelable {
         public static final int EVENT_TOP = 0x0003;
         // Event is about active sync operations.
         public static final int EVENT_SYNC = 0x0004;
-        // Events for all additional wake locks aquired/release within a wake block.
+        // Events for all additional wake locks acquired/release within a wake block.
         // These are not generated by default.
         public static final int EVENT_WAKE_LOCK = 0x0005;
         // Event is about an application executing a scheduled job.
@@ -1939,7 +2036,7 @@ public abstract class BatteryStats implements Parcelable {
         public static final int EVENT_PACKAGE_INSTALLED = 0x000b;
         // Event for a package being uninstalled.
         public static final int EVENT_PACKAGE_UNINSTALLED = 0x000c;
-        // Event for a package being uninstalled.
+        // Event for an alarm being sent out to an app.
         public static final int EVENT_ALARM = 0x000d;
         // Record that we have decided we need to collect new stats data.
         public static final int EVENT_COLLECT_EXTERNAL_STATS = 0x000e;
@@ -2005,6 +2102,7 @@ public abstract class BatteryStats implements Parcelable {
         public final HistoryTag localWakelockTag = new HistoryTag();
         public final HistoryTag localWakeReasonTag = new HistoryTag();
         public final HistoryTag localEventTag = new HistoryTag();
+        public final ProcessStateChange localProcessStateChange = new ProcessStateChange();
 
         // Includes a tag's first occurrence in the parcel, so the value of the tag is written
         // rather than just its index in the history tag pool.
@@ -2063,7 +2161,7 @@ public abstract class BatteryStats implements Parcelable {
             batteryPlugType = (byte)((bat>>24)&0xf);
             int bat2 = src.readInt();
             batteryTemperature = (short)(bat2&0xffff);
-            batteryVoltage = (char)((bat2>>16)&0xffff);
+            batteryVoltage = (short) ((bat2 >> 16) & 0xffff);
             batteryChargeUah = src.readInt();
             modemRailChargeMah = src.readDouble();
             wifiRailChargeMah = src.readDouble();
@@ -2117,6 +2215,8 @@ public abstract class BatteryStats implements Parcelable {
             eventCode = EVENT_NONE;
             eventTag = null;
             tagsFirstOccurrence = false;
+            powerStats = null;
+            processStateChange = null;
         }
 
         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
@@ -2166,6 +2266,8 @@ public abstract class BatteryStats implements Parcelable {
             }
             tagsFirstOccurrence = o.tagsFirstOccurrence;
             currentTime = o.currentTime;
+            powerStats = o.powerStats;
+            processStateChange = o.processStateChange;
         }
 
         public boolean sameNonEvent(HistoryItem o) {
@@ -2313,9 +2415,6 @@ public abstract class BatteryStats implements Parcelable {
 
     public abstract int getHistoryUsedSize();
 
-    @UnsupportedAppUsage
-    public abstract boolean startIteratingHistoryLocked();
-
     public abstract int getHistoryStringPoolSize();
 
     public abstract int getHistoryStringPoolBytes();
@@ -2324,15 +2423,18 @@ public abstract class BatteryStats implements Parcelable {
 
     public abstract int getHistoryTagPoolUid(int index);
 
-    @UnsupportedAppUsage
-    public abstract boolean getNextHistoryLocked(HistoryItem out);
-
-    public abstract void finishIteratingHistoryLocked();
-
     /**
-     * Return the base time offset for the battery history.
+     * Returns a BatteryStatsHistoryIterator. Battery history will continue being writable,
+     * but the iterator will continue iterating over the snapshot taken at the time this method
+     * is called.
+     *
+     * @param startTimeMs wall-clock time to start iterating from, inclusive
+     * @param endTimeMs wall-clock time to stop iterating, exclusive.
+     *                  Pass 0 to indicate current time.
      */
-    public abstract long getHistoryBaseTime();
+    public abstract BatteryStatsHistoryIterator iterateBatteryStatsHistory(
+            @CurrentTimeMillisLong long startTimeMs,
+            @CurrentTimeMillisLong long endTimeMs);
 
     /**
      * Returns the number of times the device has been started.
@@ -2627,12 +2729,6 @@ public abstract class BatteryStats implements Parcelable {
      */
     public abstract int getMobileRadioActiveUnknownCount(int which);
 
-    public static final int DATA_CONNECTION_OUT_OF_SERVICE = 0;
-    public static final int DATA_CONNECTION_EMERGENCY_SERVICE =
-            TelephonyManager.getAllNetworkTypes().length + 1;
-    public static final int DATA_CONNECTION_OTHER = DATA_CONNECTION_EMERGENCY_SERVICE + 1;
-
-
     static final String[] DATA_CONNECTION_NAMES = {
         "oos", "gprs", "edge", "umts", "cdma", "evdo_0", "evdo_A",
         "1xrtt", "hsdpa", "hsupa", "hspa", "iden", "evdo_b", "lte",
@@ -2640,8 +2736,29 @@ public abstract class BatteryStats implements Parcelable {
         "emngcy", "other"
     };
 
+    public static final int NUM_ALL_NETWORK_TYPES = getAllNetworkTypesCount();
+    public static final int DATA_CONNECTION_OUT_OF_SERVICE = 0;
+    public static final int DATA_CONNECTION_EMERGENCY_SERVICE = NUM_ALL_NETWORK_TYPES + 1;
+    public static final int DATA_CONNECTION_OTHER = NUM_ALL_NETWORK_TYPES + 2;
+
     @UnsupportedAppUsage
-    public static final int NUM_DATA_CONNECTION_TYPES = DATA_CONNECTION_OTHER + 1;
+    public static final int NUM_DATA_CONNECTION_TYPES = NUM_ALL_NETWORK_TYPES + 3;
+
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    public static int getAllNetworkTypesCount() {
+        int count = TelephonyManager.getAllNetworkTypes().length;
+        if (DATA_CONNECTION_NAMES.length != count + 3) {        // oos, emngcy, other
+            throw new IllegalStateException(
+                    "DATA_CONNECTION_NAMES length does not match network type count. "
+                    + "Expected: " + (count + 3) + ", actual:" + DATA_CONNECTION_NAMES.length);
+        }
+        return count;
+    }
+
+    public static int getAllNetworkTypesCount$ravenwood() {
+        return DATA_CONNECTION_NAMES.length - 3;  // oos, emngcy, other
+    }
 
     /**
      * Returns the time in microseconds that the phone has been running with
@@ -2664,6 +2781,14 @@ public abstract class BatteryStats implements Parcelable {
      * Returns the {@link Timer} object that tracks the phone's data connection type stats.
      */
     public abstract Timer getPhoneDataConnectionTimer(int dataType);
+
+    /**
+     * Returns the time in microseconds that the phone's data connection was in NR NSA mode while
+     * on battery.
+     *
+     * {@hide}
+     */
+    public abstract long getNrNsaTime(long elapsedRealtimeUs);
 
     /** @hide */
     public static final int RADIO_ACCESS_TECHNOLOGY_OTHER = 0;
@@ -2778,7 +2903,7 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract long getBluetoothMeasuredBatteryConsumptionUC();
+    public abstract long getBluetoothEnergyConsumptionUC();
 
     /**
      * Returns the battery consumption (in microcoulombs) of the cpu, derived from on device power
@@ -2787,7 +2912,7 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract long getCpuMeasuredBatteryConsumptionUC();
+    public abstract long getCpuEnergyConsumptionUC();
 
     /**
      * Returns the battery consumption (in microcoulombs) of the GNSS, derived from on device power
@@ -2796,7 +2921,7 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract long getGnssMeasuredBatteryConsumptionUC();
+    public abstract long getGnssEnergyConsumptionUC();
 
     /**
      * Returns the battery consumption (in microcoulombs) of the radio, derived from on device power
@@ -2805,7 +2930,7 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract long getMobileRadioMeasuredBatteryConsumptionUC();
+    public abstract long getMobileRadioEnergyConsumptionUC();
 
     /**
      * Returns the battery consumption (in microcoulombs) of the phone calls, derived from on device
@@ -2823,7 +2948,7 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract long getScreenOnMeasuredBatteryConsumptionUC();
+    public abstract long getScreenOnEnergyConsumptionUC();
 
     /**
      * Returns the battery consumption (in microcoulombs) of the screen in doze, derived from on
@@ -2832,7 +2957,7 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract long getScreenDozeMeasuredBatteryConsumptionUC();
+    public abstract long getScreenDozeEnergyConsumptionUC();
 
     /**
      * Returns the battery consumption (in microcoulombs) of wifi, derived from on
@@ -2841,7 +2966,16 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract long getWifiMeasuredBatteryConsumptionUC();
+    public abstract long getWifiEnergyConsumptionUC();
+
+    /**
+     * Returns the battery consumption (in microcoulombs) of camera, derived from on
+     * device power measurement data.
+     * Will return {@link #POWER_DATA_UNAVAILABLE} if data is unavailable.
+     *
+     * {@hide}
+     */
+    public abstract long getCameraEnergyConsumptionUC();
 
     /**
      * Returns the battery consumption (in microcoulombs) that each
@@ -2853,7 +2987,7 @@ public abstract class BatteryStats implements Parcelable {
      *
      * {@hide}
      */
-    public abstract @Nullable long[] getCustomConsumerMeasuredBatteryConsumptionUC();
+    public abstract @Nullable long[] getCustomEnergyConsumerBatteryConsumptionUC();
 
     /**
      * Returns the names of all {@link android.hardware.power.stats.EnergyConsumer}'s
@@ -2922,7 +3056,11 @@ public abstract class BatteryStats implements Parcelable {
                 "cellular_high_tx_power", "Chtp"),
         new BitDescription(HistoryItem.STATE2_GPS_SIGNAL_QUALITY_MASK,
             HistoryItem.STATE2_GPS_SIGNAL_QUALITY_SHIFT, "gps_signal_quality", "Gss",
-            new String[] { "poor", "good"}, new String[] { "poor", "good"})
+            new String[] { "poor", "good", "none"}, new String[] { "poor", "good", "none"}),
+        new BitDescription(HistoryItem.STATE2_NR_STATE_MASK,
+            HistoryItem.STATE2_NR_STATE_SHIFT, "nr_state", "nrs",
+            new String[]{"none", "restricted", "not_restricted", "connected"},
+            new String[]{"0", "1", "2", "3"}),
     };
 
     public static final String[] HISTORY_EVENT_NAMES = new String[] {
@@ -3281,11 +3419,11 @@ public abstract class BatteryStats implements Parcelable {
      * incoming service calls from apps.  The result is returned as an array of longs,
      * organized as a sequence like this:
      * <pre>
-     *     cluster1-speeed1, cluster1-speed2, ..., cluster2-speed1, cluster2-speed2, ...
+     *     cluster1-speed1, cluster1-speed2, ..., cluster2-speed1, cluster2-speed2, ...
      * </pre>
      *
-     * @see com.android.internal.os.PowerProfile#getNumCpuClusters()
-     * @see com.android.internal.os.PowerProfile#getNumSpeedStepsInCpuCluster(int)
+     * @see com.android.internal.os.CpuScalingPolicies#getPolicies
+     * @see com.android.internal.os.CpuScalingPolicies#getFrequencies
      */
     @Nullable
     public abstract long[] getSystemServiceTimeAtCpuSpeeds();
@@ -3528,8 +3666,6 @@ public abstract class BatteryStats implements Parcelable {
 
 
     public abstract LongSparseArray<? extends Timer> getKernelMemoryStats();
-
-    public abstract void writeToParcelWithoutUids(Parcel out, int flags);
 
     private final static void formatTimeRaw(StringBuilder out, long seconds) {
         long days = seconds / (60 * 60 * 24);
@@ -3918,6 +4054,17 @@ public abstract class BatteryStats implements Parcelable {
     }
 
     /**
+     * A helper object passed to various dump... methods to integrate with such objects
+     * as BatteryUsageStatsProvider.
+     */
+    public interface BatteryStatsDumpHelper {
+        /**
+         * Generates BatteryUsageStats based on the specified BatteryStats.
+         */
+        BatteryUsageStats getBatteryUsageStats(BatteryStats batteryStats, boolean detailed);
+    }
+
+    /**
      * Dumps the ControllerActivityCounter if it has any data worth dumping.
      * The order of the arguments in the final check in line is:
      *
@@ -4252,13 +4399,6 @@ public abstract class BatteryStats implements Parcelable {
         }
     }
 
-    /**
-     * Temporary for settings.
-     */
-    public final void dumpCheckinLocked(Context context, PrintWriter pw, int which, int reqUid) {
-        dumpCheckinLocked(context, pw, which, reqUid, checkWifiOnly(context));
-    }
-
     private static final String[] CHECKIN_POWER_COMPONENT_LABELS =
             new String[BatteryConsumer.POWER_COMPONENT_COUNT];
     static {
@@ -4286,7 +4426,7 @@ public abstract class BatteryStats implements Parcelable {
      * NOTE: all times are expressed in microseconds, unless specified otherwise.
      */
     public final void dumpCheckinLocked(Context context, PrintWriter pw, int which, int reqUid,
-            boolean wifiOnly) {
+            boolean wifiOnly, BatteryStatsDumpHelper dumpHelper) {
 
         if (which != BatteryStats.STATS_SINCE_CHARGED) {
             dumpLine(pw, 0, STAT_NAMES[which], "err",
@@ -4548,7 +4688,7 @@ public abstract class BatteryStats implements Parcelable {
             }
         }
 
-        final BatteryUsageStats stats = getBatteryUsageStats(context);
+        final BatteryUsageStats stats = dumpHelper.getBatteryUsageStats(this, true /* detailed */);
         dumpLine(pw, 0 /* uid */, category, POWER_USE_SUMMARY_DATA,
                 formatCharge(stats.getBatteryCapacity()),
                 formatCharge(stats.getConsumedPower()),
@@ -4580,12 +4720,14 @@ public abstract class BatteryStats implements Parcelable {
                             proportionalAttributionCalculator.getProportionalPowerMah(consumer)));
         }
 
-        final long[] cpuFreqs = getCpuFreqs();
-        if (cpuFreqs != null) {
+        final CpuScalingPolicies scalingPolicies = getCpuScalingPolicies();
+        if (scalingPolicies != null) {
             sb.setLength(0);
-            for (int i = 0; i < cpuFreqs.length; ++i) {
-                if (i != 0) sb.append(',');
-                sb.append(cpuFreqs[i]);
+            for (int policy : scalingPolicies.getPolicies()) {
+                for (int frequency : scalingPolicies.getFrequencies(policy)) {
+                    if (sb.length() != 0) sb.append(',');
+                    sb.append(frequency);
+                }
             }
             dumpLine(pw, 0 /* uid */, category, GLOBAL_CPU_FREQ_DATA, sb.toString());
         }
@@ -4897,11 +5039,12 @@ public abstract class BatteryStats implements Parcelable {
             }
 
             // If the cpuFreqs is null, then don't bother checking for cpu freq times.
-            if (cpuFreqs != null) {
+            if (scalingPolicies != null) {
                 final long[] cpuFreqTimeMs = u.getCpuFreqTimes(which);
                 // If total cpuFreqTimes is null, then we don't need to check for
                 // screenOffCpuFreqTimes.
-                if (cpuFreqTimeMs != null && cpuFreqTimeMs.length == cpuFreqs.length) {
+                if (cpuFreqTimeMs != null
+                        && cpuFreqTimeMs.length == scalingPolicies.getScalingStepCount()) {
                     sb.setLength(0);
                     for (int i = 0; i < cpuFreqTimeMs.length; ++i) {
                         if (i != 0) sb.append(',');
@@ -4921,7 +5064,8 @@ public abstract class BatteryStats implements Parcelable {
                             cpuFreqTimeMs.length, sb.toString());
                 }
 
-                final long[] timesInFreqMs = new long[getCpuFreqCount()];
+                final long[] timesInFreqMs =
+                        new long[getCpuScalingPolicies().getScalingStepCount()];
                 for (int procState = 0; procState < Uid.NUM_PROCESS_STATE; ++procState) {
                     if (u.getCpuFreqTimes(timesInFreqMs, procState)) {
                         sb.setLength(0);
@@ -5017,17 +5161,9 @@ public abstract class BatteryStats implements Parcelable {
         sb.append(formatCharge(power));
     }
 
-    /**
-     * Temporary for settings.
-     */
-    public final void dumpLocked(Context context, PrintWriter pw, String prefix, int which,
-            int reqUid) {
-        dumpLocked(context, pw, prefix, which, reqUid, checkWifiOnly(context));
-    }
-
     @SuppressWarnings("unused")
     public final void dumpLocked(Context context, PrintWriter pw, String prefix, final int which,
-            int reqUid, boolean wifiOnly) {
+            int reqUid, boolean wifiOnly, BatteryStatsDumpHelper dumpHelper) {
 
         if (which != BatteryStats.STATS_SINCE_CHARGED) {
             pw.println("ERROR: BatteryStats.dump called for which type " + which
@@ -5518,20 +5654,36 @@ public abstract class BatteryStats implements Parcelable {
         sb.append(prefix);
         sb.append("     Cellular Radio Access Technology:");
         didOne = false;
-        for (int i=0; i<NUM_DATA_CONNECTION_TYPES; i++) {
-            final long time = getPhoneDataConnectionTime(i, rawRealtime, which);
+        for (int connType = 0; connType < NUM_DATA_CONNECTION_TYPES; connType++) {
+            final long time = getPhoneDataConnectionTime(connType, rawRealtime, which);
             if (time == 0) {
                 continue;
             }
             sb.append("\n       ");
             sb.append(prefix);
             didOne = true;
-            sb.append(i < DATA_CONNECTION_NAMES.length ? DATA_CONNECTION_NAMES[i] : "ERROR");
+            sb.append(connType < DATA_CONNECTION_NAMES.length ?
+                DATA_CONNECTION_NAMES[connType] : "ERROR");
             sb.append(" ");
             formatTimeMs(sb, time/1000);
             sb.append("(");
             sb.append(formatRatioLocked(time, whichBatteryRealtime));
             sb.append(") ");
+
+            if (connType == TelephonyManager.NETWORK_TYPE_LTE) {
+                // Report any of the LTE time was spent in NR NSA mode.
+                final long nrNsaTime = getNrNsaTime(rawRealtime);
+                if (nrNsaTime != 0) {
+                    sb.append("\n         ");
+                    sb.append(prefix);
+                    sb.append("nr_nsa");
+                    sb.append(" ");
+                    formatTimeMs(sb, nrNsaTime / 1000);
+                    sb.append("(");
+                    sb.append(formatRatioLocked(nrNsaTime, whichBatteryRealtime));
+                    sb.append(") ");
+                }
+            }
         }
         if (!didOne) sb.append(" (no activity)");
         pw.println(sb.toString());
@@ -5737,14 +5889,8 @@ public abstract class BatteryStats implements Parcelable {
         pw.println(getDischargeAmountScreenDozeSinceCharge());
         pw.println();
 
-        final BatteryUsageStatsProvider provider = new BatteryUsageStatsProvider(context, this);
-        final BatteryUsageStats stats = provider.getBatteryUsageStats(
-                new BatteryUsageStatsQuery.Builder()
-                        .setMaxStatsAgeMs(0)
-                        .includePowerModels()
-                        .includeProcessStateData()
-                        .includeVirtualUids()
-                        .build());
+
+        BatteryUsageStats stats = dumpHelper.getBatteryUsageStats(this, true /* detailed */);
         stats.dump(pw, prefix);
 
         List<UidMobileRadioStats> uidMobileRadioStats =
@@ -5917,14 +6063,18 @@ public abstract class BatteryStats implements Parcelable {
             }
         }
 
-        final long[] cpuFreqs = getCpuFreqs();
-        if (cpuFreqs != null) {
+        final CpuScalingPolicies scalingPolicies = getCpuScalingPolicies();
+        if (scalingPolicies != null) {
             sb.setLength(0);
-            sb.append("  CPU freqs:");
-            for (int i = 0; i < cpuFreqs.length; ++i) {
-                sb.append(' ').append(cpuFreqs[i]);
+            sb.append("  CPU scaling: ");
+            for (int policy : scalingPolicies.getPolicies()) {
+                sb.append(" policy").append(policy).append(':');
+                for (int frequency : scalingPolicies.getFrequencies(policy)) {
+                    sb.append(' ').append(frequency);
+                }
             }
-            pw.println(sb.toString());
+
+            pw.println(sb);
             pw.println();
         }
 
@@ -6545,7 +6695,7 @@ public abstract class BatteryStats implements Parcelable {
                 pw.println(sb.toString());
             }
 
-            final long[] timesInFreqMs = new long[getCpuFreqCount()];
+            final long[] timesInFreqMs = new long[getCpuScalingPolicies().getScalingStepCount()];
             for (int procState = 0; procState < Uid.NUM_PROCESS_STATE; ++procState) {
                 if (u.getCpuFreqTimes(timesInFreqMs, procState)) {
                     sb.setLength(0);
@@ -6703,10 +6853,11 @@ public abstract class BatteryStats implements Parcelable {
                     if (bd.mask == HistoryItem.STATE_WAKE_LOCK_FLAG && wakelockTag != null) {
                         didWake = true;
                         sb.append("=");
-                        if (longNames) {
+                        if (longNames
+                                || wakelockTag.poolIdx == HistoryTag.HISTORY_TAG_POOL_OVERFLOW) {
                             UserHandle.formatUid(sb, wakelockTag.uid);
                             sb.append(":\"");
-                            sb.append(wakelockTag.string);
+                            sb.append(wakelockTag.string.replace("\"", "\"\""));
                             sb.append("\"");
                         } else {
                             sb.append(wakelockTag.poolIdx);
@@ -6726,7 +6877,7 @@ public abstract class BatteryStats implements Parcelable {
         }
         if (!didWake && wakelockTag != null) {
             sb.append(longNames ? " wake_lock=" : ",w=");
-            if (longNames) {
+            if (longNames || wakelockTag.poolIdx == HistoryTag.HISTORY_TAG_POOL_OVERFLOW) {
                 UserHandle.formatUid(sb, wakelockTag.uid);
                 sb.append(":\"");
                 sb.append(wakelockTag.string);
@@ -6968,7 +7119,14 @@ public abstract class BatteryStats implements Parcelable {
                 if (rec.wakeReasonTag != null) {
                     if (checkin) {
                         item.append(",wr=");
-                        item.append(rec.wakeReasonTag.poolIdx);
+                        if (rec.wakeReasonTag.poolIdx == HistoryTag.HISTORY_TAG_POOL_OVERFLOW) {
+                            item.append(sUidToString.applyAsString(rec.wakeReasonTag.uid));
+                            item.append(":\"");
+                            item.append(rec.wakeReasonTag.string.replace("\"", "\"\""));
+                            item.append("\"");
+                        } else {
+                            item.append(rec.wakeReasonTag.poolIdx);
+                        }
                     } else {
                         item.append(" wake_reason=");
                         item.append(rec.wakeReasonTag.uid);
@@ -6996,13 +7154,35 @@ public abstract class BatteryStats implements Parcelable {
                     }
                     item.append("=");
                     if (checkin) {
-                        item.append(rec.eventTag.poolIdx);
+                        if (rec.eventTag.poolIdx == HistoryTag.HISTORY_TAG_POOL_OVERFLOW) {
+                            item.append(HISTORY_EVENT_INT_FORMATTERS[idx]
+                                    .applyAsString(rec.eventTag.uid));
+                            item.append(":\"");
+                            item.append(rec.eventTag.string.replace("\"", "\"\""));
+                            item.append("\"");
+                        } else {
+                            item.append(rec.eventTag.poolIdx);
+                        }
                     } else {
                         item.append(HISTORY_EVENT_INT_FORMATTERS[idx]
                                 .applyAsString(rec.eventTag.uid));
                         item.append(":\"");
                         item.append(rec.eventTag.string);
                         item.append("\"");
+                    }
+                }
+                if (rec.powerStats != null && verbose) {
+                    if (!checkin) {
+                        item.append(
+                                "\n                 Stats: ");
+                        item.append(rec.powerStats.formatForBatteryHistory(
+                                "\n                    "));
+                    }
+                }
+                if (rec.processStateChange != null && verbose) {
+                    if (!checkin) {
+                        item.append(" procstate: ");
+                        item.append(rec.processStateChange.formatForBatteryHistory());
                     }
                 }
                 item.append("\n");
@@ -7108,7 +7288,6 @@ public abstract class BatteryStats implements Parcelable {
                     rec.states2 &= ~HistoryItem.STATE2_CELLULAR_HIGH_TX_POWER_FLAG;
                 }
             }
-
             return item.toString();
         }
 
@@ -7316,87 +7495,137 @@ public abstract class BatteryStats implements Parcelable {
     public static final int DUMP_VERBOSE = 1<<5;
     public static final int DUMP_DEVICE_WIFI_ONLY = 1<<6;
 
-    private void dumpHistoryLocked(PrintWriter pw, int flags, long histStart, boolean checkin) {
+    private void dumpHistory(PrintWriter pw, int flags, long histStart, boolean checkin) {
+        synchronized (this) {
+            dumpHistoryTagPoolLocked(pw, checkin);
+        }
+
         final HistoryPrinter hprinter = new HistoryPrinter();
-        final HistoryItem rec = new HistoryItem();
         long lastTime = -1;
         long baseTime = -1;
         boolean printed = false;
         HistoryEventTracker tracker = null;
-        while (getNextHistoryLocked(rec)) {
-            lastTime = rec.time;
-            if (baseTime < 0) {
-                baseTime = lastTime;
-            }
-            if (rec.time >= histStart) {
-                if (histStart >= 0 && !printed) {
-                    if (rec.cmd == HistoryItem.CMD_CURRENT_TIME
-                            || rec.cmd == HistoryItem.CMD_RESET
-                            || rec.cmd == HistoryItem.CMD_START
-                            || rec.cmd == HistoryItem.CMD_SHUTDOWN) {
-                        printed = true;
-                        hprinter.printNextItem(pw, rec, baseTime, checkin,
-                                (flags&DUMP_VERBOSE) != 0);
-                        rec.cmd = HistoryItem.CMD_UPDATE;
-                    } else if (rec.currentTime != 0) {
-                        printed = true;
-                        byte cmd = rec.cmd;
-                        rec.cmd = HistoryItem.CMD_CURRENT_TIME;
-                        hprinter.printNextItem(pw, rec, baseTime, checkin,
-                                (flags&DUMP_VERBOSE) != 0);
-                        rec.cmd = cmd;
+        try (BatteryStatsHistoryIterator iterator =
+                     iterateBatteryStatsHistory(0, MonotonicClock.UNDEFINED)) {
+            HistoryItem rec;
+            while ((rec = iterator.next()) != null) {
+                try {
+                    lastTime = rec.time;
+                    if (baseTime < 0) {
+                        baseTime = lastTime;
                     }
-                    if (tracker != null) {
-                        if (rec.cmd != HistoryItem.CMD_UPDATE) {
-                            hprinter.printNextItem(pw, rec, baseTime, checkin,
-                                    (flags&DUMP_VERBOSE) != 0);
-                            rec.cmd = HistoryItem.CMD_UPDATE;
-                        }
-                        int oldEventCode = rec.eventCode;
-                        HistoryTag oldEventTag = rec.eventTag;
-                        rec.eventTag = new HistoryTag();
-                        for (int i=0; i<HistoryItem.EVENT_COUNT; i++) {
-                            HashMap<String, SparseIntArray> active
-                                    = tracker.getStateForEvent(i);
-                            if (active == null) {
-                                continue;
+                    if (rec.time >= histStart) {
+                        if (histStart >= 0 && !printed) {
+                            if (rec.cmd == HistoryItem.CMD_CURRENT_TIME
+                                    || rec.cmd == HistoryItem.CMD_RESET
+                                    || rec.cmd == HistoryItem.CMD_START
+                                    || rec.cmd == HistoryItem.CMD_SHUTDOWN) {
+                                printed = true;
+                                hprinter.printNextItem(pw, rec, baseTime, checkin,
+                                        (flags & DUMP_VERBOSE) != 0);
+                                rec.cmd = HistoryItem.CMD_UPDATE;
+                            } else if (rec.currentTime != 0) {
+                                printed = true;
+                                byte cmd = rec.cmd;
+                                rec.cmd = HistoryItem.CMD_CURRENT_TIME;
+                                hprinter.printNextItem(pw, rec, baseTime, checkin,
+                                        (flags & DUMP_VERBOSE) != 0);
+                                rec.cmd = cmd;
                             }
-                            for (HashMap.Entry<String, SparseIntArray> ent
-                                    : active.entrySet()) {
-                                SparseIntArray uids = ent.getValue();
-                                for (int j=0; j<uids.size(); j++) {
-                                    rec.eventCode = i;
-                                    rec.eventTag.string = ent.getKey();
-                                    rec.eventTag.uid = uids.keyAt(j);
-                                    rec.eventTag.poolIdx = uids.valueAt(j);
+                            if (tracker != null) {
+                                if (rec.cmd != HistoryItem.CMD_UPDATE) {
                                     hprinter.printNextItem(pw, rec, baseTime, checkin,
-                                            (flags&DUMP_VERBOSE) != 0);
-                                    rec.wakeReasonTag = null;
-                                    rec.wakelockTag = null;
+                                            (flags & DUMP_VERBOSE) != 0);
+                                    rec.cmd = HistoryItem.CMD_UPDATE;
                                 }
+                                int oldEventCode = rec.eventCode;
+                                HistoryTag oldEventTag = rec.eventTag;
+                                rec.eventTag = new HistoryTag();
+                                for (int i = 0; i < HistoryItem.EVENT_COUNT; i++) {
+                                    Map<String, SparseIntArray> active =
+                                            tracker.getStateForEvent(i);
+                                    if (active == null) {
+                                        continue;
+                                    }
+                                    for (Map.Entry<String, SparseIntArray> ent :
+                                            active.entrySet()) {
+                                        SparseIntArray uids = ent.getValue();
+                                        for (int j = 0; j < uids.size(); j++) {
+                                            rec.eventCode = i;
+                                            rec.eventTag.string = ent.getKey();
+                                            rec.eventTag.uid = uids.keyAt(j);
+                                            rec.eventTag.poolIdx = uids.valueAt(j);
+                                            hprinter.printNextItem(pw, rec, baseTime, checkin,
+                                                    (flags & DUMP_VERBOSE) != 0);
+                                            rec.wakeReasonTag = null;
+                                            rec.wakelockTag = null;
+                                        }
+                                    }
+                                }
+                                rec.eventCode = oldEventCode;
+                                rec.eventTag = oldEventTag;
+                                tracker = null;
                             }
                         }
-                        rec.eventCode = oldEventCode;
-                        rec.eventTag = oldEventTag;
-                        tracker = null;
+                        hprinter.printNextItem(pw, rec, baseTime, checkin,
+                                (flags & DUMP_VERBOSE) != 0);
+                    } else if (false/* && rec.eventCode != HistoryItem.EVENT_NONE */) {
+                        // This is an attempt to aggregate the previous state and generate
+                        // fake events to reflect that state at the point where we start
+                        // printing real events.  It doesn't really work right, so is turned off.
+                        if (tracker == null) {
+                            tracker = new HistoryEventTracker();
+                        }
+                        tracker.updateState(rec.eventCode, rec.eventTag.string,
+                                rec.eventTag.uid, rec.eventTag.poolIdx);
                     }
+                } catch (Throwable t) {
+                    t.printStackTrace(pw);
+                    Slog.wtf(TAG, "Corrupted battery history", t);
+                    break;
                 }
-                hprinter.printNextItem(pw, rec, baseTime, checkin,
-                        (flags&DUMP_VERBOSE) != 0);
-            } else if (false && rec.eventCode != HistoryItem.EVENT_NONE) {
-                // This is an attempt to aggregate the previous state and generate
-                // fake events to reflect that state at the point where we start
-                // printing real events.  It doesn't really work right, so is turned off.
-                if (tracker == null) {
-                    tracker = new HistoryEventTracker();
-                }
-                tracker.updateState(rec.eventCode, rec.eventTag.string,
-                        rec.eventTag.uid, rec.eventTag.poolIdx);
             }
         }
         if (histStart >= 0) {
             commitCurrentHistoryBatchLocked();
             pw.print(checkin ? "NEXT: " : "  NEXT: "); pw.println(lastTime+1);
+        }
+    }
+
+    private void dumpHistoryTagPoolLocked(PrintWriter pw, boolean checkin) {
+        if (checkin) {
+            for (int i = 0; i < getHistoryStringPoolSize(); i++) {
+                pw.print(BATTERY_STATS_CHECKIN_VERSION);
+                pw.print(',');
+                pw.print(HISTORY_STRING_POOL);
+                pw.print(',');
+                pw.print(i);
+                pw.print(",");
+                pw.print(getHistoryTagPoolUid(i));
+                pw.print(",\"");
+                String str = getHistoryTagPoolString(i);
+                if (str != null) {
+                    str = str.replace("\\", "\\\\");
+                    str = str.replace("\"", "\\\"");
+                    pw.print(str);
+                }
+                pw.print("\"");
+                pw.println();
+            }
+        } else {
+            final long historyTotalSize = getHistoryTotalSize();
+            final long historyUsedSize = getHistoryUsedSize();
+            pw.print("Battery History (");
+            pw.print((100 * historyUsedSize) / historyTotalSize);
+            pw.print("% used, ");
+            printSizeValue(pw, historyUsedSize);
+            pw.print(" used of ");
+            printSizeValue(pw, historyTotalSize);
+            pw.print(", ");
+            pw.print(getHistoryStringPoolSize());
+            pw.print(" strings using ");
+            printSizeValue(pw, getHistoryStringPoolBytes());
+            pw.println("):");
         }
     }
 
@@ -7450,43 +7679,34 @@ public abstract class BatteryStats implements Parcelable {
     /**
      * Dumps a human-readable summary of the battery statistics to the given PrintWriter.
      *
-     * @param pw a Printer to receive the dump output.
+     * @param pw         a Printer to receive the dump output.
      */
     @SuppressWarnings("unused")
-    public void dumpLocked(Context context, PrintWriter pw, int flags, int reqUid, long histStart) {
-        prepareForDumpLocked();
+    public void dump(Context context, PrintWriter pw, int flags, int reqUid, long histStart,
+            BatteryStatsDumpHelper dumpHelper) {
+        synchronized (this) {
+            prepareForDumpLocked();
+        }
 
         final boolean filtering = (flags
                 & (DUMP_HISTORY_ONLY|DUMP_CHARGED_ONLY|DUMP_DAILY_ONLY)) != 0;
 
         if ((flags&DUMP_HISTORY_ONLY) != 0 || !filtering) {
-            final long historyTotalSize = getHistoryTotalSize();
-            final long historyUsedSize = getHistoryUsedSize();
-            if (startIteratingHistoryLocked()) {
-                try {
-                    pw.print("Battery History (");
-                    pw.print((100*historyUsedSize)/historyTotalSize);
-                    pw.print("% used, ");
-                    printSizeValue(pw, historyUsedSize);
-                    pw.print(" used of ");
-                    printSizeValue(pw, historyTotalSize);
-                    pw.print(", ");
-                    pw.print(getHistoryStringPoolSize());
-                    pw.print(" strings using ");
-                    printSizeValue(pw, getHistoryStringPoolBytes());
-                    pw.println("):");
-                    dumpHistoryLocked(pw, flags, histStart, false);
-                    pw.println();
-                } finally {
-                    finishIteratingHistoryLocked();
-                }
-            }
+            dumpHistory(pw, flags, histStart, false);
+            pw.println();
         }
 
         if (filtering && (flags&(DUMP_CHARGED_ONLY|DUMP_DAILY_ONLY)) == 0) {
             return;
         }
 
+        synchronized (this) {
+            dumpLocked(context, pw, flags, reqUid, filtering, dumpHelper);
+        }
+    }
+
+    private void dumpLocked(Context context, PrintWriter pw, int flags, int reqUid,
+            boolean filtering, BatteryStatsDumpHelper dumpHelper) {
         if (!filtering) {
             SparseArray<? extends Uid> uidStats = getUidStats();
             final int NU = uidStats.size();
@@ -7621,53 +7841,38 @@ public abstract class BatteryStats implements Parcelable {
             pw.println("  System starts: " + getStartCount()
                     + ", currently on battery: " + getIsOnBattery());
             dumpLocked(context, pw, "", STATS_SINCE_CHARGED, reqUid,
-                    (flags&DUMP_DEVICE_WIFI_ONLY) != 0);
+                    (flags & DUMP_DEVICE_WIFI_ONLY) != 0, dumpHelper);
             pw.println();
         }
     }
 
     // This is called from BatteryStatsService.
     @SuppressWarnings("unused")
-    public void dumpCheckinLocked(Context context, PrintWriter pw,
-            List<ApplicationInfo> apps, int flags, long histStart) {
-        prepareForDumpLocked();
+    public void dumpCheckin(Context context, PrintWriter pw, List<ApplicationInfo> apps, int flags,
+            long histStart, BatteryStatsDumpHelper dumpHelper) {
+        synchronized (this) {
+            prepareForDumpLocked();
 
-        dumpLine(pw, 0 /* uid */, "i" /* category */, VERSION_DATA,
-                CHECKIN_VERSION, getParcelVersion(), getStartPlatformVersion(),
-                getEndPlatformVersion());
-
-        long now = getHistoryBaseTime() + SystemClock.elapsedRealtime();
+            dumpLine(pw, 0 /* uid */, "i" /* category */, VERSION_DATA,
+                    CHECKIN_VERSION, getParcelVersion(), getStartPlatformVersion(),
+                    getEndPlatformVersion());
+        }
 
         if ((flags & (DUMP_INCLUDE_HISTORY | DUMP_HISTORY_ONLY)) != 0) {
-            if (startIteratingHistoryLocked()) {
-                try {
-                    for (int i=0; i<getHistoryStringPoolSize(); i++) {
-                        pw.print(BATTERY_STATS_CHECKIN_VERSION); pw.print(',');
-                        pw.print(HISTORY_STRING_POOL); pw.print(',');
-                        pw.print(i);
-                        pw.print(",");
-                        pw.print(getHistoryTagPoolUid(i));
-                        pw.print(",\"");
-                        String str = getHistoryTagPoolString(i);
-                        if (str != null) {
-                            str = str.replace("\\", "\\\\");
-                            str = str.replace("\"", "\\\"");
-                            pw.print(str);
-                        }
-                        pw.print("\"");
-                        pw.println();
-                    }
-                    dumpHistoryLocked(pw, flags, histStart, true);
-                } finally {
-                    finishIteratingHistoryLocked();
-                }
-            }
+            dumpHistory(pw, flags, histStart, true);
         }
 
         if ((flags & DUMP_HISTORY_ONLY) != 0) {
             return;
         }
 
+        synchronized (this) {
+            dumpCheckinLocked(context, pw, apps, flags, dumpHelper);
+        }
+    }
+
+    private void dumpCheckinLocked(Context context, PrintWriter pw, List<ApplicationInfo> apps,
+            int flags, BatteryStatsDumpHelper dumpHelper) {
         if (apps != null) {
             SparseArray<Pair<ArrayList<String>, MutableBoolean>> uids = new SparseArray<>();
             for (int i=0; i<apps.size(); i++) {
@@ -7714,7 +7919,7 @@ public abstract class BatteryStats implements Parcelable {
                         (Object[])lineArgs);
             }
             dumpCheckinLocked(context, pw, STATS_SINCE_CHARGED, -1,
-                    (flags&DUMP_DEVICE_WIFI_ONLY) != 0);
+                    (flags & DUMP_DEVICE_WIFI_ONLY) != 0, dumpHelper);
         }
     }
 
@@ -7724,7 +7929,7 @@ public abstract class BatteryStats implements Parcelable {
      * @hide
      */
     public void dumpProtoLocked(Context context, FileDescriptor fd, List<ApplicationInfo> apps,
-            int flags, long histStart) {
+            int flags, long histStart, BatteryStatsDumpHelper dumpHelper) {
         final ProtoOutputStream proto = new ProtoOutputStream(fd);
         prepareForDumpLocked();
 
@@ -7742,7 +7947,8 @@ public abstract class BatteryStats implements Parcelable {
         proto.write(BatteryStatsProto.END_PLATFORM_VERSION, getEndPlatformVersion());
 
         if ((flags & DUMP_DAILY_ONLY) == 0) {
-            final BatteryUsageStats stats = getBatteryUsageStats(context);
+            final BatteryUsageStats stats =
+                    dumpHelper.getBatteryUsageStats(this, false /* detailed */);
             ProportionalAttributionCalculator proportionalAttributionCalculator =
                     new ProportionalAttributionCalculator(context, stats);
             dumpProtoAppsLocked(proto, stats, apps, proportionalAttributionCalculator);
@@ -7901,12 +8107,13 @@ public abstract class BatteryStats implements Parcelable {
             proto.write(UidProto.Cpu.USER_DURATION_MS, roundUsToMs(u.getUserCpuTimeUs(which)));
             proto.write(UidProto.Cpu.SYSTEM_DURATION_MS, roundUsToMs(u.getSystemCpuTimeUs(which)));
 
-            final long[] cpuFreqs = getCpuFreqs();
-            if (cpuFreqs != null) {
+            final CpuScalingPolicies scalingPolicies = getCpuScalingPolicies();
+            if (scalingPolicies != null) {
                 final long[] cpuFreqTimeMs = u.getCpuFreqTimes(which);
                 // If total cpuFreqTimes is null, then we don't need to check for
                 // screenOffCpuFreqTimes.
-                if (cpuFreqTimeMs != null && cpuFreqTimeMs.length == cpuFreqs.length) {
+                if (cpuFreqTimeMs != null
+                        && cpuFreqTimeMs.length == scalingPolicies.getScalingStepCount()) {
                     long[] screenOffCpuFreqTimeMs = u.getScreenOffCpuFreqTimes(which);
                     if (screenOffCpuFreqTimeMs == null) {
                         screenOffCpuFreqTimeMs = new long[cpuFreqTimeMs.length];
@@ -7923,8 +8130,9 @@ public abstract class BatteryStats implements Parcelable {
                 }
             }
 
-            final long[] timesInFreqMs = new long[getCpuFreqCount()];
-            final long[] timesInFreqScreenOffMs = new long[getCpuFreqCount()];
+            final int stepCount = getCpuScalingPolicies().getScalingStepCount();
+            final long[] timesInFreqMs = new long[stepCount];
+            final long[] timesInFreqScreenOffMs = new long[stepCount];
             for (int procState = 0; procState < Uid.NUM_PROCESS_STATE; ++procState) {
                 if (u.getCpuFreqTimes(timesInFreqMs, procState)) {
                     if (!u.getScreenOffCpuFreqTimes(timesInFreqScreenOffMs, procState)) {
@@ -8200,17 +8408,12 @@ public abstract class BatteryStats implements Parcelable {
     }
 
     private void dumpProtoHistoryLocked(ProtoOutputStream proto, int flags, long histStart) {
-        if (!startIteratingHistoryLocked()) {
-            return;
-        }
-
         proto.write(BatteryStatsServiceDumpHistoryProto.REPORT_VERSION, CHECKIN_VERSION);
         proto.write(BatteryStatsServiceDumpHistoryProto.PARCEL_VERSION, getParcelVersion());
         proto.write(BatteryStatsServiceDumpHistoryProto.START_PLATFORM_VERSION,
                 getStartPlatformVersion());
         proto.write(BatteryStatsServiceDumpHistoryProto.END_PLATFORM_VERSION,
                 getEndPlatformVersion());
-        try {
             long token;
             // History string pool (HISTORY_STRING_POOL)
             for (int i = 0; i < getHistoryStringPoolSize(); ++i) {
@@ -8222,14 +8425,16 @@ public abstract class BatteryStats implements Parcelable {
                 proto.end(token);
             }
 
-            // History data (HISTORY_DATA)
-            final HistoryPrinter hprinter = new HistoryPrinter();
-            final HistoryItem rec = new HistoryItem();
-            long lastTime = -1;
-            long baseTime = -1;
-            boolean printed = false;
-            HistoryEventTracker tracker = null;
-            while (getNextHistoryLocked(rec)) {
+        // History data (HISTORY_DATA)
+        final HistoryPrinter hprinter = new HistoryPrinter();
+        long lastTime = -1;
+        long baseTime = -1;
+        boolean printed = false;
+        HistoryEventTracker tracker = null;
+        try (BatteryStatsHistoryIterator iterator =
+                     iterateBatteryStatsHistory(0, MonotonicClock.UNDEFINED)) {
+            HistoryItem rec;
+            while ((rec = iterator.next()) != null) {
                 lastTime = rec.time;
                 if (baseTime < 0) {
                     baseTime = lastTime;
@@ -8296,8 +8501,6 @@ public abstract class BatteryStats implements Parcelable {
                 proto.write(BatteryStatsServiceDumpHistoryProto.CSV_LINES,
                         "NEXT: " + (lastTime + 1));
             }
-        } finally {
-            finishIteratingHistoryLocked();
         }
     }
 
@@ -8400,10 +8603,12 @@ public abstract class BatteryStats implements Parcelable {
         dumpDurationSteps(proto, SystemProto.DISCHARGE_STEP, getDischargeLevelStepTracker());
 
         // CPU frequencies (GLOBAL_CPU_FREQ_DATA)
-        final long[] cpuFreqs = getCpuFreqs();
-        if (cpuFreqs != null) {
-            for (long i : cpuFreqs) {
-                proto.write(SystemProto.CPU_FREQUENCY, i);
+        final CpuScalingPolicies scalingPolicies = getCpuScalingPolicies();
+        if (scalingPolicies != null) {
+            for (int policy : scalingPolicies.getPolicies()) {
+                for (int frequency : scalingPolicies.getFrequencies(policy)) {
+                    proto.write(SystemProto.CPU_FREQUENCY, frequency);
+                }
             }
         }
 
@@ -8691,13 +8896,6 @@ public abstract class BatteryStats implements Parcelable {
         return !tm.isDataCapable();
     }
 
-    private BatteryUsageStats getBatteryUsageStats(Context context) {
-        final BatteryUsageStatsProvider provider = new BatteryUsageStatsProvider(context, this);
-        final BatteryUsageStatsQuery query =
-                new BatteryUsageStatsQuery.Builder().setMaxStatsAgeMs(0).build();
-        return provider.getBatteryUsageStats(query);
-    }
-
     private boolean shouldHidePowerComponent(int powerComponent) {
         return powerComponent == BatteryConsumer.POWER_COMPONENT_IDLE
                 || powerComponent == BatteryConsumer.POWER_COMPONENT_MOBILE_RADIO
@@ -8836,5 +9034,72 @@ public abstract class BatteryStats implements Parcelable {
         uidMobileRadioStats.sort(
                 (lhs, rhs) -> Double.compare(rhs.millisecondsPerPacket, lhs.millisecondsPerPacket));
         return uidMobileRadioStats;
+    }
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    @VisibleForTesting
+    protected static boolean isLowRamDevice() {
+        return ActivityManager.isLowRamDeviceStatic();
+    }
+
+    protected static boolean isLowRamDevice$ravenwood() {
+        return false;
+    }
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    @VisibleForTesting
+    protected static int getCellSignalStrengthLevelCount() {
+        return CellSignalStrength.getNumSignalStrengthLevels();
+    }
+
+    protected static int getCellSignalStrengthLevelCount$ravenwood() {
+        return 5;
+    }
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    @VisibleForTesting
+    protected static int getModemTxPowerLevelCount() {
+        return ModemActivityInfo.getNumTxPowerLevels();
+    }
+
+    protected static int getModemTxPowerLevelCount$ravenwood() {
+        return 5;
+    }
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    @VisibleForTesting
+    protected static boolean isKernelStatsAvailable() {
+        return true;
+    }
+
+    protected static boolean isKernelStatsAvailable$ravenwood() {
+        return false;
+    }
+
+    @android.ravenwood.annotation.RavenwoodReplace
+    protected static int getDisplayTransport(int[] transports) {
+        return NetworkCapabilitiesUtils.getDisplayTransport(transports);
+    }
+
+    // See NetworkCapabilitiesUtils
+    private static final int[] DISPLAY_TRANSPORT_PRIORITIES = new int[] {
+            NetworkCapabilities.TRANSPORT_VPN,
+            NetworkCapabilities.TRANSPORT_CELLULAR,
+            NetworkCapabilities.TRANSPORT_WIFI_AWARE,
+            NetworkCapabilities.TRANSPORT_BLUETOOTH,
+            NetworkCapabilities.TRANSPORT_WIFI,
+            NetworkCapabilities.TRANSPORT_ETHERNET,
+            NetworkCapabilities.TRANSPORT_USB
+    };
+
+    protected static int getDisplayTransport$ravenwood(int[] transports) {
+        for (int transport : DISPLAY_TRANSPORT_PRIORITIES) {
+            for (int t : transports) {
+                if (t == transport) {
+                    return transport;
+                }
+            }
+        }
+        return transports[0];
     }
 }

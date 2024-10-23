@@ -44,13 +44,19 @@
     <!-- orientation of the dead zone when touches have recently occurred elsewhere on screen -->
     <integer name="navigation_bar_deadzone_orientation">0</integer>
 
+    <!-- Whether or not lockscreen shortcuts can be customized -->
+    <bool name="custom_lockscreen_shortcuts_enabled">false</bool>
+
+    <!-- Whether or not long-pressing on keyguard will display to customize lockscreen -->
+    <bool name="long_press_keyguard_customize_lockscreen_enabled">false</bool>
+
     <bool name="config_dead_zone_flash">false</bool>
 
     <!-- Whether to enable dimming navigation buttons when wallpaper is not visible, should be
          enabled for OLED devices to reduce/prevent burn in on the navigation bar (because of the
          black background and static button placements) and disabled for all other devices to
          prevent wasting cpu cycles on the dimming animation -->
-    <bool name="config_navigation_bar_enable_auto_dim_no_visible_wallpaper">false</bool>
+    <bool name="config_navigation_bar_enable_auto_dim_no_visible_wallpaper">true</bool>
 
     <!-- The maximum number of tiles in the QuickQSPanel -->
     <integer name="quick_qs_panel_max_tiles">4</integer>
@@ -64,11 +70,25 @@
     <!-- The number of rows in the QuickSettings -->
     <integer name="quick_settings_max_rows">4</integer>
 
+    <!-- Override column number for quick settings.
+    For now, this value has effect only when flag lockscreen.enable_landscape is enabled.
+    TODO (b/293252410) - change this comment/resource when flag is enabled -->
+    <integer name="small_land_lockscreen_quick_settings_num_columns">2</integer>
+
+    <!-- Override row number for quick settings.
+    For now, this value has effect only when flag lockscreen.enable_landscape is enabled.
+    TODO (b/293252410) - change this comment/resource when flag is enabled -->
+    <integer name="small_land_lockscreen_quick_settings_max_rows">1</integer>
+
+    <!-- If the dp width of the available space is <= this value, potentially adjust the number
+         of media recommendation items-->
+    <integer name="default_qs_media_rec_width_dp">380</integer>
+
     <!-- The number of columns that the top level tiles span in the QuickSettings -->
 
     <!-- The default tiles to display in QuickSettings -->
     <string name="quick_settings_tiles_default" translatable="false">
-        internet,wifi,cell,bt,flashlight,dnd,alarm,airplane,controls,wallet,rotation,battery,cast,screenrecord,mictoggle,cameratoggle
+        wifi,internet,bt,flashlight,cell,hotspot,dark,airplane,location,dataswitch,dnd,qr_code_scanner,heads_up,rotation,battery,cast,screenrecord,alarm,saver,night
     </string>
 
     <!-- The class path of the Safety Quick Settings Tile -->
@@ -81,7 +101,7 @@
 
     <!-- Tiles native to System UI. Order should match "quick_settings_tiles_default" -->
     <string name="quick_settings_tiles_stock" translatable="false">
-        internet,wifi,cell,bt,flashlight,dnd,alarm,airplane,controls,wallet,rotation,battery,cast,screenrecord,livedisplay,reading_mode,anti_flicker,mictoggle,cameratoggle,location,nfc,hotspot,inversion,saver,dark,work,night,reverse,reduce_brightness,qr_code_scanner,onehanded,color_correction,dream,font_scaling,smartpixels,caffeine,sleep_mode,ambient_display,usb_tether,sound,reboot,volume_panel,soundsearch,vpn,dataswitch,aod,screenshot,compass,refresh_rate,cpuinfo,fpsinfo,heads_up,sync
+        wifi,internet,bt,flashlight,cell,hotspot,dark,airplane,location,dnd,qr_code_scanner,rotation,battery,cast,screenrecord,alarm,saver,night,controls,wallet,mictoggle,cameratoggle,inversion,work,reverse,reduce_brightness,onehanded,color_correction,dream,font_scaling,record_issue,nfc,weather,dns
     </string>
 
     <!-- The tiles to display in QuickSettings -->
@@ -99,6 +119,7 @@
         <item>accessibility_display_daltonizer_enabled:color_correction</item>
         <item>accessibility_display_inversion_enabled:inversion</item>
         <item>one_handed_mode_enabled:onehanded</item>
+        <item>accessibility_font_scaling_has_been_changed:font_scaling</item>
     </string-array>
 
     <!-- Use collapsed layout for media player in landscape QQS -->
@@ -119,6 +140,9 @@
 
     <!-- Minimum display time for a heads up notification, in milliseconds. -->
     <integer name="heads_up_notification_minimum_time">2000</integer>
+
+    <!-- Display time for a sticky heads up notification, in milliseconds. -->
+    <integer name="sticky_heads_up_notification_time">60000</integer>
 
     <!-- Whether to hide the notification header when the HUN is expanded. -->
     <bool name="heads_up_notification_hides_header">false</bool>
@@ -285,8 +309,8 @@
     <!-- Whether to show the full screen user switcher. -->
     <bool name="config_enableFullscreenUserSwitcher">false</bool>
 
-    <!-- SystemUIFactory component -->
-    <string name="config_systemUIFactoryComponent" translatable="false">com.android.systemui.SystemUIInitializerImpl</string>
+    <!-- Determines whether the shell features all run on another thread. -->
+    <bool name="config_enableShellMainThread">true</bool>
 
     <!-- QS tile shape store width. negative implies fill configuration instead of stroke-->
     <dimen name="config_qsTileStrokeWidthActive">-1dp</dimen>
@@ -302,7 +326,8 @@
 
     <!-- Nav bar button default ordering/layout -->
     <string name="config_navBarLayout" translatable="false">left[.5W],back[1WC];home;recent[1WC],right[.5W]</string>
-    <string name="config_navBarLayoutQuickstep" translatable="false">back[1.7WC];home;contextual[1.7WC]</string>
+    <string name="config_navBarLayoutReverse" translatable="false">left[.25W],recent[.5W];home;back[.5W],right[.25W]</string>
+    <string name="config_navBarLayoutQuickstep" translatable="false">back[1.7WC];home;menu_ime[1.7WC]</string>
     <string name="config_navBarLayoutHandle" translatable="false">back[70AC];home_handle;ime_switcher[70AC]</string>
 
     <!-- Whether to show a warning notification when device's skin temperature is high. -->
@@ -330,9 +355,6 @@
     <!-- Whether to show activity indicators in the status bar -->
     <bool name="config_showActivity">false</bool>
 
-    <!-- Whether or not the button to clear all notifications will be shown. -->
-    <bool name="config_enableNotificationsClearAll">true</bool>
-
     <!-- Whether or not to show the notification shelf that houses the icons of notifications that
      have been scrolled off-screen. -->
     <bool name="config_showNotificationShelf">true</bool>
@@ -352,9 +374,15 @@
 
     <!-- Whether or not notifications that can be expanded will always be in their expanded state.
          This value only affects notifications that are not a group of notifications from the same
-         applications. If this value is false, then only the first notification will be expanded;
-         the other notifications need to be manually expanded by the user. -->
+         applications. If this value is false, then only the first notification will be expanded
+         when config_autoExpandFirstNotification is true; the other notifications need to be
+         manually expanded by the user. -->
     <bool name="config_alwaysExpandNonGroupedNotifications">false</bool>
+
+    <!-- Whether or not the first expandable notification will be expanded automatically by the
+         system. This value only affects notifications that are not a group of notifications from
+         the same applications and when config_alwaysExpandNonGroupedNotifications is false. -->
+    <bool name="config_autoExpandFirstNotification">true</bool>
 
     <!-- Whether or not an expandable notification can be manually expanded or collapsed by the
          user. Grouped notifications are still expandable even if this value is false. -->
@@ -401,7 +429,7 @@
     <bool name="config_smart_replies_in_notifications_enabled">true</bool>
 
     <!-- Smart replies in notifications: Whether we disable the feature unless the app targets P -->
-    <bool name="config_smart_replies_in_notifications_requires_targeting_p">true</bool>
+    <bool name="config_smart_replies_in_notifications_requires_targeting_p">false</bool>
 
     <!-- Smart replies in notifications: Maximum number of times SmartReplyView will try to find a
          better (narrower) line-break for a double-line smart reply button. -->
@@ -442,12 +470,16 @@
          screenshot has been saved to work profile. If blank, a default icon will be shown. -->
     <string name="config_sceenshotWorkProfileFilesApp" translatable="false">com.android.documentsui/.files.LauncherActivity</string>
 
+    <!-- The component name of the screenshot editing activity that provides the App Clips flow.
+         The App Clips flow includes taking a screenshot, showing user screenshot cropping activity
+         and finally letting user send the screenshot to the calling notes app. This activity
+         should not send the screenshot to the calling activity without user consent. -->
+    <string name="config_screenshotAppClipsActivityComponent" translatable="false"
+            >com.android.systemui/com.android.systemui.screenshot.appclips.AppClipsActivity</string>
+
     <!-- Remote copy default activity.  Must handle REMOTE_COPY_ACTION intents.
      This name is in the ComponentName flattened format (package/class)  -->
     <string name="config_remoteCopyPackage" translatable="false"></string>
-
-    <!-- On debuggable builds, alert the user if SystemUI PSS goes over this number (in kb) -->
-    <integer name="watch_heap_limit">256000</integer>
 
     <!-- SystemUI Plugins that can be loaded on user builds. -->
     <string-array name="config_pluginAllowlist" translatable="false">
@@ -488,8 +520,8 @@
      space -->
     <bool name="config_showBatteryEstimateQSBH">false</bool>
 
-    <!-- Whether to show a severe low battery dialog. -->
-    <bool name="config_severe_battery_dialog">false</bool>
+    <!-- Whether to show extra battery saver confirmation dialog. -->
+    <bool name="config_extra_battery_saver_confirmation">false</bool>
 
     <!-- A path representing a shield. Will sometimes be displayed with the battery icon when
          needed. This path is a 10px wide and 13px tall. -->
@@ -498,18 +530,33 @@
     </string>
 
     <!-- A path similar to frameworks/base/core/res/res/values/config.xml
-      config_mainBuiltInDisplayCutout that describes a path larger than the exact path of a display
-      cutout. If present as well as config_enableDisplayCutoutProtection is set to true, then
-      SystemUI will draw this "protection path" instead of the display cutout path that is normally
-      used for anti-aliasing.
+      config_mainBuiltInDisplayCutout that describes a path larger than the exact path of a outer
+      display cutout. If present as well as config_enableDisplayCutoutProtection is set to true,
+      then SystemUI will draw this "protection path" instead of the display cutout path that is
+      normally used for anti-aliasing.
 
       This path will only be drawn when the front-facing camera turns on, otherwise the main
       DisplayCutout path will be rendered
        -->
     <string translatable="false" name="config_frontBuiltInDisplayCutoutProtection"></string>
 
-    <!--  ID for the camera that needs extra protection -->
+    <!-- ID for the camera of outer display that needs extra protection -->
     <string translatable="false" name="config_protectedCameraId"></string>
+    <!-- Physical ID for the camera of outer display that needs extra protection -->
+    <string translatable="false" name="config_protectedPhysicalCameraId"></string>
+    <!-- Unique ID of the outer display that contains the camera that needs protection. -->
+    <string translatable="false" name="config_protectedScreenUniqueId"></string>
+
+
+    <!-- Similar to config_frontBuiltInDisplayCutoutProtection but for inner display. -->
+    <string translatable="false" name="config_innerBuiltInDisplayCutoutProtection"></string>
+
+    <!-- ID for the camera of inner display that needs extra protection. -->
+    <string translatable="false" name="config_protectedInnerCameraId"></string>
+    <!-- Physical ID for the camera of inner display that needs extra protection -->
+    <string translatable="false" name="config_protectedInnerPhysicalCameraId"></string>
+    <!-- Unique ID of the inner display that contains the camera that needs protection. -->
+    <string translatable="false" name="config_protectedInnerScreenUniqueId"></string>
 
     <!-- Comma-separated list of packages to exclude from camera protection e.g.
     "com.android.systemui,com.android.xyz" -->
@@ -560,8 +607,16 @@
     <!-- Whether to show the side fps hint while on bouncer -->
     <bool name="config_show_sidefps_hint_on_bouncer">true</bool>
 
+    <!-- Max number of lines we want to show for the bouncer secondary message -->
+    <integer name="bouncer_secondary_message_lines">2</integer>
+
     <!-- Whether to use the split 2-column notification shade -->
     <bool name="config_use_split_notification_shade">false</bool>
+
+    <!-- Whether to force split shade.
+    For now, this value has effect only when flag lockscreen.enable_landscape is enabled.
+    TODO (b/293252410) - change this comment/resource when flag is enabled -->
+    <bool name="force_config_use_split_notification_shade">false</bool>
 
     <!-- Whether we use large screen shade header which takes only one row compared to QS header -->
     <bool name="config_use_large_screen_shade_header">false</bool>
@@ -584,11 +639,6 @@
         58.0001 29.2229,56.9551 26.8945,55.195
     </string>
 
-    <!-- The radius of the enrollment progress bar, in dp -->
-    <integer name="config_udfpsEnrollProgressBar" translatable="false">
-        280
-    </integer>
-
     <!-- The time (in ms) needed to trigger the lock icon view's long-press affordance -->
     <integer name="config_lockIconLongPress" translatable="false">200</integer>
 
@@ -607,8 +657,15 @@
     <!-- Whether to use window background blur for the volume dialog. -->
     <bool name="config_volumeDialogUseBackgroundBlur">false</bool>
 
-    <!-- The properties of the face auth camera in pixels -->
+    <!-- The properties of the face auth front camera for outer display in pixels -->
     <integer-array name="config_face_auth_props">
+        <!-- sensorLocationX -->
+        <!-- sensorLocationY -->
+        <!--sensorRadius -->
+    </integer-array>
+
+    <!-- The properties of the face auth front camera for inner display in pixels -->
+    <integer-array name="config_inner_face_auth_props">
         <!-- sensorLocationX -->
         <!-- sensorLocationY -->
         <!--sensorRadius -->
@@ -639,6 +696,14 @@
     <integer-array name="config_face_help_msgs_defer_until_timeout">
     </integer-array>
 
+    <!-- Which face help messages to ignore when determining the % of frames that meet
+         config_face_help_msgs_defer_until_timeout_threshold -->
+    <integer-array name="config_face_help_msgs_ignore">
+        <item>20</item> <!-- FACE_ACQUIRED_START -->
+        <item>23</item> <!-- FACE_ACQUIRED_UNKNOWN -->
+        <item>24</item> <!-- FACE_ACQUIRED_FIRST_FRAME_RECEIVED -->
+    </integer-array>
+
     <!-- Percentage of face auth frames received required to show a deferred message at
          FACE_ERROR_TIMEOUT. See config_face_help_msgs_defer_until_timeout for messages
          that are deferred.-->
@@ -663,7 +728,6 @@
         <item>6</item> <!-- WAKE_REASON_WAKE_KEY -->
         <item>7</item> <!-- WAKE_REASON_WAKE_MOTION -->
         <item>9</item> <!-- WAKE_REASON_LID -->
-        <item>10</item> <!-- WAKE_REASON_DISPLAY_GROUP_ADDED -->
         <item>12</item> <!-- WAKE_REASON_UNFOLD_DEVICE -->
         <item>15</item> <!-- WAKE_REASON_TAP -->
         <item>16</item> <!-- WAKE_REASON_LIFT -->
@@ -680,8 +744,17 @@
     -->
     <integer name="config_face_auth_supported_posture">0</integer>
 
+    <!-- Components to allow running fingerprint listening if their activity is occluding the lock screen. -->
+    <string-array name="config_fingerprint_listen_on_occluding_activity_packages" translatable="false">
+    </string-array>
+
     <!-- Whether the communal service should be enabled -->
     <bool name="config_communalServiceEnabled">false</bool>
+
+    <!-- Name of the database that stores info of widgets shown on glanceable hub -->
+    <string name="config_communalDatabase" translatable="false">communal_db</string>
+    <!-- Component names of allowed communal widgets -->
+    <string-array name="config_communalWidgetAllowlist" translatable="false" />
 
     <!-- Component name of communal source service -->
     <string name="config_communalSourceComponent" translatable="false">@null</string>
@@ -753,6 +826,9 @@
     <!-- Flag to enable privacy dot views, it shall be true for normal case -->
     <bool name="config_enablePrivacyDot">true</bool>
 
+    <!-- Flag to enable privacy chip animation, it shall be true for normal case -->
+    <bool name="config_enablePrivacyChipAnimation">true</bool>
+
     <!-- Class for the communal source connector to be used -->
     <string name="config_communalSourceConnector" translatable="false"></string>
 
@@ -783,11 +859,13 @@
 
     <!-- Icons that don't show in a collapsed non-keyguard statusbar -->
     <string-array name="config_collapsed_statusbar_icon_blocklist" translatable="false">
+        <item>@*android:string/status_bar_volume</item>
         <item>@*android:string/status_bar_call_strength</item>
     </string-array>
 
     <!-- Icons that don't show in a collapsed statusbar on keyguard -->
     <string-array name="config_keyguard_statusbar_icon_blocklist" translatable="false">
+        <item>@*android:string/status_bar_volume</item>
         <item>@*android:string/status_bar_call_strength</item>
     </string-array>
 
@@ -830,4 +908,109 @@
     <!-- Whether the floating rotation button should be on the left/right in the device's natural
          orientation -->
     <bool name="floating_rotation_button_position_left">true</bool>
+
+    <!-- Configuration to set Learn more in device logs as URL link -->
+    <bool name="log_access_confirmation_learn_more_as_link">true</bool>
+
+    <!-- [START] MULTI SHADE -->
+    <!-- Whether the device should use dual shade. If false, the device uses single shade. -->
+    <bool name="dual_shade_enabled">true</bool>
+    <!--
+    When in dual shade, where should the horizontal split be on the screen to help determine whether
+    the user is pulling down the left shade or the right shade. Must be between 0.0 and 1.0,
+    inclusive. In other words: how much of the left-hand side of the screen, when pulled down on,
+    would reveal the left-hand side shade.
+
+    More concretely:
+    A value of 0.67 means that the left two-thirds of the screen are dedicated to the left-hand side
+    shade and the remaining one-third of the screen on the right is dedicated to the right-hand side
+    shade.
+    -->
+    <dimen name="dual_shade_split_fraction">0.67</dimen>
+    <!-- Width of the left-hand side shade. -->
+    <dimen name="left_shade_width">436dp</dimen>
+    <!-- Width of the right-hand side shade. -->
+    <dimen name="right_shade_width">436dp</dimen>
+    <!--
+    Opaque version of the scrim that shows up behind dual shades. The alpha channel is driven
+    programmatically.
+    -->
+    <color name="opaque_scrim">#D9D9D9</color>
+    <!-- Maximum opacity when the scrim that shows up behind the dual shades is fully visible. -->
+    <dimen name="dual_shade_scrim_alpha">0.1</dimen>
+    <!--
+    The amount that the user must swipe down when the shade is fully collapsed to automatically
+    expand once the user lets go of the shade. If the user swipes less than this amount, the shade
+    will automatically revert back to fully collapsed once the user stops swiping.
+    -->
+    <dimen name="shade_swipe_expand_threshold">0.5</dimen>
+    <!--
+    The amount that the user must swipe up when the shade is fully expanded to automatically
+    collapse once the user lets go of the shade. If the user swipes less than this amount, the shade
+    will automatically revert back to fully expanded once the user stops swiping.
+    -->
+    <dimen name="shade_swipe_collapse_threshold">0.5</dimen>
+    <!-- [END] MULTI SHADE -->
+
+    <!-- Time (in ms) to delay the bouncer views from showing when passive auth may be used for
+    device entry. -->
+    <integer name="primary_bouncer_passive_auth_delay">500</integer>
+
+    <!--
+    The package name of the app store app. If empty, features using this should be gracefully
+    disabled.
+    -->
+    <string name="config_appStorePackageName" translatable="false"></string>
+
+    <!-- Template for a link that leads to an app page in the relevant app store. If empty,
+    features using this should be gracefully disabled. If not empty, it must include a
+    "$packageName" part that will be replaced by the code with the package name of the target app.
+    -->
+    <string name="config_appStoreAppLinkTemplate" translatable="false"></string>
+
+    <!-- Flag controlling whether visual query attention detection has been enabled. -->
+    <bool name="config_enableVisualQueryAttentionDetection">false</bool>
+
+    <!-- Whether to show bottom sheets edge to edge -->
+    <bool name="config_edgeToEdgeBottomSheetDialog">true</bool>
+
+    <!-- Device specific config that controls whether rest to unlock feature is supported.  -->
+    <bool name="config_restToUnlockSupported">false</bool>
+
+    <!--
+    Time in milliseconds the user has to touch the side FPS sensor to successfully authenticate when
+    the screen is turned off with AOD not enabled.
+    TODO(b/302332976) Get this value from the HAL if they can provide an API for it.
+    -->
+    <integer name="config_restToUnlockDurationScreenOff">500</integer>
+    <!--
+    Time in milliseconds the user has to touch the side FPS sensor to successfully authenticate
+    TODO(b/302332976) Get this value from the HAL if they can provide an API for it.
+    -->
+    <integer name="config_restToUnlockDurationDefault">300</integer>
+
+    <!--
+    Width in pixels of the Side FPS sensor.
+    -->
+    <integer name="config_sfpsSensorWidth">200</integer>
+
+    <!-- Component name for Home Panel Dream -->
+    <string name="config_homePanelDreamComponent" translatable="false">
+        com.android.systemui/com.android.systemui.dreams.homecontrols.HomeControlsDreamService
+    </string>
+
+    <!--
+    They are service names that, if enabled, will cause the magnification settings button
+    to never hide after timeout.
+    -->
+    <string-array name="services_always_show_magnification_settings" translatable="false">
+        <item>com.android.switchaccess.SwitchAccessService</item>
+        <item>com.google.android.apps.accessibility.voiceaccess.JustSpeakService</item>
+    </string-array>
+
+    <!--  Whether to use a machine learning model for back gesture falsing. -->
+    <bool name="config_useBackGestureML">true</bool>
+
+    <!-- Whether volume panel should use the large screen layout or not -->
+    <bool name="volume_panel_is_large_screen">false</bool>
 </resources>

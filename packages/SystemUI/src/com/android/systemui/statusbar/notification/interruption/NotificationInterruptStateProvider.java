@@ -16,6 +16,8 @@
 
 package com.android.systemui.statusbar.notification.interruption;
 
+import androidx.annotation.NonNull;
+
 import com.android.systemui.statusbar.notification.collection.NotificationEntry;
 
 /**
@@ -33,7 +35,7 @@ public interface NotificationInterruptStateProvider {
         /**
          * Full screen intents are disabled.
          */
-        NO_FSI_DISABLED(false),
+        NO_FSI_SHOW_STICKY_HUN(false),
         /**
          * No full screen intent included, so there is nothing to show.
          */
@@ -96,9 +98,13 @@ public interface NotificationInterruptStateProvider {
          */
         NO_FSI_NO_HUN_OR_KEYGUARD(false),
         /**
-         * No conditions blocking FSI launch.
+         * The notification is coming from a suspended packages, so FSI is suppressed.
          */
-        FSI_EXPECTED_NOT_TO_HUN(true);
+        NO_FSI_SUSPENDED(false),
+        /**
+         * The device is not provisioned, launch FSI.
+         */
+        FSI_NOT_PROVISIONED(true);
 
         public final boolean shouldLaunch;
 
@@ -159,7 +165,8 @@ public interface NotificationInterruptStateProvider {
      * @param entry the entry to evaluate
      * @return FullScreenIntentDecision representing the decision for whether to show the intent
      */
-    FullScreenIntentDecision getFullScreenIntentDecision(NotificationEntry entry);
+    @NonNull
+    FullScreenIntentDecision getFullScreenIntentDecision(@NonNull NotificationEntry entry);
 
     /**
      * Write the full screen launch decision for the given entry to logs.
@@ -174,16 +181,8 @@ public interface NotificationInterruptStateProvider {
      */
     void addSuppressor(NotificationInterruptSuppressor suppressor);
 
-    void setHeadsUpStoplist();
-    void setHeadsUpBlacklist();
-
     /**
-     * Whether heads-up notification should be skipped when Less Boring heads up is enabled.
+     * Remove a component that can suppress visual interruptions.
      */
-    void setUseLessBoringHeadsUp(boolean lessBoring);
-
-    /**
-     * Whether reTicker mode is active; then disable Less Boring heads up
-     */
-    void setUseReticker(boolean reTicker);
+    void removeSuppressor(NotificationInterruptSuppressor suppressor);
 }

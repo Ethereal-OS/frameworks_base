@@ -33,11 +33,13 @@ import android.util.IndentingPrintWriter;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.util.Preconditions;
 import com.android.server.LocalServices;
+import com.android.server.pm.UserManagerInternal;
 
-import ink.kaleidoscope.server.ParallelSpaceManagerService;
+import com.android.server.euclid.ParallelSpaceManagerService;
 
 import java.io.FileDescriptor;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * Provides accessors and listeners for all user info.
@@ -52,9 +54,19 @@ public class SystemUserInfoHelper extends UserInfoHelper {
     @Nullable private IActivityManager mActivityManager;
     @GuardedBy("this")
     @Nullable private UserManager mUserManager;
+    @GuardedBy("this")
+    @Nullable private UserManagerInternal mUserManagerInternal;
 
     public SystemUserInfoHelper(Context context) {
         mContext = context;
+    }
+
+    /** The function should be called when PHASE_SYSTEM_SERVICES_READY. */
+    public synchronized void onSystemReady() {
+        mUserManagerInternal =
+                Objects.requireNonNull(LocalServices.getService(UserManagerInternal.class));
+        mUserManagerInternal.addUserVisibilityListener(
+                (userId, visible) -> dispatchOnVisibleUserChanged(userId, visible));
     }
 
     @Nullable
@@ -135,6 +147,24 @@ public class SystemUserInfoHelper extends UserInfoHelper {
             }
         } else {
             return UserHandle.USER_NULL;
+        }
+    }
+
+    @Override
+    public boolean isVisibleUserId(@UserIdInt int userId) {
+        synchronized (this) {
+            // if you're hitting this precondition then you are invoking this before the system is
+            // ready
+            Preconditions.checkState(mUserManagerInternal != null);
+        }
+
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            synchronized (this) {
+                return mUserManagerInternal.isUserVisible(userId);
+            }
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
     }
 

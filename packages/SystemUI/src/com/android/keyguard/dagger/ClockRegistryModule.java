@@ -16,11 +16,12 @@
 
 package com.android.keyguard.dagger;
 
+import static com.android.systemui.Flags.migrateClocksToBlueprint;
+
 import android.content.Context;
 import android.content.res.Resources;
 import android.view.LayoutInflater;
 
-import com.android.systemui.R;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Application;
 import com.android.systemui.dagger.qualifiers.Background;
@@ -28,11 +29,15 @@ import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.flags.FeatureFlags;
 import com.android.systemui.flags.Flags;
 import com.android.systemui.plugins.PluginManager;
+import com.android.systemui.plugins.clocks.ClockMessageBuffers;
+import com.android.systemui.res.R;
 import com.android.systemui.shared.clocks.ClockRegistry;
 import com.android.systemui.shared.clocks.DefaultClockProvider;
+import com.android.systemui.util.ThreadAssert;
 
 import dagger.Module;
 import dagger.Provides;
+
 import kotlinx.coroutines.CoroutineDispatcher;
 import kotlinx.coroutines.CoroutineScope;
 
@@ -50,7 +55,8 @@ public abstract class ClockRegistryModule {
             @Background CoroutineDispatcher bgDispatcher,
             FeatureFlags featureFlags,
             @Main Resources resources,
-            LayoutInflater layoutInflater) {
+            LayoutInflater layoutInflater,
+            ClockMessageBuffers clockBuffers) {
         ClockRegistry registry = new ClockRegistry(
                 context,
                 pluginManager,
@@ -59,8 +65,18 @@ public abstract class ClockRegistryModule {
                 bgDispatcher,
                 featureFlags.isEnabled(Flags.LOCKSCREEN_CUSTOM_CLOCKS),
                 /* handleAllUsers= */ true,
-                new DefaultClockProvider(context, layoutInflater, resources),
-                context.getString(R.string.lockscreen_clock_id_fallback));
+                new DefaultClockProvider(
+                        context,
+                        layoutInflater,
+                        resources,
+                        featureFlags.isEnabled(Flags.STEP_CLOCK_ANIMATION),
+                        migrateClocksToBlueprint()),
+                context.getString(R.string.lockscreen_clock_id_fallback),
+                clockBuffers,
+                /* keepAllLoaded = */ false,
+                /* subTag = */ "System",
+                /* isTransitClockEnabled = */ featureFlags.isEnabled(Flags.TRANSIT_CLOCK),
+                new ThreadAssert());
         registry.registerListeners();
         return registry;
     }

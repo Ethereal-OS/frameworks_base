@@ -36,14 +36,6 @@
         systemui:isVertical="false">
 
         <LinearLayout
-            android:id="@+id/ends_group"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="horizontal"
-            android:clipToPadding="false"
-            android:clipChildren="false" />
-
-        <LinearLayout
             android:id="@+id/center_group"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
@@ -51,6 +43,20 @@
             android:gravity="center"
             android:orientation="horizontal"
             android:clipToPadding="false"
+            android:clipChildren="false" />
+
+        <LinearLayout
+            android:id="@+id/ends_group"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:clipToPadding="false"
+            android:clipChildren="false" />
+
+        <FrameLayout
+            android:id="@+id/dpad_group"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:clipChildren="false" />
 
     </com.android.systemui.navigationbar.buttons.NearestTouchFrame>

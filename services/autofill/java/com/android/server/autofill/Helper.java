@@ -16,6 +16,8 @@
 
 package com.android.server.autofill;
 
+import static com.android.server.autofill.Helper.sDebug;
+
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.UserIdInt;
@@ -23,11 +25,11 @@ import android.app.ActivityManager;
 import android.app.assist.AssistStructure;
 import android.app.assist.AssistStructure.ViewNode;
 import android.app.assist.AssistStructure.WindowNode;
-import android.app.slice.Slice;
-import android.app.slice.SliceItem;
 import android.content.ComponentName;
-import android.graphics.drawable.Icon;
+import android.content.Context;
+import android.hardware.display.DisplayManager;
 import android.metrics.LogMaker;
+import android.os.UserManager;
 import android.service.autofill.Dataset;
 import android.service.autofill.InternalSanitizer;
 import android.service.autofill.SaveInfo;
@@ -35,6 +37,7 @@ import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Slog;
+import android.view.Display;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.autofill.AutofillId;
@@ -43,12 +46,15 @@ import android.widget.RemoteViews;
 
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.internal.util.ArrayUtils;
+import com.android.server.utils.Slogf;
 
 import java.io.PrintWriter;
+import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 
 public final class Helper {
 
@@ -81,15 +87,15 @@ public final class Helper {
     private Helper() {
         throw new UnsupportedOperationException("contains static members only");
     }
-    
+
     private static boolean checkRemoteViewUriPermissions(
             @UserIdInt int userId, @NonNull RemoteViews rView) {
         final AtomicBoolean permissionsOk = new AtomicBoolean(true);
 
         rView.visitUris(uri -> {
-            int uriOwnerId = android.content.ContentProvider.getUserIdFromUri(uri, userId);
+            int uriOwnerId = android.content.ContentProvider.getUserIdFromUri(uri);
             boolean allowed = uriOwnerId == userId;
-            permissionsOk.set(allowed && permissionsOk.get());
+            permissionsOk.set(allowed & permissionsOk.get());
         });
 
         return permissionsOk.get();
@@ -117,48 +123,6 @@ public final class Helper {
                     + " tried accessing resource that does not belong to them");
         }
         return (ok ? rView : null);
-    }
-
-    /**
-     * Checks the URI permissions of the icon in the slice, to see if the current userId is able to
-     * access it.
-     *
-     * <p>Returns null if slice contains user inaccessible icons
-     *
-     * <p>TODO: instead of returning a null Slice when the current userId cannot access an icon,
-     * return a reconstructed Slice without the icons. This is currently non-trivial since there are
-     * no public methods to generically add SliceItems to Slices
-     */
-    public static @Nullable Slice sanitizeSlice(Slice slice) {
-        if (slice == null) {
-            return null;
-        }
-
-        int userId = ActivityManager.getCurrentUser();
-
-        // Recontruct the Slice, filtering out bad icons
-        for (SliceItem sliceItem : slice.getItems()) {
-            if (!sliceItem.getFormat().equals(SliceItem.FORMAT_IMAGE)) {
-                // Not an image slice
-                continue;
-            }
-
-            Icon icon = sliceItem.getIcon();
-            if (icon.getType() !=  Icon.TYPE_URI
-                    && icon.getType() != Icon.TYPE_URI_ADAPTIVE_BITMAP) {
-                // No URIs to sanitize
-                continue;
-            }
-
-            int iconUriId = android.content.ContentProvider.getUserIdFromUri(icon.getUri(), userId);
-
-            if (iconUriId != userId) {
-                Slog.w(TAG, "sanitizeSlice() user: " + userId + " cannot access icons in Slice");
-                return null;
-            }
-        }
-
-        return slice;
     }
 
 
@@ -366,6 +330,45 @@ public final class Helper {
             prevIndex = index;
         }
         return true;
+    }
+
+    /**
+     * Gets a context with the proper display id.
+     *
+     * <p>For most cases it will return the provided context, but on devices that
+     * {@link UserManager#isVisibleBackgroundUsersEnabled() support visible background users}, it
+     * will return a context with the display pased as parameter.
+     */
+    static Context getDisplayContext(Context context, int displayId) {
+        if (!UserManager.isVisibleBackgroundUsersEnabled()) {
+            return context;
+        }
+        if (context.getDisplayId() == displayId) {
+            if (sDebug) {
+                Slogf.d(TAG, "getDisplayContext(): context %s already has displayId %d", context,
+                        displayId);
+            }
+            return context;
+        }
+        if (sDebug) {
+            Slogf.d(TAG, "Creating context for display %d", displayId);
+        }
+        Display display = context.getSystemService(DisplayManager.class).getDisplay(displayId);
+        if (display == null) {
+            Slogf.wtf(TAG, "Could not get context with displayId %d, Autofill operations will "
+                    + "probably fail)", displayId);
+            return context;
+        }
+
+        return context.createDisplayContext(display);
+    }
+
+    static <T> @Nullable T weakDeref(WeakReference<T> weakRef, String tag, String prefix) {
+        T deref = weakRef.get();
+        if (deref == null) {
+            Slog.wtf(tag, prefix + "fail to deref " + weakRef);
+        }
+        return deref;
     }
 
     private interface ViewNodeFilter {

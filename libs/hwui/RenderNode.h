@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <SkCamera.h>
 #include <SkMatrix.h>
 
 #include <utils/LinearAllocator.h>
@@ -115,24 +114,20 @@ public:
         return mDisplayList.containsProjectionReceiver();
     }
 
-    const char* getName() const { return mName.string(); }
+    const char* getName() const { return mName.c_str(); }
 
     void setName(const char* name) {
         if (name) {
             const char* lastPeriod = strrchr(name, '.');
             if (lastPeriod) {
-                mName.setTo(lastPeriod + 1);
+                mName = (lastPeriod + 1);
             } else {
-                mName.setTo(name);
+                mName = name;
             }
         }
     }
 
     StretchMask& getStretchMask() { return mStretchMask; }
-
-    VirtualLightRefBase* getUserContext() const { return mUserContext.get(); }
-
-    void setUserContext(VirtualLightRefBase* context) { mUserContext = context; }
 
     bool isPropertyFieldDirty(DirtyPropertyMask field) const {
         return mDirtyPropertyFields & field;
@@ -216,14 +211,21 @@ public:
 
     void output(std::ostream& output, uint32_t level);
 
+    void visit(std::function<void(const RenderNode&)>) const;
+
     void setUsageHint(UsageHint usageHint) { mUsageHint = usageHint; }
 
     UsageHint usageHint() const { return mUsageHint; }
 
     int64_t uniqueId() const { return mUniqueId; }
 
+    void setIsTextureView() { mIsTextureView = true; }
+    bool isTextureView() const { return mIsTextureView; }
+
     void markDrawStart(SkCanvas& canvas);
     void markDrawEnd(SkCanvas& canvas);
+
+    bool isIntersectOnScreen(const SkISize screenSize, SkRect src);
 
 private:
     void computeOrderingImpl(RenderNodeOp* opState,
@@ -233,12 +235,14 @@ private:
     void syncProperties();
     void syncDisplayList(TreeObserver& observer, TreeInfo* info);
     void handleForceDark(TreeInfo* info);
+    bool shouldEnableForceDark(TreeInfo* info);
 
     void prepareTreeImpl(TreeObserver& observer, TreeInfo& info, bool functorsNeedLayer);
     void pushStagingPropertiesChanges(TreeInfo& info);
     void pushStagingDisplayListChanges(TreeObserver& observer, TreeInfo& info);
     void prepareLayer(TreeInfo& info, uint32_t dirtyMask);
     void pushLayerUpdate(TreeInfo& info);
+    void pinShaderImages(TreeInfo& info);
     void deleteDisplayList(TreeObserver& observer, TreeInfo* info = nullptr);
     void damageSelf(TreeInfo& info);
 
@@ -247,7 +251,6 @@ private:
 
     const int64_t mUniqueId;
     String8 mName;
-    sp<VirtualLightRefBase> mUserContext;
 
     uint32_t mDirtyPropertyFields;
     RenderProperties mProperties;
@@ -262,7 +265,7 @@ private:
     DisplayList mDisplayList;
     DisplayList mStagingDisplayList;
 
-    int64_t mDamageGenerationId;
+    int64_t mDamageGenerationId = 0;
 
     friend class AnimatorManager;
     AnimatorManager mAnimatorManager;
@@ -290,6 +293,8 @@ private:
 
     bool mHasHolePunches;
     StretchMask mStretchMask;
+
+    bool mIsTextureView = false;
 
     // METHODS & FIELDS ONLY USED BY THE SKIA RENDERER
 public:

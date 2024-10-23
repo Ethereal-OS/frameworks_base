@@ -235,8 +235,9 @@ open class LandscapeBatteryDrawable(private val context: Context, frameColor: In
             // Dual tone means we draw the shape again, clipped to the charge level
             c.drawPath(unifiedPath, dualToneBackgroundFill)
             c.save()
-            c.clipRect(0f,
+            c.clipRect(
                     bounds.left - bounds.width() * fillFraction,
+                    0f,
                     bounds.right.toFloat(),
                     bounds.left.toFloat())
             c.drawPath(unifiedPath, fillPaint)
@@ -249,7 +250,7 @@ open class LandscapeBatteryDrawable(private val context: Context, frameColor: In
             fillPaint.color = levelColor
 
             // Show colorError below this level
-            if (batteryLevel <= Companion.CRITICAL_LEVEL && !charging) {
+            if (batteryLevel <= criticalLevel && !charging) {
                 c.save()
                 c.clipPath(scaledFill)
                 c.drawPath(levelPath, fillPaint)
@@ -275,19 +276,19 @@ open class LandscapeBatteryDrawable(private val context: Context, frameColor: In
         c.restore()
 
         if (!charging && batteryLevel < 100 && showPercent) {
-            textPaint.textSize = bounds.width() * 0.37f
-            val textHeight = -textPaint.fontMetrics.ascent
-            val pctY = (bounds.height() + textHeight) * 0.47f
-            val pctX = bounds.width() * 0.5f
+            textPaint.textSize = bounds.width() * 0.38f
+            val textHeight = +textPaint.fontMetrics.ascent
+            val pctX = (bounds.width() + textHeight)* 0.7f
+            val pctY = bounds.height()  * 0.8f
 
             textPaint.color = fillColor
             c.drawText(batteryLevel.toString(), pctX, pctY, textPaint)
 
             textPaint.color = fillColor.toInt().inv() or 0xFF000000.toInt()
             c.save()
-            c.clipRect(fillRect.left,
+            c.clipRect(fillRect.right,
                     fillRect.top ,
-                    fillRect.right + (fillRect.height() * (1 + fillFraction)),
+                    fillRect.left + (fillRect.width() * (1 - fillFraction)),
                     fillRect.bottom)
             c.drawText(batteryLevel.toString(), pctX, pctY, textPaint)
             c.restore()
@@ -366,8 +367,8 @@ open class LandscapeBatteryDrawable(private val context: Context, frameColor: In
         return batteryLevel
     }
 
-    override fun onBoundsChange(bounds: Rect?) {
-        super.onBoundsChange(bounds)
+    override fun setBounds(left: Int, top: Int, right: Int, bottom: Int) {
+        super.setBounds(left, top, right, bottom)
         updateSize()
     }
 
@@ -458,7 +459,6 @@ open class LandscapeBatteryDrawable(private val context: Context, frameColor: In
         private const val TAG = "LandscapeBatteryDrawable"
         private const val WIDTH = 24f
         private const val HEIGHT = 12f
-        private const val CRITICAL_LEVEL = 15
         // On a 12x20 grid, how wide to make the fill protection stroke.
         // Scales when our size changes
         private const val PROTECTION_STROKE_WIDTH = 3f

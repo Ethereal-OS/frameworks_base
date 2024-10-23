@@ -16,7 +16,7 @@
 
 package com.android.internal.lineage.hardware;
 
-import com.android.internal.util.ethereal.FileUtils;
+import com.android.internal.util.euclid.FileUtils;
 
 /**
  * Reader mode

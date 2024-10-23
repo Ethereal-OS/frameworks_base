@@ -57,6 +57,7 @@ import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserManager;
+import android.provider.DeviceConfig;
 import android.provider.Settings;
 import android.text.SpannableStringBuilder;
 import android.text.method.LinkMovementMethod;
@@ -72,9 +73,8 @@ import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import com.android.internal.jank.InteractionJankMonitor;
-import com.android.systemui.R;
 import com.android.systemui.animation.DialogCuj;
-import com.android.systemui.animation.DialogLaunchAnimator;
+import com.android.systemui.animation.DialogTransitionAnimator;
 import com.android.systemui.animation.Expandable;
 import com.android.systemui.common.shared.model.ContentDescription;
 import com.android.systemui.common.shared.model.Icon;
@@ -84,6 +84,7 @@ import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.qs.footer.domain.model.SecurityButtonConfig;
+import com.android.systemui.res.R;
 import com.android.systemui.security.data.model.SecurityModel;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.phone.SystemUIDialog;
@@ -110,7 +111,7 @@ public class QSSecurityFooterUtils implements DialogInterface.OnClickListener {
     private final ActivityStarter mActivityStarter;
     private final Handler mMainHandler;
     private final UserTracker mUserTracker;
-    private final DialogLaunchAnimator mDialogLaunchAnimator;
+    private final DialogTransitionAnimator mDialogTransitionAnimator;
 
     private final AtomicBoolean mShouldUseSettingsButton = new AtomicBoolean(false);
 
@@ -179,7 +180,7 @@ public class QSSecurityFooterUtils implements DialogInterface.OnClickListener {
             @Application Context context, DevicePolicyManager devicePolicyManager,
             UserTracker userTracker, @Main Handler mainHandler, ActivityStarter activityStarter,
             SecurityController securityController, @Background Looper bgLooper,
-            DialogLaunchAnimator dialogLaunchAnimator) {
+            DialogTransitionAnimator dialogTransitionAnimator) {
         mContext = context;
         mDpm = devicePolicyManager;
         mUserTracker = userTracker;
@@ -187,7 +188,7 @@ public class QSSecurityFooterUtils implements DialogInterface.OnClickListener {
         mActivityStarter = activityStarter;
         mSecurityController = securityController;
         mBgHandler = new Handler(bgLooper);
-        mDialogLaunchAnimator = dialogLaunchAnimator;
+        mDialogTransitionAnimator = dialogTransitionAnimator;
     }
 
     /** Show the device monitoring dialog. */
@@ -455,12 +456,12 @@ public class QSSecurityFooterUtils implements DialogInterface.OnClickListener {
                         ? settingsButtonText : getNegativeButton(), this);
 
                 mDialog.setView(dialogView);
-                DialogLaunchAnimator.Controller controller =
-                        expandable != null ? expandable.dialogLaunchController(new DialogCuj(
+                DialogTransitionAnimator.Controller controller =
+                        expandable != null ? expandable.dialogTransitionController(new DialogCuj(
                                 InteractionJankMonitor.CUJ_SHADE_DIALOG_OPEN, INTERACTION_JANK_TAG))
                                 : null;
                 if (controller != null) {
-                    mDialogLaunchAnimator.show(mDialog, controller);
+                    mDialogTransitionAnimator.show(mDialog, controller);
                 } else {
                     mDialog.show();
                 }
@@ -718,7 +719,8 @@ public class QSSecurityFooterUtils implements DialogInterface.OnClickListener {
                 String name = vpnName != null ? vpnName : vpnNameWorkProfile;
                 String namedVp = mDpm.getResources().getString(
                         QS_DIALOG_MANAGEMENT_NAMED_VPN,
-                        () -> mContext.getString(R.string.monitoring_description_named_vpn, name),
+                        () -> mContext.getString(
+                                R.string.monitoring_description_managed_device_named_vpn, name),
                         name);
                 message.append(namedVp);
             }
@@ -770,13 +772,6 @@ public class QSSecurityFooterUtils implements DialogInterface.OnClickListener {
         }
     }
 
-    private boolean isFinancedDevice() {
-        return mSecurityController.isDeviceManaged()
-                && mSecurityController.getDeviceOwnerType(
-                mSecurityController.getDeviceOwnerComponentOnAnyUser())
-                == DEVICE_OWNER_TYPE_FINANCED;
-    }
-
     protected class VpnSpan extends ClickableSpan {
         @Override
         public void onClick(View widget) {
@@ -795,6 +790,20 @@ public class QSSecurityFooterUtils implements DialogInterface.OnClickListener {
         @Override
         public int hashCode() {
             return 314159257; // prime
+        }
+    }
+
+    // TODO(b/259908270): remove and inline direct call to mSecurityController.isFinancedDevice()
+    private boolean isFinancedDevice() {
+        if (DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_DEVICE_POLICY_MANAGER,
+                DevicePolicyManager.ADD_ISFINANCED_DEVICE_FLAG,
+                DevicePolicyManager.ADD_ISFINANCED_FEVICE_DEFAULT)) {
+            return mSecurityController.isFinancedDevice();
+        } else {
+            return mSecurityController.isDeviceManaged()
+                    && mSecurityController.getDeviceOwnerType(
+                    mSecurityController.getDeviceOwnerComponentOnAnyUser())
+                    == DEVICE_OWNER_TYPE_FINANCED;
         }
     }
 }

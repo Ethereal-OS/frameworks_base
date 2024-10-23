@@ -27,7 +27,6 @@ import android.service.autofill.InlinePresentation;
 import android.util.Slog;
 
 import com.android.server.LocalServices;
-import com.android.server.autofill.Helper;
 import com.android.server.autofill.RemoteInlineSuggestionRenderService;
 import com.android.server.inputmethod.InputMethodManagerInternal;
 
@@ -40,9 +39,12 @@ import java.util.function.Consumer;
 final class RemoteInlineSuggestionViewConnector {
     private static final String TAG = RemoteInlineSuggestionViewConnector.class.getSimpleName();
 
-    @Nullable private final RemoteInlineSuggestionRenderService mRemoteRenderService;
-    @NonNull private final InlinePresentation mInlinePresentation;
-    @Nullable private final IBinder mHostInputToken;
+    @Nullable
+    private final RemoteInlineSuggestionRenderService mRemoteRenderService;
+    @NonNull
+    private final InlinePresentation mInlinePresentation;
+    @Nullable
+    private final IBinder mHostInputToken;
     private final int mDisplayId;
     private final int mUserId;
     private final int mSessionId;
@@ -51,6 +53,8 @@ final class RemoteInlineSuggestionViewConnector {
     private final Runnable mOnAutofillCallback;
     @NonNull
     private final Runnable mOnErrorCallback;
+    @NonNull
+    private final Runnable mOnInflateCallback;
     @NonNull
     private final Consumer<IntentSender> mStartIntentSenderFromClientApp;
 
@@ -68,6 +72,7 @@ final class RemoteInlineSuggestionViewConnector {
 
         mOnAutofillCallback = onAutofillCallback;
         mOnErrorCallback = uiCallback::onError;
+        mOnInflateCallback = uiCallback::onInflate;
         mStartIntentSenderFromClientApp = uiCallback::startIntentSender;
     }
 
@@ -76,12 +81,8 @@ final class RemoteInlineSuggestionViewConnector {
      *
      * @return true if the call is made to the remote renderer service, false otherwise.
      */
-    public boolean renderSuggestion(
-            int width, int height, @NonNull IInlineSuggestionUiCallback callback) {
-        if (Helper.sanitizeSlice(mInlinePresentation.getSlice()) == null) {
-            if (sDebug) Slog.d(TAG, "Skipped rendering inline suggestion.");
-            return false;
-        }
+    public boolean renderSuggestion(int width, int height,
+            @NonNull IInlineSuggestionUiCallback callback) {
         if (mRemoteRenderService != null) {
             if (sDebug) Slog.d(TAG, "Request to recreate the UI");
             mRemoteRenderService.renderSuggestion(callback, mInlinePresentation, width, height,
@@ -103,6 +104,10 @@ final class RemoteInlineSuggestionViewConnector {
      */
     public void onError() {
         mOnErrorCallback.run();
+    }
+
+    public void onRender() {
+        mOnInflateCallback.run();
     }
 
     /**

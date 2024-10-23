@@ -48,10 +48,10 @@ import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.qs.QSIconView;
-import com.android.systemui.plugins.qs.QSTile.SignalState;
+import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.QSHost;
-import com.android.systemui.qs.SignalTileView;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.systemui.statusbar.connectivity.IconState;
@@ -64,7 +64,7 @@ import com.android.systemui.statusbar.policy.KeyguardStateController;
 import javax.inject.Inject;
 
 /** Quick settings tile: Cellular **/
-public class CellularTile extends SecureQSTile<SignalState> {
+public class CellularTile extends SecureQSTile<BooleanState> {
 
     public static final String TILE_SPEC = "cell";
 
@@ -78,6 +78,7 @@ public class CellularTile extends SecureQSTile<SignalState> {
     @Inject
     public CellularTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -89,9 +90,8 @@ public class CellularTile extends SecureQSTile<SignalState> {
             KeyguardStateController keyguardStateController
 
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
-                statusBarStateController, activityStarter, qsLogger,
-                keyguardStateController);
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+                statusBarStateController, activityStarter, qsLogger, keyguardStateController);
         mController = networkController;
         mKeyguard = keyguardStateController;
         mDataController = mController.getMobileDataController();
@@ -99,13 +99,8 @@ public class CellularTile extends SecureQSTile<SignalState> {
     }
 
     @Override
-    public SignalState newTileState() {
-        return new SignalState();
-    }
-
-    @Override
-    public QSIconView createTileView(Context context) {
-        return new SignalTileView(context);
+    public BooleanState newTileState() {
+        return new BooleanState();
     }
 
     @Override
@@ -113,7 +108,7 @@ public class CellularTile extends SecureQSTile<SignalState> {
         if (getState().state == Tile.STATE_UNAVAILABLE) {
             return new Intent(Settings.ACTION_WIRELESS_SETTINGS);
         }
-        return getCellularSettingIntent();
+        return new Intent(Settings.Panel.ACTION_MOBILE_DATA);
     }
 
     @Override
@@ -121,6 +116,7 @@ public class CellularTile extends SecureQSTile<SignalState> {
         if (checkKeyguard(view, keyguardShowing)) {
             return;
         }
+
         if (getState().state == Tile.STATE_UNAVAILABLE) {
             return;
         }
@@ -132,7 +128,7 @@ public class CellularTile extends SecureQSTile<SignalState> {
     }
 
     private void maybeShowDisableDialog() {
-        if (Prefs.getBoolean(mContext, QS_HAS_TURNED_OFF_MOBILE_DATA, true)) {
+        if (Prefs.getBoolean(mContext, QS_HAS_TURNED_OFF_MOBILE_DATA, false)) {
             // Directly turn off mobile data if the user has seen the dialog before.
             mDataController.setMobileDataEnabled(false);
             return;
@@ -171,7 +167,7 @@ public class CellularTile extends SecureQSTile<SignalState> {
     }
 
     @Override
-    protected void handleUpdateState(SignalState state, Object arg) {
+    protected void handleUpdateState(BooleanState state, Object arg) {
         CallbackInfo cb = (CallbackInfo) arg;
         if (cb == null) {
             cb = mSignalCallback.mInfo;
@@ -182,8 +178,6 @@ public class CellularTile extends SecureQSTile<SignalState> {
         boolean mobileDataEnabled = mDataController.isMobileDataSupported()
                 && mDataController.isMobileDataEnabled();
         state.value = mobileDataEnabled;
-        state.activityIn = mobileDataEnabled && cb.activityIn;
-        state.activityOut = mobileDataEnabled && cb.activityOut;
         state.expandedAccessibilityClassName = Switch.class.getName();
         if (cb.noSim) {
             state.icon = ResourceIcon.get(R.drawable.ic_qs_no_sim);
@@ -193,7 +187,7 @@ public class CellularTile extends SecureQSTile<SignalState> {
 
         if (cb.noSim) {
             state.state = Tile.STATE_UNAVAILABLE;
-            state.secondaryLabel = r.getString(R.string.keyguard_missing_sim_message_short);
+            state.secondaryLabel = r.getString(com.android.systemui.res.R.string.keyguard_missing_sim_message_short);
         } else if (cb.airplaneModeEnabled) {
             state.state = Tile.STATE_UNAVAILABLE;
             state.secondaryLabel = r.getString(R.string.status_bar_airplane);
@@ -257,8 +251,6 @@ public class CellularTile extends SecureQSTile<SignalState> {
         CharSequence dataSubscriptionName;
         @Nullable
         CharSequence dataContentDescription;
-        boolean activityIn;
-        boolean activityOut;
         boolean noSim;
         boolean roaming;
         boolean multipleSubs;
@@ -276,8 +268,6 @@ public class CellularTile extends SecureQSTile<SignalState> {
             mInfo.dataSubscriptionName = mController.getMobileDataNetworkName();
             mInfo.dataContentDescription = indicators.qsDescription != null
                     ? indicators.typeContentDescriptionHtml : null;
-            mInfo.activityIn = indicators.activityIn;
-            mInfo.activityOut = indicators.activityOut;
             mInfo.roaming = indicators.roaming;
             mInfo.multipleSubs = mController.getNumberSubscriptions() > 1;
             refreshState(mInfo);

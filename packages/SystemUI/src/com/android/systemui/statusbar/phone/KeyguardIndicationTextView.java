@@ -30,9 +30,9 @@ import android.widget.TextView;
 
 import androidx.annotation.StyleRes;
 
+import com.android.app.animation.Interpolators;
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.systemui.R;
-import com.android.systemui.animation.Interpolators;
+import com.android.systemui.res.R;
 import com.android.systemui.keyguard.KeyguardIndication;
 
 /**
@@ -51,6 +51,7 @@ public class KeyguardIndicationTextView extends TextView {
     private KeyguardIndication mKeyguardIndicationInfo;
 
     private Animator mLastAnimator;
+    private boolean mAlwaysAnnounceText;
 
     public KeyguardIndicationTextView(Context context) {
         super(context);
@@ -96,16 +97,24 @@ public class KeyguardIndicationTextView extends TextView {
         switchIndication(indication == null ? null : indication.getMessage(), indication);
     }
 
-    public void switchIndication(KeyguardIndication indication, boolean animate) {
-        switchIndication(indication == null ? null : indication.getMessage(), indication,
-            animate, null);
-    }
-
     /**
      * Changes the text with an animation.
      */
     public void switchIndication(CharSequence text, KeyguardIndication indication) {
         switchIndication(text, indication, true, null);
+    }
+
+    /**
+     * Controls whether the text displayed in the indication area will be announced always.
+     */
+    public void setAlwaysAnnounceEnabled(boolean enabled) {
+        this.mAlwaysAnnounceText = enabled;
+        if (mAlwaysAnnounceText) {
+            // We will announce the text programmatically anyway.
+            setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_NONE);
+        } else {
+            setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
+        }
     }
 
     /**
@@ -232,6 +241,9 @@ public class KeyguardIndicationTextView extends TextView {
             setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null);
         }
         setText(mMessage);
+        if (mAlwaysAnnounceText) {
+            announceForAccessibility(mMessage);
+        }
     }
 
     private AnimatorSet getInAnimator() {
@@ -284,6 +296,6 @@ public class KeyguardIndicationTextView extends TextView {
 
     private int getYTranslationPixels() {
         return mContext.getResources().getDimensionPixelSize(
-                com.android.systemui.R.dimen.keyguard_indication_y_translation);
+                com.android.systemui.res.R.dimen.keyguard_indication_y_translation);
     }
 }

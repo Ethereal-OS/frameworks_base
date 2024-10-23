@@ -19,6 +19,7 @@ package android.service.euicc;
 import android.service.euicc.IDeleteSubscriptionCallback;
 import android.service.euicc.IDownloadSubscriptionCallback;
 import android.service.euicc.IEraseSubscriptionsCallback;
+import android.service.euicc.IGetAvailableMemoryInBytesCallback;
 import android.service.euicc.IGetDefaultDownloadableSubscriptionListCallback;
 import android.service.euicc.IGetDownloadableSubscriptionMetadataCallback;
 import android.service.euicc.IGetEidCallback;
@@ -38,8 +39,10 @@ oneway interface IEuiccService {
     void downloadSubscription(int slotId, int portIndex, in DownloadableSubscription subscription,
                 boolean switchAfterDownload, boolean forceDeactivateSim, in Bundle resolvedBundle,
                 in IDownloadSubscriptionCallback callback);
-    void getDownloadableSubscriptionMetadata(int slotId, in DownloadableSubscription subscription,
-            boolean forceDeactivateSim, in IGetDownloadableSubscriptionMetadataCallback callback);
+    void getDownloadableSubscriptionMetadata(
+            int slotId, int portIndex, in DownloadableSubscription subscription,
+            boolean switchAfterDownload, boolean forceDeactivateSim,
+            in IGetDownloadableSubscriptionMetadataCallback callback);
     void getEid(int slotId, in IGetEidCallback callback);
     void getOtaStatus(int slotId, in IGetOtaStatusCallback callback);
     void startOtaIfNecessary(int slotId, in IOtaStatusChangedCallback statusChangedCallback);
@@ -58,4 +61,5 @@ oneway interface IEuiccService {
     void retainSubscriptionsForFactoryReset(
             int slotId, in IRetainSubscriptionsForFactoryResetCallback callback);
     void dump(in IEuiccServiceDumpResultCallback callback);
+    void getAvailableMemoryInBytes(int slotId, in IGetAvailableMemoryInBytesCallback callback);
 }

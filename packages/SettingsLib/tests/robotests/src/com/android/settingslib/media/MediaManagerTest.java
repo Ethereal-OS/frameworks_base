@@ -52,35 +52,7 @@ public class MediaManagerTest {
 
         when(mDevice.getId()).thenReturn(TEST_ID);
 
-        mMediaManager = new MediaManager(mContext, null) {
-            @Override
-            public void startScan() {
-
-            }
-
-            @Override
-            public void stopScan() {
-
-            }
-        };
-    }
-
-    @Test
-    public void dispatchDeviceAdded_registerCallback_shouldDispatchCallback() {
-        mMediaManager.registerCallback(mCallback);
-
-        mMediaManager.dispatchDeviceAdded(mDevice);
-
-        verify(mCallback).onDeviceAdded(mDevice);
-    }
-
-    @Test
-    public void dispatchDeviceRemoved_registerCallback_shouldDispatchCallback() {
-        mMediaManager.registerCallback(mCallback);
-
-        mMediaManager.dispatchDeviceRemoved(mDevice);
-
-        verify(mCallback).onDeviceRemoved(mDevice);
+        mMediaManager = new MediaManager(mContext, null) {};
     }
 
     @Test
@@ -108,15 +80,6 @@ public class MediaManagerTest {
         mMediaManager.dispatchConnectedDeviceChanged(TEST_ID);
 
         verify(mCallback).onConnectedDeviceChanged(TEST_ID);
-    }
-
-    @Test
-    public void dispatchDataChanged_registerCallback_shouldDispatchCallback() {
-        mMediaManager.registerCallback(mCallback);
-
-        mMediaManager.dispatchDataChanged();
-
-        verify(mCallback).onDeviceAttributesChanged();
     }
 
     @Test

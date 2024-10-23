@@ -16,41 +16,31 @@
 
 package com.android.systemui.screenshot;
 
-import static com.android.systemui.screenshot.LogConfig.DEBUG_ACTIONS;
 import static com.android.systemui.screenshot.LogConfig.DEBUG_CALLBACK;
 import static com.android.systemui.screenshot.LogConfig.DEBUG_STORAGE;
 import static com.android.systemui.screenshot.LogConfig.logTag;
 import static com.android.systemui.screenshot.ScreenshotNotificationSmartActionsProvider.ScreenshotSmartActionType;
 
-import android.app.ActivityTaskManager;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ClipDescription;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.UserInfo;
-import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Process;
-import android.os.RemoteException;
 import android.os.UserHandle;
-import android.os.UserManager;
 import android.provider.DeviceConfig;
-import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
-import com.android.systemui.R;
 import com.android.systemui.flags.FeatureFlags;
-import com.android.systemui.flags.Flags;
-import com.android.systemui.screenshot.ScreenshotController.SavedImageData.ActionTransition;
+import com.android.systemui.res.R;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
@@ -61,7 +51,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Supplier;
 
 /**
  * An AsyncTask that saves an image to the media store in the background.
@@ -71,6 +60,7 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
 
     private static final String SCREENSHOT_ID_TEMPLATE = "Screenshot_%s";
     private static final String SCREENSHOT_SHARE_SUBJECT_TEMPLATE = "Screenshot (%s)";
+    public static final String EXTRA_SCREENSHOT_USER_HANDLE = "screenshot-userhandle";
 
     private final Context mContext;
     private FeatureFlags mFlags;
@@ -82,7 +72,6 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
     private final ScreenshotNotificationSmartActionsProvider mSmartActionsProvider;
     private String mScreenshotId;
     private final Random mRandom = new Random();
-    private final Supplier<ActionTransition> mSharedElementTransition;
     private final ImageExporter mImageExporter;
     private long mImageTime;
 
@@ -92,7 +81,6 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
             ImageExporter exporter,
             ScreenshotSmartActions screenshotSmartActions,
             ScreenshotController.SaveImageInBackgroundData data,
-            Supplier<ActionTransition> sharedElementTransition,
             ScreenshotNotificationSmartActionsProvider
                     screenshotNotificationSmartActionsProvider
     ) {
@@ -101,7 +89,6 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
         mScreenshotSmartActions = screenshotSmartActions;
         mImageData = new ScreenshotController.SavedImageData();
         mQuickShareData = new ScreenshotController.QuickShareData();
-        mSharedElementTransition = sharedElementTransition;
         mImageExporter = exporter;
 
         // Prepare all the output metadata
@@ -121,16 +108,13 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
         }
         // TODO: move to constructor / from ScreenshotRequest
         final UUID requestId = UUID.randomUUID();
-        final UserHandle user = mFlags.isEnabled(Flags.SCREENSHOT_WORK_PROFILE_POLICY)
-                ? mParams.owner : getUserHandleOfForegroundApplication(mContext);
 
         Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
 
         Bitmap image = mParams.image;
         mScreenshotId = String.format(SCREENSHOT_ID_TEMPLATE, requestId);
 
-        boolean savingToOtherUser = mFlags.isEnabled(Flags.SCREENSHOT_WORK_PROFILE_POLICY)
-                && (user != Process.myUserHandle());
+        boolean savingToOtherUser = mParams.owner != Process.myUserHandle();
         // Smart actions don't yet work for cross-user saves.
         boolean smartActionsEnabled = !savingToOtherUser
                 && DeviceConfig.getBoolean(DeviceConfig.NAMESPACE_SYSTEMUI,
@@ -142,7 +126,7 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
                 // queried and surfaced before image compress/export. Action intent would not be
                 // used, because it does not contain image URL.
                 Notification.Action quickShare =
-                        queryQuickShareAction(mScreenshotId, image, user, null);
+                        queryQuickShareAction(mScreenshotId, image, mParams.owner, null);
                 if (quickShare != null) {
                     mQuickShareData.quickShareAction = quickShare;
                     mParams.mQuickShareActionsReadyListener.onActionsReady(mQuickShareData);
@@ -152,7 +136,7 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
             // Call synchronously here since already on a background thread.
             ListenableFuture<ImageExporter.Result> future =
                     mImageExporter.export(Runnable::run, requestId, image, mParams.owner,
-                            params != null ? params[0] : null);
+                            mParams.displayId, params != null ? params[0] : null);
             ImageExporter.Result result = future.get();
             Log.d(TAG, "Saved screenshot: " + result);
             final Uri uri = result.uri;
@@ -162,7 +146,7 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
                     mScreenshotSmartActions.getSmartActionsFuture(
                             mScreenshotId, uri, image, mSmartActionsProvider,
                             ScreenshotSmartActionType.REGULAR_SMART_ACTIONS,
-                            smartActionsEnabled, user);
+                            smartActionsEnabled, mParams.owner);
             List<Notification.Action> smartActions = new ArrayList<>();
             if (smartActionsEnabled) {
                 int timeoutMs = DeviceConfig.getInt(
@@ -178,19 +162,14 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
             }
 
             mImageData.uri = uri;
-            mImageData.owner = user;
+            mImageData.owner = mParams.owner;
             mImageData.smartActions = smartActions;
-            mImageData.viewTransition = createViewAction(mContext, mContext.getResources(), uri,
-                    smartActionsEnabled);
-            mImageData.shareTransition = createShareAction(mContext, mContext.getResources(), uri,
-                    smartActionsEnabled);
-            mImageData.editTransition = createEditAction(mContext, mContext.getResources(), uri,
-                    smartActionsEnabled);
-            mImageData.deleteAction = createDeleteAction(mContext, mContext.getResources(), uri,
-                    smartActionsEnabled);
+            mImageData.lensAction = createLensAction(mContext, uri,
+                    smartActionsEnabled, mParams.owner);
             mImageData.quickShareAction = createQuickShareAction(
                     mQuickShareData.quickShareAction, mScreenshotId, uri, mImageTime, image,
-                    user);
+                    mParams.owner);
+            mImageData.deleteAction = createDeleteAction(uri, smartActionsEnabled);
             mImageData.subject = getSubjectString(mImageTime);
 
             mParams.mActionsReadyListener.onActionsReady(mImageData);
@@ -203,9 +182,7 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
         } catch (Exception e) {
             // IOException/UnsupportedOperationException may be thrown if external storage is
             // not mounted
-            if (DEBUG_STORAGE) {
-                Log.d(TAG, "Failed to store screenshot", e);
-            }
+            Log.d(TAG, "Failed to store screenshot", e);
             mParams.clearImage();
             mImageData.reset();
             mQuickShareData.reset();
@@ -242,209 +219,33 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
         mParams.clearImage();
     }
 
-    @VisibleForTesting
-    Supplier<ActionTransition> createViewAction(Context context, Resources r, Uri uri,
-            boolean smartActionsEnabled) {
-        return () -> {
-            ActionTransition transition = mSharedElementTransition.get();
-
-            // Note: the view, share and edit actions are proxied through ActionProxyReceiver in
-            // order to do some common work like dismissing the keyguard and sending
-            // closeSystemWindows
-
-            // Create a view intent, if a specific package is provided as the viewer, then
-            // launch that directly
-            Intent viewIntent = new Intent(Intent.ACTION_VIEW);
-            viewIntent.setDataAndType(uri, "image/png");
-            viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-
-            PendingIntent pendingIntent = PendingIntent.getActivityAsUser(
-                    context, 0, viewIntent, PendingIntent.FLAG_IMMUTABLE,
-                    transition.bundle, UserHandle.CURRENT);
-
-            // Make sure pending intents for the system user are still unique across users
-            // by setting the (otherwise unused) request code to the current user id.
-            int requestCode = mContext.getUserId();
-
-            // Create a view action
-            PendingIntent viewAction = PendingIntent.getBroadcastAsUser(context, requestCode,
-                    new Intent(context, ActionProxyReceiver.class)
-                            .putExtra(ScreenshotController.EXTRA_ACTION_INTENT, pendingIntent)
-                            .putExtra(ScreenshotController.EXTRA_ID, mScreenshotId)
-                            .putExtra(ScreenshotController.EXTRA_SMART_ACTIONS_ENABLED,
-                                    smartActionsEnabled)
-                            .putExtra(ScreenshotController.EXTRA_OVERRIDE_TRANSITION, true)
-                            .setAction(Intent.ACTION_VIEW)
-                            .addFlags(Intent.FLAG_RECEIVER_FOREGROUND),
-                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
-                    UserHandle.SYSTEM);
-            Notification.Action.Builder editActionBuilder = new Notification.Action.Builder(
-                    Icon.createWithResource(r, com.android.internal.R.drawable.ic_screenshot),
-                    r.getString(com.android.internal.R.string.global_action_screenshot),
-                    viewAction);
-
-            transition.action = editActionBuilder.build();
-            return transition;
-        };
-    }
-
-    /**
-     * Assumes that the action intent is sent immediately after being supplied.
-     */
-    @VisibleForTesting
-    Supplier<ActionTransition> createShareAction(Context context, Resources r, Uri uri,
-            boolean smartActionsEnabled) {
-        return () -> {
-            ActionTransition transition = mSharedElementTransition.get();
-
-            // Note: Both the share and edit actions are proxied through ActionProxyReceiver in
-            // order to do some common work like dismissing the keyguard and sending
-            // closeSystemWindows
-
-            // Create a share intent, this will always go through the chooser activity first
-            // which should not trigger auto-enter PiP
-            Intent sharingIntent = new Intent(Intent.ACTION_SEND);
-            sharingIntent.setDataAndType(uri, "image/png");
-            sharingIntent.putExtra(Intent.EXTRA_STREAM, uri);
-            // Include URI in ClipData also, so that grantPermission picks it up.
-            // We don't use setData here because some apps interpret this as "to:".
-            ClipData clipdata = new ClipData(new ClipDescription("content",
-                    new String[]{ClipDescription.MIMETYPE_TEXT_PLAIN}),
-                    new ClipData.Item(uri));
-            sharingIntent.setClipData(clipdata);
-            sharingIntent.putExtra(Intent.EXTRA_SUBJECT, getSubjectString(mImageTime));
-            sharingIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-
-
-            // Make sure pending intents for the system user are still unique across users
-            // by setting the (otherwise unused) request code to the current user id.
-            int requestCode = context.getUserId();
-
-            Intent sharingChooserIntent = Intent.createChooser(sharingIntent, null)
-                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-
-
-            // cancel current pending intent (if any) since clipData isn't used for matching
-            PendingIntent pendingIntent = PendingIntent.getActivityAsUser(
-                    context, 0, sharingChooserIntent,
-                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
-                    transition.bundle, UserHandle.CURRENT);
-
-            // Create a share action for the notification
-            PendingIntent shareAction = PendingIntent.getBroadcastAsUser(context, requestCode,
-                    new Intent(context, ActionProxyReceiver.class)
-                            .putExtra(ScreenshotController.EXTRA_ACTION_INTENT, pendingIntent)
-                            .putExtra(ScreenshotController.EXTRA_DISALLOW_ENTER_PIP, true)
-                            .putExtra(ScreenshotController.EXTRA_ID, mScreenshotId)
-                            .putExtra(ScreenshotController.EXTRA_SMART_ACTIONS_ENABLED,
-                                    smartActionsEnabled)
-                            .setAction(Intent.ACTION_SEND)
-                            .addFlags(Intent.FLAG_RECEIVER_FOREGROUND),
-                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
-                    UserHandle.SYSTEM);
-
-            Notification.Action.Builder shareActionBuilder = new Notification.Action.Builder(
-                    Icon.createWithResource(r, R.drawable.ic_screenshot_share),
-                    r.getString(com.android.internal.R.string.share), shareAction);
-
-            transition.action = shareActionBuilder.build();
-            return transition;
-        };
-    }
 
     @VisibleForTesting
-    Supplier<ActionTransition> createEditAction(Context context, Resources r, Uri uri,
-            boolean smartActionsEnabled) {
-        return () -> {
-            ActionTransition transition = mSharedElementTransition.get();
-            // Note: Both the share and edit actions are proxied through ActionProxyReceiver in
-            // order to do some common work like dismissing the keyguard and sending
-            // closeSystemWindows
-
-            // Create an edit intent, if a specific package is provided as the editor, then
-            // launch that directly
-            String editorPackage = context.getString(R.string.config_screenshotEditor);
-            Intent editIntent = new Intent(Intent.ACTION_EDIT);
-            if (!TextUtils.isEmpty(editorPackage)) {
-                editIntent.setComponent(ComponentName.unflattenFromString(editorPackage));
-            }
-            editIntent.setDataAndType(uri, "image/png");
-            editIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            editIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            editIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-
-            PendingIntent pendingIntent = PendingIntent.getActivityAsUser(
-                    context, 0, editIntent, PendingIntent.FLAG_IMMUTABLE,
-                    transition.bundle, UserHandle.CURRENT);
-
-            // Make sure pending intents for the system user are still unique across users
-            // by setting the (otherwise unused) request code to the current user id.
-            int requestCode = mContext.getUserId();
-
-            // Create an edit action
-            PendingIntent editAction = PendingIntent.getBroadcastAsUser(context, requestCode,
-                    new Intent(context, ActionProxyReceiver.class)
-                            .putExtra(ScreenshotController.EXTRA_ACTION_INTENT, pendingIntent)
-                            .putExtra(ScreenshotController.EXTRA_ID, mScreenshotId)
-                            .putExtra(ScreenshotController.EXTRA_SMART_ACTIONS_ENABLED,
-                                    smartActionsEnabled)
-                            .putExtra(ScreenshotController.EXTRA_OVERRIDE_TRANSITION, true)
-                            .setAction(Intent.ACTION_EDIT)
-                            .addFlags(Intent.FLAG_RECEIVER_FOREGROUND),
-                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE,
-                    UserHandle.SYSTEM);
-            Notification.Action.Builder editActionBuilder = new Notification.Action.Builder(
-                    Icon.createWithResource(r, R.drawable.ic_screenshot_edit),
-                    r.getString(com.android.internal.R.string.screenshot_edit), editAction);
-
-            transition.action = editActionBuilder.build();
-            return transition;
-        };
-    }
-
-    @VisibleForTesting
-    Notification.Action createDeleteAction(Context context, Resources r, Uri uri,
-            boolean smartActionsEnabled) {
+    Notification.Action createLensAction(Context context, Uri uri,
+            boolean smartActionsEnabled, UserHandle user) {
         // Make sure pending intents for the system user are still unique across users
         // by setting the (otherwise unused) request code to the current user id.
         int requestCode = mContext.getUserId();
 
-        // Create a delete action for the notification
-        PendingIntent deleteAction = PendingIntent.getBroadcast(context, requestCode,
-                new Intent(context, DeleteScreenshotReceiver.class)
+        // Create a lens action for the notification
+        PendingIntent lensAction = PendingIntent.getBroadcast(context, requestCode,
+                new Intent(context, LensScreenshotReceiver.class)
                         .putExtra(ScreenshotController.SCREENSHOT_URI_ID, uri.toString())
                         .putExtra(ScreenshotController.EXTRA_ID, mScreenshotId)
                         .putExtra(ScreenshotController.EXTRA_SMART_ACTIONS_ENABLED,
                                 smartActionsEnabled)
+                        .putExtra(ScreenshotController.EXTRA_SMART_ACTIONS_ENABLED,
+                                smartActionsEnabled)
+                        .putExtra(EXTRA_SCREENSHOT_USER_HANDLE, user)
                         .addFlags(Intent.FLAG_RECEIVER_FOREGROUND),
                 PendingIntent.FLAG_CANCEL_CURRENT
                         | PendingIntent.FLAG_ONE_SHOT
                         | PendingIntent.FLAG_IMMUTABLE);
-        Notification.Action.Builder deleteActionBuilder = new Notification.Action.Builder(
-                Icon.createWithResource(r, R.drawable.ic_screenshot_delete),
-                r.getString(com.android.internal.R.string.delete), deleteAction);
+        Notification.Action.Builder lensActionBuilder = new Notification.Action.Builder(
+                Icon.createWithResource(mContext.getResources(), R.drawable.ic_screenshot_lens),
+                mContext.getResources().getString(R.string.lens), lensAction);
 
-        return deleteActionBuilder.build();
-    }
-
-    private UserHandle getUserHandleOfForegroundApplication(Context context) {
-        UserManager manager = UserManager.get(context);
-        int result;
-        // This logic matches
-        // com.android.systemui.statusbar.phone.PhoneStatusBarPolicy#updateManagedProfile
-        try {
-            result = ActivityTaskManager.getService().getLastResumedActivityUserId();
-        } catch (RemoteException e) {
-            if (DEBUG_ACTIONS) {
-                Log.d(TAG, "Failed to get UserHandle of foreground app: ", e);
-            }
-            result = context.getUserId();
-        }
-        UserInfo userInfo = manager.getUserInfo(result);
-        return userInfo.getUserHandle();
+        return lensActionBuilder.build();
     }
 
     private List<Notification.Action> buildSmartActions(
@@ -517,6 +318,29 @@ class SaveImageInBackgroundTask extends AsyncTask<String, Void, Void> {
                 .setContextual(true)
                 .addExtras(extras)
                 .build();
+    }
+
+    @VisibleForTesting
+    Notification.Action createDeleteAction(Uri uri, boolean smartActionsEnabled) {
+        // Make sure pending intents for the system user are still unique across users
+        // by setting the (otherwise unused) request code to the current user id.
+        int requestCode = mContext.getUserId();
+
+        // Create a delete action for the notification
+        Intent wrappedIntent = new Intent(mContext, DeleteScreenshotReceiver.class)
+                       .putExtra(ScreenshotController.SCREENSHOT_URI_ID, uri.toString())
+                       .putExtra(ScreenshotController.EXTRA_ID, mScreenshotId)
+                       .putExtra(ScreenshotController.EXTRA_SMART_ACTIONS_ENABLED,
+                               smartActionsEnabled)
+                       .addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+        PendingIntent deleteAction = PendingIntent.getBroadcast(mContext, requestCode, wrappedIntent,
+               PendingIntent.FLAG_CANCEL_CURRENT
+                       | PendingIntent.FLAG_ONE_SHOT
+                       | PendingIntent.FLAG_IMMUTABLE);
+        Notification.Action.Builder deleteActionBuilder = new Notification.Action.Builder(
+               Icon.createWithResource(mContext.getResources(), R.drawable.ic_screenshot_delete),
+               mContext.getResources().getString(com.android.internal.R.string.delete), deleteAction);
+        return deleteActionBuilder.build();
     }
 
     private Intent createFillInIntent(Uri uri, long imageTime) {

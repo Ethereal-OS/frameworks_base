@@ -31,11 +31,14 @@ import android.view.View;
 import android.window.WindowContainerToken;
 import android.window.WindowContainerTransaction;
 
+import androidx.annotation.Nullable;
+
 import com.android.wm.shell.R;
 import com.android.wm.shell.ShellTaskOrganizer;
 import com.android.wm.shell.common.DisplayController;
 import com.android.wm.shell.common.SyncTransactionQueue;
 import com.android.wm.shell.freeform.FreeformTaskTransitionStarter;
+import com.android.wm.shell.splitscreen.SplitScreenController;
 import com.android.wm.shell.transition.Transitions;
 
 /**
@@ -49,6 +52,7 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
     private final Choreographer mMainChoreographer;
     private final DisplayController mDisplayController;
     private final SyncTransactionQueue mSyncQueue;
+    private final Transitions mTransitions;
     private TaskOperations mTaskOperations;
 
     private final SparseArray<CaptionWindowDecoration> mWindowDecorByTaskId = new SparseArray<>();
@@ -59,13 +63,15 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
             Choreographer mainChoreographer,
             ShellTaskOrganizer taskOrganizer,
             DisplayController displayController,
-            SyncTransactionQueue syncQueue) {
+            SyncTransactionQueue syncQueue,
+            Transitions transitions) {
         mContext = context;
         mMainHandler = mainHandler;
         mMainChoreographer = mainChoreographer;
         mTaskOrganizer = taskOrganizer;
         mDisplayController = displayController;
         mSyncQueue = syncQueue;
+        mTransitions = transitions;
         if (!Transitions.ENABLE_SHELL_TRANSITIONS) {
             mTaskOperations = new TaskOperations(null, mContext, mSyncQueue);
         }
@@ -75,6 +81,9 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
     public void setFreeformTaskTransitionStarter(FreeformTaskTransitionStarter transitionStarter) {
         mTaskOperations = new TaskOperations(transitionStarter, mContext, mSyncQueue);
     }
+
+    @Override
+    public void setSplitScreenController(SplitScreenController splitScreenController) {}
 
     @Override
     public boolean onTaskOpening(
@@ -115,7 +124,8 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
         if (decoration == null) {
             createWindowDecoration(taskInfo, taskSurface, startT, finishT);
         } else {
-            decoration.relayout(taskInfo, startT, finishT);
+            decoration.relayout(taskInfo, startT, finishT, false /* applyStartTransactionOnDraw */,
+                    false /* setTaskCropAndPosition */);
         }
     }
 
@@ -127,7 +137,8 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
         final CaptionWindowDecoration decoration = mWindowDecorByTaskId.get(taskInfo.taskId);
         if (decoration == null) return;
 
-        decoration.relayout(taskInfo, startT, finishT);
+        decoration.relayout(taskInfo, startT, finishT, false /* applyStartTransactionOnDraw */,
+                false /* setTaskCropAndPosition */);
     }
 
     @Override
@@ -173,15 +184,29 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
                         mSyncQueue);
         mWindowDecorByTaskId.put(taskInfo.taskId, windowDecoration);
 
-        final TaskPositioner taskPositioner =
-                new TaskPositioner(mTaskOrganizer, windowDecoration, mDisplayController);
+        final DragPositioningCallback taskPositioner = createDragPositioningCallback(
+                windowDecoration);
         final CaptionTouchEventListener touchEventListener =
                 new CaptionTouchEventListener(taskInfo, taskPositioner);
         windowDecoration.setCaptionListeners(touchEventListener, touchEventListener);
         windowDecoration.setDragPositioningCallback(taskPositioner);
         windowDecoration.setDragDetector(touchEventListener.mDragDetector);
-        windowDecoration.relayout(taskInfo, startT, finishT);
+        windowDecoration.setTaskDragResizer((VeiledResizeTaskPositioner) taskPositioner);
+        windowDecoration.relayout(taskInfo, startT, finishT,
+                false /* applyStartTransactionOnDraw */, false /* setTaskCropAndPosition */);
         setupCaptionColor(taskInfo, windowDecoration);
+    }
+
+    private DragPositioningCallback createDragPositioningCallback(
+            CaptionWindowDecoration windowDecoration) {
+            windowDecoration.createResizeVeil();
+        return new VeiledResizeTaskPositioner(
+                mTaskOrganizer,
+                windowDecoration,
+                mDisplayController,
+                dragStartListener -> {},
+                mTransitions,
+                0 /* disallowedAreaForEndBoundsHeight */);
     }
 
     private class CaptionTouchEventListener implements
@@ -240,7 +265,7 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
          * @return {@code true} if a drag is happening; or {@code false} if it is not
          */
         @Override
-        public boolean handleMotionEvent(MotionEvent e) {
+        public boolean handleMotionEvent(@Nullable View v, MotionEvent e) {
             final RunningTaskInfo taskInfo = mTaskOrganizer.getRunningTaskInfo(mTaskId);
             if (taskInfo.getWindowingMode() == WINDOWING_MODE_FULLSCREEN) {
                 return false;
@@ -254,7 +279,13 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
                     return false;
                 }
                 case MotionEvent.ACTION_MOVE: {
-                    int dragPointerIdx = e.findPointerIndex(mDragPointerId);
+                    if (e.findPointerIndex(mDragPointerId) == -1) {
+                        mDragPointerId = e.getPointerId(0);
+                    }
+                    final CaptionWindowDecoration decoration = mWindowDecorByTaskId.get(mTaskId);
+                    // If a decor's resize drag zone is active, don't also try to reposition it.
+                    if (decoration.isHandlingDragResize()) break;
+                    final int dragPointerIdx = e.findPointerIndex(mDragPointerId);
                     mDragPositioningCallback.onDragPositioningMove(
                             e.getRawX(dragPointerIdx), e.getRawY(dragPointerIdx));
                     mIsDragging = true;
@@ -262,7 +293,10 @@ public class CaptionWindowDecorViewModel implements WindowDecorViewModel {
                 }
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL: {
-                    int dragPointerIdx = e.findPointerIndex(mDragPointerId);
+                    if (e.findPointerIndex(mDragPointerId) == -1) {
+                        mDragPointerId = e.getPointerId(0);
+                    }
+                    final int dragPointerIdx = e.findPointerIndex(mDragPointerId);
                     mDragPositioningCallback.onDragPositioningEnd(
                             e.getRawX(dragPointerIdx), e.getRawY(dragPointerIdx));
                     final boolean wasDragging = mIsDragging;

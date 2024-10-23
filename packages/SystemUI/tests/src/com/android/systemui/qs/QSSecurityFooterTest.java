@@ -40,6 +40,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.VectorDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.DeviceConfig;
 import android.provider.Settings;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.testing.AndroidTestingRunner;
@@ -52,14 +53,14 @@ import android.widget.TextView;
 
 import androidx.annotation.Nullable;
 
-import com.android.systemui.R;
 import com.android.systemui.SysuiTestCase;
-import com.android.systemui.animation.DialogLaunchAnimator;
+import com.android.systemui.animation.DialogTransitionAnimator;
 import com.android.systemui.animation.Expandable;
 import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.common.shared.model.Icon;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.qs.footer.domain.model.SecurityButtonConfig;
+import com.android.systemui.res.R;
 import com.android.systemui.security.data.model.SecurityModel;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.policy.SecurityController;
@@ -103,7 +104,7 @@ public class QSSecurityFooterTest extends SysuiTestCase {
     @Mock
     private ActivityStarter mActivityStarter;
     @Mock
-    private DialogLaunchAnimator mDialogLaunchAnimator;
+    private DialogTransitionAnimator mDialogTransitionAnimator;
     @Mock
     private BroadcastDispatcher mBroadcastDispatcher;
 
@@ -115,13 +116,20 @@ public class QSSecurityFooterTest extends SysuiTestCase {
         mTestableLooper = TestableLooper.get(this);
         Looper looper = mTestableLooper.getLooper();
         Handler mainHandler = new Handler(looper);
+        // TODO(b/259908270): remove
+        DeviceConfig.setProperty(DeviceConfig.NAMESPACE_DEVICE_POLICY_MANAGER,
+                DevicePolicyManager.ADD_ISFINANCED_DEVICE_FLAG, "true",
+                /* makeDefault= */ false);
         when(mUserTracker.getUserInfo()).thenReturn(mock(UserInfo.class));
         mFooterUtils = new QSSecurityFooterUtils(getContext(),
                 getContext().getSystemService(DevicePolicyManager.class), mUserTracker,
-                mainHandler, mActivityStarter, mSecurityController, looper, mDialogLaunchAnimator);
+                mainHandler, mActivityStarter, mSecurityController, looper,
+                mDialogTransitionAnimator);
 
         when(mSecurityController.getDeviceOwnerComponentOnAnyUser())
                 .thenReturn(DEVICE_OWNER_COMPONENT);
+        when(mSecurityController.isFinancedDevice()).thenReturn(false);
+        // TODO(b/259908270): remove
         when(mSecurityController.getDeviceOwnerType(DEVICE_OWNER_COMPONENT))
                 .thenReturn(DEVICE_OWNER_TYPE_DEFAULT);
     }
@@ -184,6 +192,8 @@ public class QSSecurityFooterTest extends SysuiTestCase {
         when(mSecurityController.isDeviceManaged()).thenReturn(true);
         when(mSecurityController.getDeviceOwnerOrganizationName())
                 .thenReturn(MANAGING_ORGANIZATION);
+        when(mSecurityController.isFinancedDevice()).thenReturn(true);
+        // TODO(b/259908270): remove
         when(mSecurityController.getDeviceOwnerType(DEVICE_OWNER_COMPONENT))
                 .thenReturn(DEVICE_OWNER_TYPE_FINANCED);
 
@@ -495,6 +505,8 @@ public class QSSecurityFooterTest extends SysuiTestCase {
     @Test
     public void testGetManagementTitleForFinancedDevice() {
         when(mSecurityController.isDeviceManaged()).thenReturn(true);
+        when(mSecurityController.isFinancedDevice()).thenReturn(true);
+        // TODO(b/259908270): remove
         when(mSecurityController.getDeviceOwnerType(DEVICE_OWNER_COMPONENT))
                 .thenReturn(DEVICE_OWNER_TYPE_FINANCED);
 
@@ -524,6 +536,8 @@ public class QSSecurityFooterTest extends SysuiTestCase {
     @Test
     public void testGetManagementMessage_deviceOwner_asFinancedDevice() {
         when(mSecurityController.isDeviceManaged()).thenReturn(true);
+        when(mSecurityController.isFinancedDevice()).thenReturn(true);
+        // TODO(b/259908270): remove
         when(mSecurityController.getDeviceOwnerType(DEVICE_OWNER_COMPONENT))
                 .thenReturn(DEVICE_OWNER_TYPE_FINANCED);
 
@@ -574,14 +588,14 @@ public class QSSecurityFooterTest extends SysuiTestCase {
         assertEquals(addLink(mContext.getString(R.string.monitoring_description_two_named_vpns,
                                  VPN_PACKAGE, VPN_PACKAGE_2)),
                 mFooterUtils.getVpnMessage(false, true, VPN_PACKAGE, VPN_PACKAGE_2));
-        assertEquals(addLink(mContext.getString(R.string.monitoring_description_named_vpn,
-                                 VPN_PACKAGE)),
+        assertEquals(addLink(mContext.getString(
+                R.string.monitoring_description_managed_device_named_vpn, VPN_PACKAGE)),
                 mFooterUtils.getVpnMessage(true, false, VPN_PACKAGE, null));
         assertEquals(addLink(mContext.getString(R.string.monitoring_description_named_vpn,
                                  VPN_PACKAGE)),
                 mFooterUtils.getVpnMessage(false, false, VPN_PACKAGE, null));
-        assertEquals(addLink(mContext.getString(R.string.monitoring_description_named_vpn,
-                                 VPN_PACKAGE_2)),
+        assertEquals(addLink(mContext.getString(
+                R.string.monitoring_description_managed_device_named_vpn, VPN_PACKAGE_2)),
                 mFooterUtils.getVpnMessage(true, true, null, VPN_PACKAGE_2));
         assertEquals(addLink(mContext.getString(
                                  R.string.monitoring_description_managed_profile_named_vpn,
@@ -689,6 +703,8 @@ public class QSSecurityFooterTest extends SysuiTestCase {
         when(mSecurityController.isDeviceManaged()).thenReturn(true);
         when(mSecurityController.getDeviceOwnerOrganizationName())
                 .thenReturn(MANAGING_ORGANIZATION);
+        when(mSecurityController.isFinancedDevice()).thenReturn(true);
+        // TODO(b/259908270): remove
         when(mSecurityController.getDeviceOwnerType(DEVICE_OWNER_COMPONENT))
                 .thenReturn(DEVICE_OWNER_TYPE_FINANCED);
 
@@ -711,17 +727,19 @@ public class QSSecurityFooterTest extends SysuiTestCase {
         when(mSecurityController.isDeviceManaged()).thenReturn(true);
         when(mSecurityController.getDeviceOwnerOrganizationName())
                 .thenReturn(MANAGING_ORGANIZATION);
+        when(mSecurityController.isFinancedDevice()).thenReturn(true);
+        // TODO(b/259908270): remove
         when(mSecurityController.getDeviceOwnerType(DEVICE_OWNER_COMPONENT))
                 .thenReturn(DEVICE_OWNER_TYPE_FINANCED);
 
         Expandable expandable = mock(Expandable.class);
-        when(expandable.dialogLaunchController(any())).thenReturn(
-                mock(DialogLaunchAnimator.Controller.class));
+        when(expandable.dialogTransitionController(any())).thenReturn(
+                mock(DialogTransitionAnimator.Controller.class));
         mFooterUtils.showDeviceMonitoringDialog(getContext(), expandable);
         ArgumentCaptor<AlertDialog> dialogCaptor = ArgumentCaptor.forClass(AlertDialog.class);
 
         mTestableLooper.processAllMessages();
-        verify(mDialogLaunchAnimator).show(dialogCaptor.capture(), any());
+        verify(mDialogTransitionAnimator).show(dialogCaptor.capture(), any());
 
         AlertDialog dialog = dialogCaptor.getValue();
         dialog.create();

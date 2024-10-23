@@ -16,6 +16,8 @@
 
 package com.android.systemui.doze;
 
+import static android.hardware.biometrics.BiometricAuthenticator.TYPE_FINGERPRINT;
+
 import static com.android.systemui.doze.DozeLog.REASON_SENSOR_QUICK_PICKUP;
 import static com.android.systemui.doze.DozeLog.REASON_SENSOR_UDFPS_LONG_PRESS;
 import static com.android.systemui.plugins.SensorManagerPlugin.Sensor.TYPE_WAKE_DISPLAY;
@@ -28,6 +30,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorManager;
 import android.hardware.TriggerEvent;
 import android.hardware.TriggerEventListener;
+import android.hardware.biometrics.BiometricAuthenticator;
 import android.hardware.display.AmbientDisplayConfiguration;
 import android.net.Uri;
 import android.os.Handler;
@@ -45,12 +48,11 @@ import com.android.internal.R;
 import com.android.internal.logging.UiEvent;
 import com.android.internal.logging.UiEventLogger;
 import com.android.internal.logging.UiEventLoggerImpl;
-import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.systemui.biometrics.AuthController;
 import com.android.systemui.plugins.SensorManagerPlugin;
-import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.phone.DozeParameters;
 import com.android.systemui.statusbar.policy.DevicePostureController;
+import com.android.systemui.user.domain.interactor.SelectedUserInteractor;
 import com.android.systemui.util.sensors.AsyncSensorManager;
 import com.android.systemui.util.sensors.ProximitySensor;
 import com.android.systemui.util.settings.SecureSettings;
@@ -98,7 +100,7 @@ public class DozeSensors {
     private final SecureSettings mSecureSettings;
     private final DevicePostureController mDevicePostureController;
     private final AuthController mAuthController;
-    private final UserTracker mUserTracker;
+    private final SelectedUserInteractor mSelectedUserInteractor;
     private final boolean mScreenOffUdfpsEnabled;
 
     // Sensors
@@ -118,7 +120,6 @@ public class DozeSensors {
     private boolean mListeningProxSensors;
     private boolean mListeningAodOnlySensors;
     private boolean mUdfpsEnrolled;
-    private boolean mEnableProx;
 
     @DevicePostureController.DevicePostureInt
     private int mDevicePosture;
@@ -156,7 +157,7 @@ public class DozeSensors {
             SecureSettings secureSettings,
             AuthController authController,
             DevicePostureController devicePostureController,
-            UserTracker userTracker
+            SelectedUserInteractor selectedUserInteractor
     ) {
         mSensorManager = sensorManager;
         mConfig = config;
@@ -169,16 +170,15 @@ public class DozeSensors {
         mProximitySensor.setTag(TAG);
         mSelectivelyRegisterProxSensors = dozeParameters.getSelectivelyRegisterSensorsUsingProx();
         mListeningProxSensors = !mSelectivelyRegisterProxSensors;
-        mEnableProx = resources.getBoolean(com.android.systemui.R.bool.doze_proximity_sensor_supported);
+        mSelectedUserInteractor = selectedUserInteractor;
         mScreenOffUdfpsEnabled =
-                config.screenOffUdfpsEnabled(KeyguardUpdateMonitor.getCurrentUser());
+                config.screenOffUdfpsEnabled(mSelectedUserInteractor.getSelectedUserId());
         mDevicePostureController = devicePostureController;
         mDevicePosture = mDevicePostureController.getDevicePosture();
         mAuthController = authController;
-        mUserTracker = userTracker;
 
         mUdfpsEnrolled =
-                mAuthController.isUdfpsEnrolled(KeyguardUpdateMonitor.getCurrentUser());
+                mAuthController.isUdfpsEnrolled(mSelectedUserInteractor.getSelectedUserId());
         mAuthController.addCallback(mAuthControllerCallback);
         mTriggerSensors = new TriggerSensor[] {
                 new TriggerSensor(
@@ -199,7 +199,6 @@ public class DozeSensors {
                         false /* touchscreen */,
                         false /* ignoresSetting */,
                         false /* requires prox */,
-                        !dozeParameters.pickupEventNeedsProximityCheck() /* performsProxCheck */,
                         true /* immediatelyReRegister */,
                         false /* requiresAod */
                 ),
@@ -218,7 +217,7 @@ public class DozeSensors {
                         true /* settingDef */,
                         true /* configured */,
                         DozeLog.REASON_SENSOR_TAP,
-                        false /* reports touch coordinates */,
+                        true /* reports touch coordinates */,
                         true /* touchscreen */,
                         false /* ignoresSetting */,
                         dozeParameters.singleTapUsesProx(mDevicePosture) /* requiresProx */,
@@ -258,7 +257,8 @@ public class DozeSensors {
                         new SensorManagerPlugin.Sensor(TYPE_WAKE_DISPLAY),
                         Settings.Secure.DOZE_WAKE_DISPLAY_GESTURE,
                         mConfig.wakeScreenGestureAvailable()
-                          && mConfig.alwaysOnEnabled(mUserTracker.getUserId()),
+                          && mConfig.alwaysOnEnabled(
+                                  mSelectedUserInteractor.getSelectedUserId(true)),
                         DozeLog.REASON_SENSOR_WAKE_UP_PRESENCE,
                         false /* reports touch coordinates */,
                         false /* touchscreen */
@@ -286,7 +286,7 @@ public class DozeSensors {
                         false /* requiresAod */
                 ),
         };
-        if (mEnableProx) {
+        if (resources.getBoolean(com.android.systemui.R.bool.doze_proximity_sensor_supported)) {
             setProxListening(false);  // Don't immediately start listening when we register.
             mProximitySensor.register(
                     proximityEvent -> {
@@ -301,12 +301,13 @@ public class DozeSensors {
 
     private boolean udfpsLongPressConfigured() {
         return mUdfpsEnrolled
-                && (mConfig.alwaysOnEnabled(mUserTracker.getUserId()) || mScreenOffUdfpsEnabled);
+                && (mConfig.alwaysOnEnabled(mSelectedUserInteractor.getSelectedUserId(true))
+                || mScreenOffUdfpsEnabled);
     }
 
     private boolean quickPickUpConfigured() {
         return mUdfpsEnrolled
-                && mConfig.quickPickupSensorEnabled(KeyguardUpdateMonitor.getCurrentUser());
+                && mConfig.quickPickupSensorEnabled(mSelectedUserInteractor.getSelectedUserId());
     }
 
     /**
@@ -476,7 +477,7 @@ public class DozeSensors {
     private final ContentObserver mSettingsObserver = new ContentObserver(mHandler) {
         @Override
         public void onChange(boolean selfChange, Collection<Uri> uris, int flags, int userId) {
-            if (userId != mUserTracker.getUserId()) {
+            if (userId != mSelectedUserInteractor.getSelectedUserId(true)) {
                 return;
             }
             for (TriggerSensor s : mTriggerSensors) {
@@ -509,15 +510,14 @@ public class DozeSensors {
         for (TriggerSensor s : mTriggerSensors) {
             idpw.println("Sensor: " + s.toString());
         }
-        if (mEnableProx) // Useless
-            idpw.println("ProxSensor: " + mProximitySensor.toString());
+        idpw.println("ProxSensor: " + mProximitySensor.toString());
     }
 
     /**
      * @return true if prox is currently near, false if far or null if unknown.
      */
     public Boolean isProximityCurrentlyNear() {
-        return mEnableProx ? mProximitySensor.isNear() : null;
+        return mProximitySensor.isNear();
     }
 
     @VisibleForTesting
@@ -584,7 +584,8 @@ public class DozeSensors {
                     false /* ignoresSetting */,
                     false /* requiresProx */,
                     performsProxCheck,
-                    true /* immediatelyReRegister */
+                    true /* immediatelyReRegister */,
+                    false
             );
         }
 
@@ -703,8 +704,8 @@ public class DozeSensors {
             mRequiresTouchscreen = requiresTouchscreen;
             mIgnoresSetting = ignoresSetting;
             mRequiresProx = requiresProx;
-            mRequiresAod = requiresAod;
             mPerformsProxCheck = performsProxCheck;
+            mRequiresAod = requiresAod;
             mPosture = posture;
             mImmediatelyReRegister = immediatelyReRegister;
         }
@@ -788,13 +789,13 @@ public class DozeSensors {
         }
 
         protected boolean enabledBySetting() {
-            if (!mConfig.enabled(mUserTracker.getUserId())) {
+            if (!mConfig.enabled(mSelectedUserInteractor.getSelectedUserId(true))) {
                 return false;
             } else if (TextUtils.isEmpty(mSetting)) {
                 return true;
             }
             return mSecureSettings.getIntForUser(mSetting, mSettingDefault ? 1 : 0,
-                    mUserTracker.getUserId()) != 0;
+                    mSelectedUserInteractor.getSelectedUserId(true)) != 0;
         }
 
         @Override
@@ -831,7 +832,8 @@ public class DozeSensors {
                     screenX = event.values[0];
                     screenY = event.values[1];
                 }
-                mSensorCallback.onSensorPulse(mPulseReason, mPerformsProxCheck, screenX, screenY, event.values);
+                mSensorCallback.onSensorPulse(mPulseReason, mPerformsProxCheck,
+                        screenX, screenY, event.values);
                 if (!mRegistered && mImmediatelyReRegister) {
                     updateListening();
                 }
@@ -959,18 +961,22 @@ public class DozeSensors {
 
     private final AuthController.Callback mAuthControllerCallback = new AuthController.Callback() {
         @Override
-        public void onAllAuthenticatorsRegistered() {
-            updateUdfpsEnrolled();
+        public void onAllAuthenticatorsRegistered(@BiometricAuthenticator.Modality int modality) {
+            if (modality == TYPE_FINGERPRINT) {
+                updateUdfpsEnrolled();
+            }
         }
 
         @Override
-        public void onEnrollmentsChanged() {
-            updateUdfpsEnrolled();
+        public void onEnrollmentsChanged(@BiometricAuthenticator.Modality int modality) {
+            if (modality == TYPE_FINGERPRINT) {
+                updateUdfpsEnrolled();
+            }
         }
 
         private void updateUdfpsEnrolled() {
             mUdfpsEnrolled = mAuthController.isUdfpsEnrolled(
-                    KeyguardUpdateMonitor.getCurrentUser());
+                    mSelectedUserInteractor.getSelectedUserId());
             for (TriggerSensor sensor : mTriggerSensors) {
                 if (REASON_SENSOR_QUICK_PICKUP == sensor.mPulseReason) {
                     sensor.setConfigured(quickPickUpConfigured());

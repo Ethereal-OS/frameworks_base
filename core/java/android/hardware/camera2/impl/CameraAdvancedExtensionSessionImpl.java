@@ -29,7 +29,6 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraExtensionCharacteristics;
 import android.hardware.camera2.CameraExtensionSession;
-import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
@@ -43,6 +42,7 @@ import android.hardware.camera2.extension.IInitializeSessionCallback;
 import android.hardware.camera2.extension.IRequestCallback;
 import android.hardware.camera2.extension.IRequestProcessorImpl;
 import android.hardware.camera2.extension.ISessionProcessorImpl;
+import android.hardware.camera2.extension.LatencyPair;
 import android.hardware.camera2.extension.OutputConfigId;
 import android.hardware.camera2.extension.OutputSurface;
 import android.hardware.camera2.extension.ParcelCaptureResult;
@@ -53,19 +53,24 @@ import android.hardware.camera2.params.DynamicRangeProfiles;
 import android.hardware.camera2.params.ExtensionSessionConfiguration;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
+import android.hardware.camera2.utils.ExtensionSessionStatsAggregator;
 import android.hardware.camera2.utils.SurfaceUtils;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
+import com.android.internal.camera.flags.Flags;
+
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -76,7 +81,7 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
 
     private final Executor mExecutor;
     private CameraDevice mCameraDevice;
-    private final long mExtensionClientId;
+    private final Map<String, CameraMetadataNative> mCharacteristicsMap;
     private final Handler mHandler;
     private final HandlerThread mHandlerThread;
     private final CameraExtensionSession.StateCallback mCallbacks;
@@ -87,15 +92,22 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
     private final HashMap<Integer, ImageReader> mReaderMap = new HashMap<>();
     private RequestProcessor mRequestProcessor = new RequestProcessor();
     private final int mSessionId;
+    private IBinder mToken = null;
 
     private Surface mClientRepeatingRequestSurface;
     private Surface mClientCaptureSurface;
+    private Surface mClientPostviewSurface;
     private CameraCaptureSession mCaptureSession = null;
     private ISessionProcessorImpl mSessionProcessor = null;
     private final InitializeSessionHandler mInitializeHandler;
+    private final ExtensionSessionStatsAggregator mStatsAggregator;
 
     private boolean mInitialized;
+    private boolean mSessionClosed;
+    private int mExtensionType;
 
+
+    private final Context mContext;
 
     // Lock to synchronize cross-thread access to device public interface
     final Object mInterfaceLock;
@@ -106,21 +118,18 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
     @RequiresPermission(android.Manifest.permission.CAMERA)
     public static CameraAdvancedExtensionSessionImpl createCameraAdvancedExtensionSession(
             @NonNull android.hardware.camera2.impl.CameraDeviceImpl cameraDevice,
-            @NonNull Context ctx, @NonNull ExtensionSessionConfiguration config, int sessionId)
+            @NonNull Map<String, CameraCharacteristics> characteristicsMap,
+            @NonNull Context ctx, @NonNull ExtensionSessionConfiguration config, int sessionId,
+            @NonNull IBinder token)
             throws CameraAccessException, RemoteException {
-        long clientId = CameraExtensionCharacteristics.registerClient(ctx);
-        if (clientId < 0) {
-            throw new UnsupportedOperationException("Unsupported extension!");
-        }
-
         String cameraId = cameraDevice.getId();
-        CameraManager manager = ctx.getSystemService(CameraManager.class);
-        CameraCharacteristics chars = manager.getCameraCharacteristics(cameraId);
         CameraExtensionCharacteristics extensionChars = new CameraExtensionCharacteristics(ctx,
-                cameraId, chars);
+                cameraId, characteristicsMap);
 
+        Map<String, CameraMetadataNative> characteristicsMapNative =
+                CameraExtensionUtils.getCharacteristicsMapNative(characteristicsMap);
         if (!CameraExtensionCharacteristics.isExtensionSupported(cameraDevice.getId(),
-                config.getExtension(), chars)) {
+                config.getExtension(), characteristicsMapNative)) {
             throw new UnsupportedOperationException("Unsupported extension type: " +
                     config.getExtension());
         }
@@ -170,38 +179,78 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
             throw new IllegalArgumentException("One or more unsupported output surfaces found!");
         }
 
+        Surface postviewSurface = null;
+        if (burstCaptureSurface != null && config.getPostviewOutputConfiguration() != null) {
+            CameraExtensionUtils.SurfaceInfo burstCaptureSurfaceInfo =
+                    CameraExtensionUtils.querySurface(burstCaptureSurface);
+            Size burstCaptureSurfaceSize =
+                    new Size(burstCaptureSurfaceInfo.mWidth, burstCaptureSurfaceInfo.mHeight);
+            HashMap<Integer, List<Size>> supportedPostviewSizes = new HashMap<>();
+            for (int format : CameraExtensionUtils.SUPPORTED_CAPTURE_OUTPUT_FORMATS) {
+                List<Size> supportedSizesPostview = extensionChars.getPostviewSupportedSizes(
+                        config.getExtension(), burstCaptureSurfaceSize, format);
+                if (supportedSizesPostview != null) {
+                    supportedPostviewSizes.put(format, supportedSizesPostview);
+                }
+            }
+
+            postviewSurface = CameraExtensionUtils.getPostviewSurface(
+                        config.getPostviewOutputConfiguration(), supportedPostviewSizes,
+                        burstCaptureSurfaceInfo.mFormat);
+            if (postviewSurface == null) {
+                throw new IllegalArgumentException("Unsupported output surface for postview!");
+            }
+        }
+
         IAdvancedExtenderImpl extender = CameraExtensionCharacteristics.initializeAdvancedExtension(
                 config.getExtension());
-        extender.init(cameraId);
+        extender.init(cameraId, characteristicsMapNative);
 
-        CameraAdvancedExtensionSessionImpl ret = new CameraAdvancedExtensionSessionImpl(clientId,
-                extender, cameraDevice, repeatingRequestSurface, burstCaptureSurface,
-                config.getStateCallback(), config.getExecutor(), sessionId);
+        CameraAdvancedExtensionSessionImpl ret = new CameraAdvancedExtensionSessionImpl(ctx,
+                extender, cameraDevice, characteristicsMapNative, repeatingRequestSurface,
+                burstCaptureSurface, postviewSurface, config.getStateCallback(),
+                config.getExecutor(), sessionId, token, config.getExtension());
+
+        ret.mStatsAggregator.setClientName(ctx.getOpPackageName());
+        ret.mStatsAggregator.setExtensionType(config.getExtension());
+
         ret.initialize();
 
         return ret;
     }
 
-    private CameraAdvancedExtensionSessionImpl(long extensionClientId,
+    private CameraAdvancedExtensionSessionImpl(Context ctx,
             @NonNull IAdvancedExtenderImpl extender,
-            @NonNull android.hardware.camera2.impl.CameraDeviceImpl cameraDevice,
+            @NonNull CameraDeviceImpl cameraDevice,
+            Map<String, CameraMetadataNative> characteristicsMap,
             @Nullable Surface repeatingRequestSurface, @Nullable Surface burstCaptureSurface,
-            @NonNull CameraExtensionSession.StateCallback callback, @NonNull Executor executor,
-            int sessionId) {
-        mExtensionClientId = extensionClientId;
+            @Nullable Surface postviewSurface,
+            @NonNull StateCallback callback, @NonNull Executor executor,
+            int sessionId,
+            @NonNull IBinder token,
+            int extension) {
+        mContext = ctx;
         mAdvancedExtender = extender;
         mCameraDevice = cameraDevice;
+        mCharacteristicsMap = characteristicsMap;
         mCallbacks = callback;
         mExecutor = executor;
         mClientRepeatingRequestSurface = repeatingRequestSurface;
         mClientCaptureSurface = burstCaptureSurface;
+        mClientPostviewSurface = postviewSurface;
         mHandlerThread = new HandlerThread(TAG);
         mHandlerThread.start();
         mHandler = new Handler(mHandlerThread.getLooper());
         mInitialized = false;
+        mSessionClosed = false;
         mInitializeHandler = new InitializeSessionHandler();
         mSessionId = sessionId;
+        mToken = token;
         mInterfaceLock = cameraDevice.mInterfaceLock;
+        mExtensionType = extension;
+
+        mStatsAggregator = new ExtensionSessionStatsAggregator(mCameraDevice.getId(),
+                /*isAdvanced=*/true);
     }
 
     /**
@@ -215,13 +264,16 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
 
         OutputSurface previewSurface = initializeParcelable(mClientRepeatingRequestSurface);
         OutputSurface captureSurface = initializeParcelable(mClientCaptureSurface);
+        OutputSurface postviewSurface = initializeParcelable(mClientPostviewSurface);
+
         mSessionProcessor = mAdvancedExtender.getSessionProcessor();
-        CameraSessionConfig sessionConfig = mSessionProcessor.initSession(mCameraDevice.getId(),
-                previewSurface, captureSurface);
+        CameraSessionConfig sessionConfig = mSessionProcessor.initSession(mToken,
+                mCameraDevice.getId(),
+                mCharacteristicsMap, previewSurface, captureSurface, postviewSurface);
         List<CameraOutputConfig> outputConfigs = sessionConfig.outputConfigs;
         ArrayList<OutputConfiguration> outputList = new ArrayList<>();
         for (CameraOutputConfig output : outputConfigs) {
-            Surface outputSurface = initializeSurfrace(output);
+            Surface outputSurface = initializeSurface(output);
             if (outputSurface == null) {
                 continue;
             }
@@ -234,7 +286,7 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
             if ((output.sharedSurfaceConfigs != null) && !output.sharedSurfaceConfigs.isEmpty()) {
                 cameraOutput.enableSurfaceSharing();
                 for (CameraOutputConfig sharedOutputConfig : output.sharedSurfaceConfigs) {
-                    Surface sharedSurface = initializeSurfrace(sharedOutputConfig);
+                    Surface sharedSurface = initializeSurface(sharedOutputConfig);
                     if (sharedSurface == null) {
                         continue;
                     }
@@ -243,14 +295,25 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
                 }
             }
 
+            // The extension processing logic needs to be able to match images to capture results via
+            // image and result timestamps.
+            cameraOutput.setTimestampBase(OutputConfiguration.TIMESTAMP_BASE_SENSOR);
+            cameraOutput.setReadoutTimestampEnabled(false);
             cameraOutput.setPhysicalCameraId(output.physicalCameraId);
             outputList.add(cameraOutput);
             mCameraConfigMap.put(cameraOutput.getSurface(), output);
         }
 
-        SessionConfiguration sessionConfiguration = new SessionConfiguration(
-                SessionConfiguration.SESSION_REGULAR, outputList,
-                new CameraExtensionUtils.HandlerExecutor(mHandler), new SessionStateHandler());
+        int sessionType = SessionConfiguration.SESSION_REGULAR;
+        if (sessionConfig.sessionType != -1 &&
+                (sessionConfig.sessionType != SessionConfiguration.SESSION_HIGH_SPEED)) {
+            sessionType = sessionConfig.sessionType;
+            Log.v(TAG, "Using session type: " + sessionType);
+        }
+
+        SessionConfiguration sessionConfiguration = new SessionConfiguration(sessionType,
+                outputList, new CameraExtensionUtils.HandlerExecutor(mHandler),
+                new SessionStateHandler());
 
         if ((sessionConfig.sessionParameter != null) &&
                 (!sessionConfig.sessionParameter.isEmpty())) {
@@ -327,6 +390,28 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
     }
 
     @Override
+    public StillCaptureLatency getRealtimeStillCaptureLatency() throws CameraAccessException {
+        synchronized (mInterfaceLock) {
+            if (!mInitialized) {
+                throw new IllegalStateException("Uninitialized component");
+            }
+
+            try {
+                LatencyPair latency = mSessionProcessor.getRealtimeCaptureLatency();
+                if (latency != null) {
+                    return new StillCaptureLatency(latency.first, latency.second);
+                }
+
+                return null;
+            } catch (RemoteException e) {
+                Log.e(TAG, "Failed to query realtime latency! Extension service does not "
+                        + "respond");
+                throw new CameraAccessException(CameraAccessException.CAMERA_ERROR);
+            }
+        }
+    }
+
+    @Override
     public int setRepeatingRequest(@NonNull CaptureRequest request, @NonNull Executor executor,
             @NonNull ExtensionCaptureCallback listener) throws CameraAccessException {
         int seqId = -1;
@@ -368,17 +453,15 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
                 throw new IllegalStateException("Uninitialized component");
             }
 
-            if (request.getTargets().size() != 1) {
-                throw new IllegalArgumentException("Single capture to both preview & still"  +
-                        " capture outputs target is not supported!");
-            }
+            validateCaptureRequestTargets(request);
 
             if ((mClientCaptureSurface != null)  && request.containsTarget(mClientCaptureSurface)) {
                 try {
+                    boolean isPostviewRequested = request.containsTarget(mClientPostviewSurface);
                     mSessionProcessor.setParameters(request);
 
                     seqId = mSessionProcessor.startCapture(new RequestCallbackHandler(request,
-                            executor, listener, mCameraDevice.getId()));
+                            executor, listener, mCameraDevice.getId()), isPostviewRequested);
                 } catch (RemoteException e) {
                     throw new CameraAccessException(CameraAccessException.CAMERA_ERROR, "Failed " +
                             " to submit capture request, extension service failed to respond!");
@@ -398,6 +481,33 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
         }
 
         return seqId;
+    }
+
+    private void validateCaptureRequestTargets(@NonNull CaptureRequest request) {
+        if (request.getTargets().size() == 1) {
+            boolean containsCaptureTarget =
+                    mClientCaptureSurface != null && request.containsTarget(mClientCaptureSurface);
+            boolean containsRepeatingTarget =
+                    mClientRepeatingRequestSurface != null &&
+                    request.containsTarget(mClientRepeatingRequestSurface);
+
+            if (!containsCaptureTarget && !containsRepeatingTarget) {
+                throw new IllegalArgumentException("Target output combination requested is " +
+                        "not supported!");
+            }
+        }
+
+        if ((request.getTargets().size() == 2) &&
+                (!request.getTargets().containsAll(Arrays.asList(mClientCaptureSurface,
+                mClientPostviewSurface)))) {
+            throw new IllegalArgumentException("Target output combination requested is " +
+                    "not supported!");
+        }
+
+        if (request.getTargets().size() > 2) {
+            throw new IllegalArgumentException("Target output combination requested is " +
+                    "not supported!");
+        }
     }
 
     @Override
@@ -424,14 +534,34 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
         synchronized (mInterfaceLock) {
             if (mInitialized) {
                 try {
-                    mCaptureSession.stopRepeating();
+                    try {
+                        mCaptureSession.stopRepeating();
+                    } catch (IllegalStateException e) {
+                        // OK: already be closed, nothing else to do
+                    }
                     mSessionProcessor.stopRepeating();
                     mSessionProcessor.onCaptureSessionEnd();
+                    mSessionClosed = true;
                 } catch (RemoteException e) {
                     Log.e(TAG, "Failed to stop the repeating request or end the session,"
                             + " , extension service does not respond!") ;
                 }
+                // Commit stats before closing the capture session
+                mStatsAggregator.commit(/*isFinal*/true);
                 mCaptureSession.close();
+            }
+        }
+    }
+
+    /**
+     * Called by {@link CameraDeviceImpl} right before the capture session is closed, and before it
+     * calls {@link #release}
+     */
+    public void commitStats() {
+        synchronized (mInterfaceLock) {
+            if (mInitialized) {
+                // Only commit stats if a capture session was initialized
+                mStatsAggregator.commit(/*isFinal*/true);
             }
         }
     }
@@ -444,8 +574,10 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
 
             if (mSessionProcessor != null) {
                 try {
-                    mSessionProcessor.onCaptureSessionEnd();
-                    mSessionProcessor.deInitSession();
+                    if (!mSessionClosed) {
+                        mSessionProcessor.onCaptureSessionEnd();
+                    }
+                    mSessionProcessor.deInitSession(mToken);
                 } catch (RemoteException e) {
                     Log.e(TAG, "Failed to de-initialize session processor, extension service"
                             + " does not respond!") ;
@@ -453,14 +585,16 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
                 mSessionProcessor = null;
             }
 
-            if (mExtensionClientId >= 0) {
-                CameraExtensionCharacteristics.unregisterClient(mExtensionClientId);
+
+            if (mToken != null) {
                 if (mInitialized || (mCaptureSession != null)) {
                     notifyClose = true;
-                    CameraExtensionCharacteristics.releaseSession();
+                    CameraExtensionCharacteristics.releaseSession(mExtensionType);
                 }
+                CameraExtensionCharacteristics.unregisterClient(mContext, mToken, mExtensionType);
             }
             mInitialized = false;
+            mToken = null;
 
             for (ImageReader reader : mReaderMap.values()) {
                 reader.close();
@@ -521,10 +655,13 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
         public void onConfigured(@NonNull CameraCaptureSession session) {
             synchronized (mInterfaceLock) {
                 mCaptureSession = session;
+                // Commit basic stats as soon as the capture session is created
+                mStatsAggregator.commit(/*isFinal*/false);
             }
 
             try {
-                CameraExtensionCharacteristics.initializeSession(mInitializeHandler);
+                CameraExtensionCharacteristics.initializeSession(
+                        mInitializeHandler, mExtensionType);
             } catch (RemoteException e) {
                 Log.e(TAG, "Failed to initialize session! Extension service does"
                         + " not respond!");
@@ -543,8 +680,9 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
                     synchronized (mInterfaceLock) {
                         try {
                             if (mSessionProcessor != null) {
-                                mSessionProcessor.onCaptureSessionStart(mRequestProcessor);
                                 mInitialized = true;
+                                mSessionProcessor.onCaptureSessionStart(mRequestProcessor,
+                                        mStatsAggregator.getStatsKey());
                             } else {
                                 Log.v(TAG, "Failed to start capture session, session " +
                                                 " released before extension start!");
@@ -643,6 +781,22 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
         }
 
         @Override
+        public void onCaptureProcessFailed(int captureSequenceId, int captureFailureReason) {
+            if (Flags.concertMode()) {
+                final long ident = Binder.clearCallingIdentity();
+                try {
+                    mClientExecutor.execute(
+                            () -> mClientCallbacks.onCaptureFailed(
+                                     CameraAdvancedExtensionSessionImpl.this, mClientRequest,
+                                    captureFailureReason
+                            ));
+                } finally {
+                    Binder.restoreCallingIdentity(ident);
+                }
+            }
+        }
+
+        @Override
         public void onCaptureSequenceCompleted(int captureSequenceId) {
             final long ident = Binder.clearCallingIdentity();
             try {
@@ -683,6 +837,19 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
                         () -> mClientCallbacks.onCaptureResultAvailable(
                                 CameraAdvancedExtensionSessionImpl.this, mClientRequest,
                                 totalResult));
+            } finally {
+                Binder.restoreCallingIdentity(ident);
+            }
+        }
+
+        @Override
+        public void onCaptureProcessProgressed(int progress) {
+            final long ident = Binder.clearCallingIdentity();
+            try {
+                mExecutor.execute(
+                        () -> mClientCallbacks.onCaptureProcessProgressed(
+                                CameraAdvancedExtensionSessionImpl.this, mClientRequest,
+                                progress));
             } finally {
                 Binder.restoreCallingIdentity(ident);
             }
@@ -1021,7 +1188,7 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
         return ret;
     }
 
-    private Surface initializeSurfrace(CameraOutputConfig output) {
+    private Surface initializeSurface(CameraOutputConfig output) {
         switch(output.type) {
             case CameraOutputConfig.TYPE_SURFACE:
                 if (output.surface == null) {
@@ -1038,7 +1205,8 @@ public final class CameraAdvancedExtensionSessionImpl extends CameraExtensionSes
                     return null;
                 }
                 ImageReader reader = ImageReader.newInstance(output.size.width,
-                        output.size.height, output.imageFormat, output.capacity);
+                        output.size.height, output.imageFormat, output.capacity,
+                        output.usage);
                 mReaderMap.put(output.outputId.id, reader);
                 return reader.getSurface();
             case CameraOutputConfig.TYPE_MULTIRES_IMAGEREADER:

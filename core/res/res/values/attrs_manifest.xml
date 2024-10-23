@@ -294,6 +294,9 @@
         <!-- Additional flag from base permission type: this permission can be automatically
             granted to the system app predictor -->
         <flag name="appPredictor" value="0x200000" />
+        <!-- Additional flag from base permission type: this permission can also be granted if the
+             requesting application is included in the mainline module}. -->
+        <flag name="module" value="0x400000" />
         <!-- Additional flag from base permission type: this permission can be automatically
             granted to the system companion device manager service -->
         <flag name="companion" value="0x800000" />
@@ -503,6 +506,12 @@
          receivers, and providers; it can not be used with activities. -->
     <attr name="singleUser" format="boolean" />
 
+    <!-- If set to true, only a single instance of this component will
+    run and be available for the SYSTEM user. Non SYSTEM users will not be
+    allowed to access the component if this flag is enabled.
+    This flag can be used with services, receivers, providers and activities. -->
+    <attr name="systemUserOnly" format="boolean" />
+
     <!-- Specify a specific process that the associated code is to run in.
          Use with the application tag (to supply a default process for all
          application components), or with the activity, receiver, service,
@@ -631,7 +640,7 @@
          able to return to it. -->
     <attr name="noHistory" format="boolean" />
 
-    <!-- Specify whether an acitivty's task state should always be maintained
+    <!-- Specify whether an activity's task state should always be maintained
          by the system, or if it is allowed to reset the task to its initial
          state in certain situations.
 
@@ -728,15 +737,17 @@
          This is equivalent to calling {@link android.app.Activity#setVrModeEnabled} with the
          the given component name within the Activity that this attribute is set for.
          Declaring this will prevent the system from leaving VR mode during an Activity
-         transtion from one VR activity to another. -->
+         transition from one VR activity to another. -->
     <attr name="enableVrMode" format="string" />
 
-    <!-- Flag allowing the activity to specify which screen rotation animation
-         it desires.  Valid values are "rotate", "crossfade", and "jumpcut"
-         as described in {@link android.view.WindowManager.LayoutParams#rotationAnimation}.
-         Specifying your Rotation animation in the WindowManager.LayoutParams
-         may be racy with app startup and updattransitions occuring during application startup and thusly
-         the manifest attribute is preferred.
+    <!-- Flag that specifies the activity's preferred screen rotation animation.
+         Valid values are "rotate", "crossfade", "jumpcut", and "seamless" as
+         described in
+         {@link android.view.WindowManager.LayoutParams#rotationAnimation}.
+         Specifying your rotation animation in
+         <code>WindowManager.LayoutParams</code> may be racy with app startup
+         and update transitions that occur during application startup; and so,
+         specify the animation in the manifest attribute.
     -->
     <attr name="rotationAnimation">
       <flag name="rotate" value= "0" />
@@ -827,7 +838,7 @@
         <enum name="singleInstance" value="3" />
         <!-- The activity can only be running as the root activity of the task, the first activity
             that created the task, and therefore there will only be one instance of this activity
-            in a task. In constrast to the {@code singleTask} launch mode, this activity can be
+            in a task. In contrast to the {@code singleTask} launch mode, this activity can be
             started in multiple instances in different tasks if the
             {@code FLAG_ACTIVITY_MULTIPLE_TASK} or {@code FLAG_ACTIVITY_NEW_DOCUMENT} is set.-->
         <enum name="singleInstancePerTask" value="4" />
@@ -1024,6 +1035,9 @@
         <flag name="layoutDirection" value="0x2000" />
         <!-- The color mode of the screen has changed (color gamut or dynamic range). -->
         <flag name="colorMode" value="0x4000" />
+        <!-- The grammatical gender has changed, for example the user set the grammatical gender
+             from the UI. -->
+        <flag name="grammaticalGender" value="0x8000" />
         <!-- The font scaling factor has changed, that is the user has
              selected a new global font size. -->
         <flag name="fontScale" value="0x40000000" />
@@ -1259,11 +1273,17 @@
          null to indicate no split types are offered. -->
     <attr name="splitTypes" format="string" />
 
-    <!-- Flag to specify if this app wants to run the dex within its APK but not extracted or
-         locally compiled variants. This keeps the dex code protected by the APK signature. Such
-         apps will always run in JIT mode (same when they are first installed), and the system will
-         never generate ahead-of-time compiled code for them. Depending on the app's workload,
-         there may be some run time performance change, noteably the cold start time. -->
+    <!-- Flag to specify if this app (or process) wants to run the dex within its APK but not
+         extracted or locally compiled variants. This keeps the dex code protected by the APK
+         signature. Such apps (or processes) will always run in JIT mode (same when they are first
+         installed). If enabled at the app level, the system will never generate ahead-of-time
+         compiled code for the app. Depending on the app's workload, there may be some run time
+         performance change, noteably the cold start time.
+
+         <p>This attribute can be applied to either
+         {@link android.R.styleable#AndroidManifestProcess process} or
+         {@link android.R.styleable#AndroidManifestApplication application} tags. If enabled at the
+         app level, any process level attribute is effectively ignored.  -->
     <attr name="useEmbeddedDex" format="boolean" />
 
     <!-- Extra options for an activity's UI. Applies to either the {@code <activity>} or
@@ -1322,7 +1342,7 @@
          <p>Such a document is any kind of item for which an application may want to
          maintain multiple simultaneous instances. Examples might be text files, web
          pages, spreadsheets, or emails. Each such document will be in a separate
-         task in the recent taskss list.
+         task in the recent tasks list.
 
          <p>This attribute is equivalent to adding the flag {@link
          android.content.Intent#FLAG_ACTIVITY_NEW_DOCUMENT} to every Intent used to launch
@@ -1582,23 +1602,97 @@
     <!-- Whether attributions provided are meant to be user-visible. -->
     <attr name="attributionsAreUserVisible" format="boolean" />
 
+    <!-- If a preloaded APK is marked updatableSystem = false, any request for an update will be rejected.
+         If an APK marked updatableSystem = false is being installed, regardless of the updatableSystem state
+         of the version it's replacing, the install will be rejected.
+         This is a private attribute, used without android: namespace. -->
+    <attr name="updatableSystem" format="boolean" />
+
+    <!-- Allows each installer in the system image to designate another app in the system image to
+        update the installer. -->
+    <attr name="emergencyInstaller" format="string" />
+
     <!-- Specify the type of foreground service. Multiple types can be specified by ORing the flags
          together. -->
     <attr name="foregroundServiceType">
         <!-- Data (photo, file, account) upload/download, backup/restore, import/export, fetch,
-        transfer over network between device and cloud.  -->
+            transfer over network between device and cloud.
+
+            <p>For apps with <code>targetSdkVersion</code>
+            {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, this type should NOT
+            be used: calling
+            {@link android.app.Service#startForeground(int, android.app.Notification, int)} with
+            this type on devices running {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE}
+            is still allowed, but calling it with this type on devices running future platform
+            releases may get a {@link android.app.InvalidForegroundServiceTypeException}.
+        -->
         <flag name="dataSync" value="0x01" />
-        <!-- Music, video, news or other media play. -->
+        <!-- Music, video, news or other media play.
+
+            <p>For apps with <code>targetSdkVersion</code>
+            {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, starting a foreground
+            service with this type will require permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_MEDIA_PLAYBACK}.
+        -->
         <flag name="mediaPlayback" value="0x02" />
         <!-- Ongoing operations related to phone calls, video conferencing,
-             or similar interactive communication. -->
+            or similar interactive communication.
+
+            <p>For apps with <code>targetSdkVersion</code>
+            {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, starting a foreground
+            service with this type will require permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_PHONE_CALL} and
+            {@link android.Manifest.permission#MANAGE_OWN_CALLS} or holding the default
+            {@link android.app.role.RoleManager#ROLE_DIALER dialer role}.
+        -->
         <flag name="phoneCall" value="0x04" />
-        <!-- GPS, map, navigation location update. -->
+        <!-- GPS, map, navigation location update.
+
+            <p>For apps with <code>targetSdkVersion</code>
+            {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, starting a foreground
+            service with this type will require permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_LOCATION} and one of the
+            following permissions:
+            {@link android.Manifest.permission#ACCESS_COARSE_LOCATION},
+            {@link android.Manifest.permission#ACCESS_FINE_LOCATION}.
+        -->
         <flag name="location" value="0x08" />
-        <!-- Auto, bluetooth, TV or other devices connection, monitoring and interaction. -->
+        <!-- Auto, bluetooth, TV or other devices connection, monitoring and interaction.
+
+            <p>For apps with <code>targetSdkVersion</code>
+            {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, starting a foreground
+            service with this type will require permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_CONNECTED_DEVICE} and one of the
+            following permissions:
+            {@link android.Manifest.permission#BLUETOOTH_CONNECT},
+            {@link android.Manifest.permission#CHANGE_NETWORK_STATE},
+            {@link android.Manifest.permission#CHANGE_WIFI_STATE},
+            {@link android.Manifest.permission#CHANGE_WIFI_MULTICAST_STATE},
+            {@link android.Manifest.permission#NFC},
+            {@link android.Manifest.permission#TRANSMIT_IR},
+            or has been granted the access to one of the attached USB devices/accessories.
+        -->
         <flag name="connectedDevice" value="0x10" />
-        <!-- Managing a media projection session, e.g, for screen recording or taking
-             screenshots.-->
+        <!-- Managing a {@link android.media.projection.MediaProjection MediaProjection} session,
+             e.g., for screen recording or takingscreenshots.
+
+             <p>
+             To capture through {@link android.media.projection.MediaProjection}, an app must start
+             a foreground service with the type corresponding to this constant. This type should
+             only be used for {@link android.media.projection.MediaProjection}. Capturing screen
+             contents via
+             {@link android.media.projection.MediaProjection#createVirtualDisplay(String, int, int,
+             int, int, android.view.Surface, android.hardware.display.VirtualDisplay.Callback,
+             android.os.Handler) createVirtualDisplay} conveniently allows recording, presenting
+             screen contents into a meeting, taking screenshots, or several other scenarios.
+             </p>
+
+             <p>For apps with <code>targetSdkVersion</code>
+             {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, starting a
+             foreground service with this type will require permission
+             {@link android.Manifest.permission#FOREGROUND_SERVICE_MEDIA_PROJECTION}, and the user
+             must have allowed the screen capture request from this app.
+        -->
         <flag name="mediaProjection" value="0x20" />
         <!-- Use the camera device or record video.
 
@@ -1606,6 +1700,12 @@
             and above, a foreground service will not be able to access the camera if this type is
             not specified in the manifest and in
             {@link android.app.Service#startForeground(int, android.app.Notification, int)}.
+
+            <p>For apps with <code>targetSdkVersion</code>
+            {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, starting a foreground
+            service with this type will require permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_CAMERA} and
+            {@link android.Manifest.permission#CAMERA}.
             -->
         <flag name="camera" value="0x40" />
         <!--Use the microphone device or record audio.
@@ -1614,8 +1714,68 @@
             and above, a foreground service will not be able to access the microphone if this type
             is not specified in the manifest and in
             {@link android.app.Service#startForeground(int, android.app.Notification, int)}.
+
+            <p>For apps with <code>targetSdkVersion</code>
+            {@link android.os.Build.VERSION_CODES#UPSIDE_DOWN_CAKE} and above, starting a foreground
+            service with this type will require permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_MICROPHONE} and one of the
+            following permissions:
+            {@link android.Manifest.permission#CAPTURE_AUDIO_OUTPUT},
+            {@link android.Manifest.permission#RECORD_AUDIO}.
             -->
         <flag name="microphone" value="0x80" />
+        <!--Health, wellness and fitness.
+            <p>Requires the app to hold the permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_HEALTH} and one of the following
+            permissions
+            {@link android.Manifest.permission#ACTIVITY_RECOGNITION},
+            {@link android.Manifest.permission#BODY_SENSORS},
+            {@link android.Manifest.permission#HIGH_SAMPLING_RATE_SENSORS}.
+        -->
+        <flag name="health" value="0x100" />
+        <!-- Messaging use cases which host local server to relay messages across devices.
+            <p>Requires the app to hold the permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_REMOTE_MESSAGING} in order to use
+            this type.
+        -->
+        <flag name="remoteMessaging" value="0x200" />
+        <!-- The system exempted foreground service use cases.
+            <p>Requires the app to hold the permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_SYSTEM_EXEMPTED} in order to use
+            this type. Apps are allowed to use this type only in the use cases listed in
+            {@link android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED}.
+        -->
+        <flag name="systemExempted" value="0x400" />
+        <!-- "Short service" foreground service type. See
+           {@link android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_SHORT_SERVICE}.
+           for more details.
+        -->
+        <flag name="shortService" value="0x800" />
+        <!-- The file management use case which manages files/directories, often involving file I/O
+            across the file system.
+            <p>Requires the app to hold the permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_FILE_MANAGEMENT} in order to use
+            this type.
+
+            TODO: b/258855262 mark this field as {@code hide} once this bug is fixed.
+            <flag name="fileManagement" value="0x1000" />
+        -->
+        <!-- Media processing use cases such as video or photo editing and processing.
+            <p>Requires the app to hold the permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_MEDIA_PROCESSING} in order to use
+            this type.
+        -->
+        <flag name="mediaProcessing" value="0x2000" />
+        <!-- Use cases that can't be categorized into any other foreground service types, but also
+            can't use @link android.app.job.JobInfo.Builder} APIs.
+            See {@link android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_SPECIAL_USE} for the
+            best practice of the use of this type.
+
+            <p>Requires the app to hold the permission
+            {@link android.Manifest.permission#FOREGROUND_SERVICE_SPECIAL_USE} in order to use
+            this type.
+        -->
+        <flag name="specialUse" value="0x40000000" />
     </attr>
 
     <!-- Enable sampled memory bug detection in this process.
@@ -1641,7 +1801,7 @@
     </attr>
 
     <!-- Enable hardware memory tagging (ARM MTE) in this process.
-         When enabled, heap memory bugs like use-after-free and buffer overlow
+         When enabled, heap memory bugs like use-after-free and buffer overflow
          are detected and result in an immediate ("sync" mode) or delayed ("async"
          mode) crash instead of a silent memory corruption. Sync mode, while slower,
          provides enhanced bug reports including stack traces at the time of allocation
@@ -1666,6 +1826,14 @@
       Multiple tags can be specified separated by '|'.
     -->
     <attr name="attributionTags" format="string" />
+
+    <attr name="allowUpdateOwnership" format="boolean" />
+
+    <!-- This attribute can be applied to any tag in the manifest. The system uses its value to
+         determine whether the element (e.g., a permission) should be enabled or disabled
+         depending on the state of feature flags.
+         @hide @SystemApi @FlaggedApi("android.content.res.manifest_flagging") -->
+    <attr name="featureFlag" format="string" />
 
     <!-- The <code>manifest</code> tag is the root of an
          <code>AndroidManifest.xml</code> file,
@@ -1749,6 +1917,12 @@
              try to load its code when launching components.  The default is true
              for normal behavior. -->
         <attr name="hasCode" format="boolean" />
+        <!-- Specifies if activities can be launched on top of this application by activities from
+             other applications in the same task. If set to false, activity launches which would
+             replace this application with another when in the user's view will be blocked.
+             The default is true. -->
+        <!-- @FlaggedApi("android.security.asm_restrictions_enabled") -->
+        <attr name="allowCrossUidActivitySwitchFromBelow" format="boolean" />
         <attr name="persistent" />
         <attr name="persistentWhenFeatureAvailable" />
         <attr name="requiredForAllUsers" />
@@ -2084,6 +2258,11 @@
         <attr name="protectionLevel" />
         <attr name="permissionFlags" />
         <attr name="knownCerts" />
+        <!-- Optional: specify the maximum version of the Android OS for which the
+             application wishes to create the permission.  When running on a version
+             of Android higher than the number given here, the permission will not
+             be created.  -->
+        <attr name="maxSdkVersion" />
     </declare-styleable>
 
     <!-- The <code>permission-group</code> tag declares a logical grouping of
@@ -2170,6 +2349,11 @@
         tag; often this is one of the {@link android.Manifest.permission standard
         system permissions}. -->
         <attr name="name" />
+        <!-- Optional: specify the minimum version of the Android OS for which the
+             application wishes to request the permission.  When running on a version
+             of Android lower than the number given here, the permission will not
+             be requested. -->
+        <attr name="minSdkVersion" format="integer|string" />
         <!-- Optional: specify the maximum version of the Android OS for which the
              application wishes to request the permission.  When running on a version
              of Android higher than the number given here, the permission will not
@@ -2363,6 +2547,10 @@
         <attr name="versionMajor" format="integer" />
         <!-- The SHA-256 digest of the SDK library signing certificate. -->
         <attr name="certDigest" format="string" />
+        <!-- Specify whether the SDK is optional. The default is false, false means app can be
+        installed even if the SDK library doesn't exist, and the SDK library can be uninstalled
+        when the app is still installed. -->
+        <attr name="optional" format="boolean" />
     </declare-styleable>
 
     <!-- The <code>static-library</code> tag declares that this apk is providing itself
@@ -2621,6 +2809,7 @@
         <attr name="gwpAsanMode" />
         <attr name="memtagMode" />
         <attr name="nativeHeapZeroInitialized" />
+        <attr name="useEmbeddedDex" />
     </declare-styleable>
 
     <!-- The <code>deny-permission</code> tag specifies that a permission is to be denied
@@ -2699,6 +2888,7 @@
              Context.createAttributionContext() using the first attribution tag
              contained here. -->
         <attr name="attributionTags" />
+        <attr name="systemUserOnly" format="boolean" />
     </declare-styleable>
 
     <!-- Attributes that can be supplied in an AndroidManifest.xml
@@ -2830,7 +3020,12 @@
              depends on the number of isolated services that an application starts,
              and how much memory those services save by preloading and sharing memory with
              the app zygote. Therefore, it is recommended to measure memory usage under
-             typical workloads to determine whether it makes sense to use this flag. -->
+             typical workloads to determine whether it makes sense to use this flag.
+
+             <p>There is a limit to the number of isolated services that can be spawned from
+                the Application Zygote; the absolute limit is 100, but due to potential
+                delays in service process cleanup, a much safer limit to use in practice is 50.
+             -->
         <attr name="useAppZygote" format="boolean" />
         <!-- If this is a foreground service, specify its category. -->
         <attr name="foregroundServiceType" />
@@ -2840,6 +3035,19 @@
              Context.createAttributionContext() using the first attribution tag
              contained here. -->
         <attr name="attributionTags" />
+        <!-- If true, and this is an {@link android.R.attr#isolatedProcess} service, the service
+             is allowed to be bound in a shared isolated process with other isolated services.
+             Note that these other isolated services can also belong to other apps from different
+             vendors.
+             <p>
+             Shared isolated processes are created when using the
+             {@link android.content.Context#BIND_SHARED_ISOLATED_PROCESS) during service binding.
+             <p>
+             Note that when this flag is used, the {@link android.R.attr#process} attribute is
+             ignored when the process is bound into a shared isolated process by a client.
+        -->
+        <attr name="allowSharedIsolatedProcess" format="boolean" />
+        <attr name="systemUserOnly" format="boolean" />
     </declare-styleable>
 
     <!-- @hide The <code>apex-system-service</code> tag declares an apex system service
@@ -2967,7 +3175,7 @@
         <attr name="uiOptions" />
         <attr name="parentActivityName" />
         <attr name="singleUser" />
-        <!-- @hide This broadcast receiver or activity will only receive broadcasts for the
+        <!-- This broadcast receiver or activity will only receive broadcasts for the
              system user-->
         <attr name="systemUserOnly" format="boolean" />
         <attr name="persistableMode" />
@@ -3052,6 +3260,56 @@
         <attr name="canDisplayOnRemoteDevices" format="boolean"/>
         <attr name="allowUntrustedActivityEmbedding" />
         <attr name="knownActivityEmbeddingCerts" />
+        <!-- Specifies the required display category of the activity. Upon creation, a display can
+             specify which display categories it supports and one of the categories must be present
+             in the {@code <activity>} element to allow this activity to run. The default value is
+             {@code null}, which indicates the activity does not have a required display category
+             and thus can only run on a display that didn't specify any display categories. Each
+             activity can only specify one required category but a display can accommodate multiple
+             display categories.
+
+             <p> This field should be formatted as a Java-language-style free form string(for
+             example, com.google.automotive_entertainment), which may contain uppercase or lowercase
+             letters ('A' through 'Z'), numbers, and underscores ('_') but may only start with
+             letters.
+         -->
+        <attr name="requiredDisplayCategory" format="string"/>
+        <!-- If false, {@link android.view.KeyEvent#KEYCODE_BACK KEYCODE_BACK} and
+             {@link android.app.Activity#onBackPressed Activity.onBackPressed()}
+             and related event will be forwarded to the Activity and its views.
+
+             <p> If true, those events will be replaced by a call to
+             {@link android.window.OnBackInvokedCallback#onBackInvoked} on the focused window.
+
+             <p> By default, the behavior is configured by the same attribute in application.
+        -->
+        <attr name="enableOnBackInvokedCallback" format="boolean"/>
+
+        <!-- Specifies permissions necessary to launch this activity via
+             {@link android.content.Context#startActivity} when passing content URIs. The default
+             value is {@code none}, meaning no specific permissions are required. Setting this
+             attribute restricts activity invocation based on the invoker's permissions. If the
+             invoker doesn't have the required permissions, the activity start will be denied via a
+             {@link java.lang.SecurityException}.
+
+             <p> Note that the enforcement works for content URIs inside
+             {@link android.content.Intent#getData}, {@link android.content.Intent#EXTRA_STREAM},
+             and {@link android.content.Intent#getClipData}.
+             @FlaggedApi("android.security.content_uri_permission_apis") -->
+        <attr name="requireContentUriPermissionFromCaller" format="string">
+            <!-- Default, no specific permissions are required. -->
+            <enum name="none" value="0" />
+            <!-- Enforces the invoker to have read access to the passed content URIs. -->
+            <enum name="read" value="1" />
+            <!-- Enforces the invoker to have write access to the passed content URIs. -->
+            <enum name="write" value="2" />
+            <!-- Enforces the invoker to have either read or write access to the passed content
+                 URIs. -->
+            <enum name="readOrWrite" value="3" />
+            <!-- Enforces the invoker to have both read and write access to the passed content
+                 URIs. -->
+            <enum name="readAndWrite" value="4" />
+        </attr>
     </declare-styleable>
 
     <!-- The <code>activity-alias</code> tag declares a new
@@ -3223,6 +3481,20 @@
     <!-- Attributes that can be supplied in an AndroidManifest.xml
          <code>data</code> tag, a child of the
          {@link #AndroidManifestIntentFilter intent-filter} tag, describing
+         a group matching rule consisting of one or more
+         {@link #AndroidManifestData data} tags that must all match.  This
+         tag can be specified multiple times to create multiple groups that
+         will be matched in the order they are defined. -->
+    <declare-styleable name="AndroidManifestUriRelativeFilterGroup"
+        parent="AndroidManifestIntentFilter">
+        <!-- Specify if this group is allow rule or disallow rule.  If this
+             attribute is not specified then it is assumed to be true -->
+        <attr name="allow" format="boolean"/>
+    </declare-styleable>
+
+    <!-- Attributes that can be supplied in an AndroidManifest.xml
+         <code>data</code> tag, a child of the
+         {@link #AndroidManifestIntentFilter intent-filter} tag, describing
          the types of data that match.  This tag can be specified multiple
          times to supply multiple data options, as described in the
          {@link android.content.IntentFilter} class.  Note that all such
@@ -3230,7 +3502,8 @@
          <code>&lt;data android:scheme="myscheme" android:host="me.com" /&gt;</code>
          is equivalent to <code>&lt;data android:scheme="myscheme" /&gt;
          &lt;data android:host="me.com" /&gt;</code>. -->
-    <declare-styleable name="AndroidManifestData" parent="AndroidManifestIntentFilter">
+    <declare-styleable name="AndroidManifestData"
+        parent="AndroidManifestIntentFilter AndroidManifestUriRelativeFilterGroup">
         <!-- Specify a MIME type that is handled, as per
              {@link android.content.IntentFilter#addDataType
              IntentFilter.addDataType()}.
@@ -3334,6 +3607,70 @@
              IntentFilter.addDataPath()} with
              {@link android.os.PatternMatcher#PATTERN_SUFFIX}. -->
         <attr name="pathSuffix" />
+        <!-- Specify a URI query that must exactly match, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_LITERAL}. -->
+        <attr name="query" format="string" />
+        <!-- Specify a URI query that must be a prefix to match, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_PREFIX}. -->
+        <attr name="queryPrefix" format="string" />
+        <!-- Specify a URI query that matches a simple pattern, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_SIMPLE_GLOB}.
+             Note that because '\' is used as an escape character when
+             reading the string from XML (before it is parsed as a pattern),
+             you will need to double-escape: for example a literal "*" would
+             be written as "\\*" and a literal "\" would be written as
+             "\\\\".  This is basically the same as what you would need to
+             write if constructing the string in Java code. -->
+        <attr name="queryPattern" format="string" />
+        <!-- Specify a URI query that matches an advanced pattern, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_ADVANCED_GLOB}.
+             Note that because '\' is used as an escape character when
+             reading the string from XML (before it is parsed as a pattern),
+             you will need to double-escape: for example a literal "*" would
+             be written as "\\*" and a literal "\" would be written as
+             "\\\\".  This is basically the same as what you would need to
+             write if constructing the string in Java code. -->
+        <attr name="queryAdvancedPattern" format="string" />
+        <!-- Specify a URI query that must be a suffix to match, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_SUFFIX}. -->
+        <attr name="querySuffix" format="string" />
+        <!-- Specify a URI fragment that must exactly match, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_LITERAL}. -->
+        <attr name="fragment" format="string" />
+        <!-- Specify a URI fragment that must be a prefix to match, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_PREFIX}. -->
+        <attr name="fragmentPrefix" format="string" />
+        <!-- Specify a URI fragment that matches a simple pattern, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_SIMPLE_GLOB}.
+             Note that because '\' is used as an escape character when
+             reading the string from XML (before it is parsed as a pattern),
+             you will need to double-escape: for example a literal "*" would
+             be written as "\\*" and a literal "\" would be written as
+             "\\\\".  This is basically the same as what you would need to
+             write if constructing the string in Java code. -->
+        <attr name="fragmentPattern" format="string" />
+        <!-- Specify a URI fragment that matches an advanced pattern, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_ADVANCED_GLOB}.
+             Note that because '\' is used as an escape character when
+             reading the string from XML (before it is parsed as a pattern),
+             you will need to double-escape: for example a literal "*" would
+             be written as "\\*" and a literal "\" would be written as
+             "\\\\".  This is basically the same as what you would need to
+             write if constructing the string in Java code. -->
+        <attr name="fragmentAdvancedPattern" format="string" />
+        <!-- Specify a URI fragment that must be a suffix to match, as a
+             {@link android.content.UriRelativeFilter UriRelativeFilter} with
+             {@link android.os.PatternMatcher#PATTERN_SUFFIX}. -->
+        <attr name="fragmentSuffix" format="string" />
     </declare-styleable>
 
     <!-- Attributes that can be supplied in an AndroidManifest.xml

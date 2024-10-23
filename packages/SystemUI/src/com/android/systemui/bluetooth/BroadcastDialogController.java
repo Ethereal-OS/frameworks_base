@@ -16,13 +16,11 @@
 
 package com.android.systemui.bluetooth;
 
-import android.content.Context;
 import android.view.View;
 
-import com.android.internal.logging.UiEventLogger;
-import com.android.systemui.animation.DialogLaunchAnimator;
+import com.android.systemui.animation.DialogTransitionAnimator;
 import com.android.systemui.dagger.SysUISingleton;
-import com.android.systemui.media.dialog.MediaOutputDialogFactory;
+import com.android.systemui.statusbar.phone.SystemUIDialog;
 
 import javax.inject.Inject;
 
@@ -32,19 +30,15 @@ import javax.inject.Inject;
 @SysUISingleton
 public class BroadcastDialogController {
 
-    private Context mContext;
-    private UiEventLogger mUiEventLogger;
-    private DialogLaunchAnimator mDialogLaunchAnimator;
-    private MediaOutputDialogFactory mMediaOutputDialogFactory;
+    private final DialogTransitionAnimator mDialogTransitionAnimator;
+    private final BroadcastDialogDelegate.Factory mBroadcastDialogFactory;
 
     @Inject
-    public BroadcastDialogController(Context context, UiEventLogger uiEventLogger,
-            DialogLaunchAnimator dialogLaunchAnimator,
-            MediaOutputDialogFactory mediaOutputDialogFactory) {
-        mContext = context;
-        mUiEventLogger = uiEventLogger;
-        mDialogLaunchAnimator = dialogLaunchAnimator;
-        mMediaOutputDialogFactory = mediaOutputDialogFactory;
+    public BroadcastDialogController(
+            DialogTransitionAnimator dialogTransitionAnimator,
+            BroadcastDialogDelegate.Factory broadcastDialogFactory) {
+        mDialogTransitionAnimator = dialogTransitionAnimator;
+        mBroadcastDialogFactory = broadcastDialogFactory;
     }
 
     /** Creates a [BroadcastDialog] for the user to switch broadcast or change the output device
@@ -52,12 +46,12 @@ public class BroadcastDialogController {
      * @param currentBroadcastAppName Indicates the APP name currently broadcasting
      * @param outputPkgName Indicates the output media package name to be switched
      */
-    public void createBroadcastDialog(String currentBroadcastAppName, String outputPkgName,
-            boolean aboveStatusBar, View view) {
-        BroadcastDialog broadcastDialog = new BroadcastDialog(mContext, mMediaOutputDialogFactory,
-                currentBroadcastAppName, outputPkgName, mUiEventLogger);
+    public void createBroadcastDialog(
+            String currentBroadcastAppName, String outputPkgName, View view) {
+        SystemUIDialog broadcastDialog = mBroadcastDialogFactory.create(
+                currentBroadcastAppName, outputPkgName).createDialog();
         if (view != null) {
-            mDialogLaunchAnimator.showFromView(broadcastDialog, view);
+            mDialogTransitionAnimator.showFromView(broadcastDialog, view);
         } else {
             broadcastDialog.show();
         }

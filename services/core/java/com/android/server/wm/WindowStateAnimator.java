@@ -32,7 +32,6 @@ import static com.android.internal.protolog.ProtoLogGroup.WM_SHOW_TRANSACTIONS;
 import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_ANIM;
 import static com.android.server.policy.WindowManagerPolicy.FINISH_LAYOUT_REDO_WALLPAPER;
 import static com.android.server.wm.SurfaceAnimator.ANIMATION_TYPE_WINDOW_ANIMATION;
-import static com.android.server.wm.WindowContainer.AnimationFlags.PARENTS;
 import static com.android.server.wm.WindowContainer.AnimationFlags.TRANSITION;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG;
 import static com.android.server.wm.WindowManagerDebugConfig.DEBUG_LAYOUT_REPEATS;
@@ -45,6 +44,7 @@ import static com.android.server.wm.WindowManagerService.logWithStack;
 import static com.android.server.wm.WindowStateAnimatorProto.DRAW_STATE;
 import static com.android.server.wm.WindowStateAnimatorProto.SURFACE;
 import static com.android.server.wm.WindowStateAnimatorProto.SYSTEM_DECOR_RECT;
+import static com.android.window.flags.Flags.secureWindowState;
 
 import android.content.Context;
 import android.graphics.PixelFormat;
@@ -60,7 +60,6 @@ import android.view.WindowManager.LayoutParams;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 
-import com.android.internal.protolog.ProtoLogImpl;
 import com.android.internal.protolog.common.ProtoLog;
 import com.android.server.policy.WindowManagerPolicy;
 
@@ -287,8 +286,10 @@ class WindowStateAnimator {
         int flags = SurfaceControl.HIDDEN;
         final WindowManager.LayoutParams attrs = w.mAttrs;
 
-        if (w.isSecureLocked()) {
-            flags |= SurfaceControl.SECURE;
+        if (!secureWindowState()) {
+            if (w.isSecureLocked()) {
+                flags |= SurfaceControl.SECURE;
+            }
         }
 
         if ((mWin.mAttrs.privateFlags & PRIVATE_FLAG_IS_ROUNDED_CORNERS_OVERLAY) != 0) {
@@ -310,8 +311,8 @@ class WindowStateAnimator {
 
             mSurfaceController = new WindowSurfaceController(attrs.getTitle().toString(), format,
                     flags, this, attrs.type);
-            mSurfaceController.setColorSpaceAgnostic((attrs.privateFlags
-                    & WindowManager.LayoutParams.PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC) != 0);
+            mSurfaceController.setColorSpaceAgnostic(w.getPendingTransaction(),
+                    (attrs.privateFlags & LayoutParams.PRIVATE_FLAG_COLOR_SPACE_AGNOSTIC) != 0);
 
             w.setHasSurface(true);
             // The surface instance is changed. Make sure the input info can be applied to the
@@ -409,10 +410,6 @@ class WindowStateAnimator {
         mShownAlpha = mAlpha;
     }
 
-    private boolean isInBlastSync() {
-        return mService.useBLASTSync() && mWin.useBLASTSync();
-    }
-
     void prepareSurfaceLocked(SurfaceControl.Transaction t) {
         final WindowState w = mWin;
         if (!hasSurface()) {
@@ -428,7 +425,7 @@ class WindowStateAnimator {
 
         computeShownFrameLocked();
 
-        if (w.isParentWindowHidden() || !w.isOnScreen()) {
+        if (!w.isOnScreen()) {
             hide(t, "prepareSurfaceLocked");
             mWallpaperControllerLocked.hideWallpapers(w);
 
@@ -453,29 +450,21 @@ class WindowStateAnimator {
 
             if (prepared && mDrawState == HAS_DRAWN) {
                 if (mLastHidden) {
-                    if (showSurfaceRobustlyLocked(t)) {
-                        mAnimator.requestRemovalOfReplacedWindows(w);
-                        mLastHidden = false;
-                        final DisplayContent displayContent = w.getDisplayContent();
-                        if (!displayContent.getLastHasContent()) {
-                            // This draw means the difference between unique content and mirroring.
-                            // Run another pass through performLayout to set mHasContent in the
-                            // LogicalDisplay.
-                            displayContent.pendingLayoutChanges |= FINISH_LAYOUT_REDO_ANIM;
-                            if (DEBUG_LAYOUT_REPEATS) {
-                                mService.mWindowPlacerLocked.debugLayoutRepeats(
-                                        "showSurfaceRobustlyLocked " + w,
-                                        displayContent.pendingLayoutChanges);
-                            }
+                    mSurfaceController.showRobustly(t);
+                    mLastHidden = false;
+                    final DisplayContent displayContent = w.getDisplayContent();
+                    if (!displayContent.getLastHasContent()) {
+                        // This draw means the difference between unique content and mirroring.
+                        // Run another pass through performLayout to set mHasContent in the
+                        // LogicalDisplay.
+                        displayContent.pendingLayoutChanges |= FINISH_LAYOUT_REDO_ANIM;
+                        if (DEBUG_LAYOUT_REPEATS) {
+                            mService.mWindowPlacerLocked.debugLayoutRepeats(
+                                    "showSurfaceRobustlyLocked " + w,
+                                    displayContent.pendingLayoutChanges);
                         }
-                    } else {
-                        w.setOrientationChanging(false);
                     }
                 }
-            }
-        } else {
-            if (mWin.isAnimating(TRANSITION | PARENTS)) {
-                ProtoLog.v(WM_DEBUG_ANIM, "prepareSurface: No changes in animation for %s", this);
             }
         }
 
@@ -501,44 +490,14 @@ class WindowStateAnimator {
         mSurfaceController.setOpaque(isOpaque);
     }
 
-    void setSecureLocked(boolean isSecure) {
-        if (mSurfaceController == null) {
-            return;
-        }
-        mSurfaceController.setSecure(isSecure);
-    }
-
     void setColorSpaceAgnosticLocked(boolean agnostic) {
         if (mSurfaceController == null) {
             return;
         }
-        mSurfaceController.setColorSpaceAgnostic(agnostic);
-    }
-
-    /**
-     * Have the surface flinger show a surface, robustly dealing with
-     * error conditions.  In particular, if there is not enough memory
-     * to show the surface, then we will try to get rid of other surfaces
-     * in order to succeed.
-     *
-     * @return Returns true if the surface was successfully shown.
-     */
-    private boolean showSurfaceRobustlyLocked(SurfaceControl.Transaction t) {
-        boolean shown = mSurfaceController.showRobustly(t);
-        if (!shown)
-            return false;
-
-        return true;
+        mSurfaceController.setColorSpaceAgnostic(mWin.getPendingTransaction(), agnostic);
     }
 
     void applyEnterAnimationLocked() {
-        // If we are the new part of a window replacement transition and we have requested
-        // not to animate, we instead want to make it seamless, so we don't want to apply
-        // an enter transition.
-        if (mWin.mSkipEnterAnimationForSeamlessReplacement) {
-            return;
-        }
-
         final int transit;
         if (mEnterAnimationPending) {
             mEnterAnimationPending = false;
@@ -549,8 +508,10 @@ class WindowStateAnimator {
 
         // We don't apply animation for application main window here since this window type
         // should be controlled by ActivityRecord in general. Wallpaper is also excluded because
-        // WallpaperController should handle it.
-        if (mAttrType != TYPE_BASE_APPLICATION && !mIsWallpaper) {
+        // WallpaperController should handle it. Also skip play enter animation for the window
+        // below starting window.
+        if (mAttrType != TYPE_BASE_APPLICATION && !mIsWallpaper
+                && !(mWin.mActivityRecord != null && mWin.mActivityRecord.hasStartingWindow())) {
             applyAnimationLocked(transit, true);
         }
 
@@ -622,7 +583,7 @@ class WindowStateAnimator {
                             mWin.mAttrs, attr, TRANSIT_OLD_NONE);
                 }
             }
-            if (ProtoLogImpl.isEnabled(WM_DEBUG_ANIM)) {
+            if (ProtoLog.isEnabled(WM_DEBUG_ANIM)) {
                 ProtoLog.v(WM_DEBUG_ANIM, "applyAnimation: win=%s"
                         + " anim=%d attr=0x%x a=%s transit=%d type=%d isEntrance=%b Callers %s",
                         this, anim, attr, a, transit, mAttrType, isEntrance, Debug.getCallers(20));

@@ -34,14 +34,13 @@ class UnfoldRemoteFilter(
         }
 
     private var inProgress = false
+    private var receivedProgressEvent = false
 
     private var processedProgress: Float = 1.0f
         set(newProgress) {
             if (inProgress) {
                 logCounter({ "$TAG#filtered_progress" }, newProgress)
                 listener.onTransitionProgress(newProgress)
-            } else {
-                Log.e(TAG, "Filtered progress received received while animation not in progress.")
             }
             field = newProgress
         }
@@ -54,7 +53,16 @@ class UnfoldRemoteFilter(
     override fun onTransitionProgress(progress: Float) {
         logCounter({ "$TAG#plain_remote_progress" }, progress)
         if (inProgress) {
-            springAnimation.animateToFinalPosition(progress)
+            if (receivedProgressEvent) {
+                // We have received at least one progress event, animate from the previous
+                // progress to the current
+                springAnimation.animateToFinalPosition(progress)
+            } else {
+                // This is the first progress event after starting the animation, send it
+                // straightaway and set the spring value without animating it
+                processedProgress = progress
+                receivedProgressEvent = true
+            }
         } else {
             Log.e(TAG, "Progress received while not in progress.")
         }
@@ -62,6 +70,7 @@ class UnfoldRemoteFilter(
 
     override fun onTransitionFinished() {
         inProgress = false
+        receivedProgressEvent = false
         listener.onTransitionFinished()
     }
 

@@ -124,6 +124,10 @@
         <group gid="security_log_writer" />
     </permission>
 
+    <permission name="android.permission.MANAGE_VIRTUAL_MACHINE">
+        <group gid="virtualmachine" />
+    </permission>
+
     <!-- These are permissions that were mapped to gids but we need
          to keep them here until an upgrade from L to the current
          version is to be supported. These permissions are built-in
@@ -160,6 +164,7 @@
     <assign-permission name="android.permission.REGISTER_MEDIA_RESOURCE_OBSERVER" uid="media" />
     <assign-permission name="android.permission.REGISTER_STATS_PULL_ATOM" uid="media" />
     <assign-permission name="android.permission.INTERACT_ACROSS_USERS" uid="media" />
+    <assign-permission name="android.permission.LOG_FOREGROUND_RESOURCE_USE" uid="media" />
 
     <assign-permission name="android.permission.INTERNET" uid="media" />
 
@@ -173,6 +178,7 @@
     <assign-permission name="android.permission.PACKAGE_USAGE_STATS" uid="audioserver" />
     <assign-permission name="android.permission.INTERACT_ACROSS_USERS_FULL" uid="audioserver" />
     <assign-permission name="android.permission.OBSERVE_SENSOR_PRIVACY" uid="audioserver" />
+    <assign-permission name="android.permission.LOG_FOREGROUND_RESOURCE_USE" uid="audioserver" />
 
     <assign-permission name="android.permission.MODIFY_AUDIO_SETTINGS" uid="cameraserver" />
     <assign-permission name="android.permission.INTERACT_ACROSS_USERS_FULL" uid="cameraserver" />
@@ -186,6 +192,7 @@
     <assign-permission name="android.permission.MANAGE_APP_OPS_MODES" uid="cameraserver" />
     <assign-permission name="android.permission.OBSERVE_SENSOR_PRIVACY" uid="cameraserver" />
     <assign-permission name="android.permission.REAL_GET_TASKS" uid="cameraserver" />
+    <assign-permission name="android.permission.LOG_FOREGROUND_RESOURCE_USE" uid="cameraserver" />
 
     <assign-permission name="android.permission.ACCESS_SURFACE_FLINGER" uid="graphics" />
 
@@ -211,9 +218,6 @@
     </split-permission>
     <split-permission name="android.permission.WRITE_EXTERNAL_STORAGE">
         <new-permission name="android.permission.READ_EXTERNAL_STORAGE" />
-    </split-permission>
-    <split-permission name="android.permission.READ_PRIVILEGED_PHONE_STATE">
-        <new-permission name="android.permission.READ_PHONE_STATE" />
     </split-permission>
     <split-permission name="android.permission.READ_CONTACTS"
                       targetSdk="16">
@@ -291,6 +295,15 @@
                       targetSdk="33">
         <new-permission name="android.permission.READ_MEDIA_IMAGES" />
     </split-permission>
+    <split-permission name="android.permission.READ_MEDIA_IMAGES">
+        <new-permission name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    </split-permission>
+    <split-permission name="android.permission.READ_MEDIA_VIDEO">
+        <new-permission name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    </split-permission>
+    <split-permission name="android.permission.ACCESS_MEDIA_LOCATION">
+        <new-permission name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    </split-permission>
 
     <!-- This is a list of all the libraries available for application
          code to link against. -->
@@ -312,10 +325,14 @@
     <!-- These are the standard packages that are white-listed to always have internet
          access while in power save mode, even if they aren't in the foreground. -->
     <allow-in-power-save package="com.android.providers.downloads" />
+    <allow-in-power-save package="com.android.rkpdapp" />
+    <allow-in-power-save package="com.google.android.rkpdapp" />
 
     <!-- These are the standard packages that are white-listed to always have internet
          access while in data mode, even if they aren't in the foreground. -->
     <allow-in-data-usage-save package="com.android.providers.downloads" />
+    <allow-in-data-usage-save package="com.android.rkpdapp" />
+    <allow-in-data-usage-save package="com.google.android.rkpdapp" />
 
     <!-- This is a core platform component that needs to freely run in the background -->
     <allow-in-power-save package="com.android.cellbroadcastreceiver.module" />
@@ -337,6 +354,12 @@
 
     <!-- Allow IMS service entitlement app to schedule jobs to run when app in background. -->
     <allow-in-power-save-except-idle package="com.android.imsserviceentitlement" />
+
+    <!-- Allow device lock controller app to schedule jobs and alarms, and have network access
+         when app in background; otherwise, it may not be able to enforce provision for managed
+         devices. -->
+    <allow-in-power-save package="com.android.devicelockcontroller" />
+    <allow-in-data-usage-save package="com.android.devicelockcontroller" />
 
     <allow-in-power-save package="com.google.android.gms"/>
 </permissions>

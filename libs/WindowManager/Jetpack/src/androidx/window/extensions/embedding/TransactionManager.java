@@ -16,12 +16,12 @@
 
 package androidx.window.extensions.embedding;
 
-import static android.view.WindowManager.TRANSIT_CHANGE;
-import static android.view.WindowManager.TRANSIT_NONE;
+import static android.window.TaskFragmentOrganizer.TASK_FRAGMENT_TRANSIT_CHANGE;
+import static android.window.TaskFragmentOrganizer.TASK_FRAGMENT_TRANSIT_NONE;
 
 import android.os.IBinder;
-import android.view.WindowManager.TransitionType;
 import android.window.TaskFragmentOrganizer;
+import android.window.TaskFragmentOrganizer.TaskFragmentTransitionType;
 import android.window.WindowContainerTransaction;
 
 import androidx.annotation.NonNull;
@@ -77,9 +77,11 @@ class TransactionManager {
     @NonNull
     TransactionRecord startNewTransaction(@Nullable IBinder taskFragmentTransactionToken) {
         if (mCurrentTransaction != null) {
+            final TransactionRecord lastTransaction = mCurrentTransaction;
             mCurrentTransaction = null;
             throw new IllegalStateException(
-                    "The previous transaction has not been applied or aborted,");
+                    "The previous transaction:" + lastTransaction + " has not been applied or "
+                            + "aborted.");
         }
         mCurrentTransaction = new TransactionRecord(taskFragmentTransactionToken);
         return mCurrentTransaction;
@@ -122,8 +124,8 @@ class TransactionManager {
          * @see #setOriginType(int)
          * @see #getTransactionTransitionType()
          */
-        @TransitionType
-        private int mOriginType = TRANSIT_NONE;
+        @TaskFragmentTransitionType
+        private int mOriginType = TASK_FRAGMENT_TRANSIT_NONE;
 
         TransactionRecord(@Nullable IBinder taskFragmentTransactionToken) {
             mTaskFragmentTransactionToken = taskFragmentTransactionToken;
@@ -136,12 +138,12 @@ class TransactionManager {
         }
 
         /**
-         * Sets the {@link TransitionType} that triggers this transaction. If there are multiple
-         * calls, only the first call will be respected as the "origin" type.
+         * Sets the {@link TaskFragmentTransitionType} that triggers this transaction. If there are
+         * multiple calls, only the first call will be respected as the "origin" type.
          */
-        void setOriginType(@TransitionType int type) {
+        void setOriginType(@TaskFragmentTransitionType int type) {
             ensureCurrentTransaction();
-            if (mOriginType != TRANSIT_NONE) {
+            if (mOriginType != TASK_FRAGMENT_TRANSIT_NONE) {
                 // Skip if the origin type has already been set.
                 return;
             }
@@ -188,14 +190,26 @@ class TransactionManager {
         }
 
         /**
-         * Gets the {@link TransitionType} that we will request transition with for the
+         * Gets the {@link TaskFragmentTransitionType} that we will request transition with for the
          * current {@link WindowContainerTransaction}.
          */
         @VisibleForTesting
-        @TransitionType
+        @TaskFragmentTransitionType
         int getTransactionTransitionType() {
-            // Use TRANSIT_CHANGE as default if there is not opening/closing window.
-            return mOriginType != TRANSIT_NONE ? mOriginType : TRANSIT_CHANGE;
+            // Use TASK_FRAGMENT_TRANSIT_CHANGE as default if there is not opening/closing window.
+            return mOriginType != TASK_FRAGMENT_TRANSIT_NONE
+                    ? mOriginType
+                    : TASK_FRAGMENT_TRANSIT_CHANGE;
+        }
+
+        @Override
+        @NonNull
+        public String toString() {
+            return TransactionRecord.class.getSimpleName() + "{"
+                    + "token=" + mTaskFragmentTransactionToken
+                    + ", type=" + getTransactionTransitionType()
+                    + ", transaction=" + mTransaction
+                    + "}";
         }
     }
 }

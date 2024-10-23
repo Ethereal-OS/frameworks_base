@@ -21,6 +21,7 @@ import static android.os.BatteryManager.EXTRA_PRESENT;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.inOrder;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.staticMockMarker;
+import static com.android.settingslib.fuelgauge.BatterySaverLogging.SAVER_ENABLED_QS;
 
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -28,6 +29,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Intent;
+import android.hardware.usb.UsbManager;
+import android.hardware.usb.UsbPort;
+import android.hardware.usb.UsbPortStatus;
 import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.PowerManager;
@@ -55,6 +59,10 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.MockitoSession;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 @SmallTest
 @RunWith(AndroidTestingRunner.class)
 @TestableLooper.RunWithLooper
@@ -64,8 +72,10 @@ public class BatteryControllerTest extends SysuiTestCase {
     @Mock private BroadcastDispatcher mBroadcastDispatcher;
     @Mock private DemoModeController mDemoModeController;
     @Mock private View mView;
+    @Mock private UsbPort mUsbPort;
+    @Mock private UsbManager mUsbManager;
+    @Mock private UsbPortStatus mUsbPortStatus;
     private BatteryControllerImpl mBatteryController;
-
     private MockitoSession mMockitoSession;
 
     @Before
@@ -82,6 +92,7 @@ public class BatteryControllerTest extends SysuiTestCase {
                 mBroadcastDispatcher,
                 mDemoModeController,
                 mock(DumpManager.class),
+                mock(BatteryControllerLogger.class),
                 new Handler(),
                 new Handler());
         // Can throw if updateEstimate is called on the main thread
@@ -167,8 +178,10 @@ public class BatteryControllerTest extends SysuiTestCase {
         mBatteryController.setPowerSaveMode(false, mView);
 
         StaticInOrder inOrder = inOrder(staticMockMarker(BatterySaverUtils.class));
-        inOrder.verify(() -> BatterySaverUtils.setPowerSaveMode(getContext(), true, true));
-        inOrder.verify(() -> BatterySaverUtils.setPowerSaveMode(getContext(), false, true));
+        inOrder.verify(() -> BatterySaverUtils.setPowerSaveMode(getContext(), true, true,
+                SAVER_ENABLED_QS));
+        inOrder.verify(() -> BatterySaverUtils.setPowerSaveMode(getContext(), false, true,
+                SAVER_ENABLED_QS));
     }
 
     @Test
@@ -223,31 +236,85 @@ public class BatteryControllerTest extends SysuiTestCase {
     }
 
     @Test
-    public void batteryStateChanged_healthNotOverheated_outputsFalse() {
+    public void batteryStateChanged_chargingStatusNotLongLife_outputsFalse() {
         Intent intent = new Intent(Intent.ACTION_BATTERY_CHANGED);
-        intent.putExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_GOOD);
+        intent.putExtra(BatteryManager.EXTRA_CHARGING_STATUS,
+                BatteryManager.CHARGING_POLICY_DEFAULT);
 
         mBatteryController.onReceive(getContext(), intent);
 
-        Assert.assertFalse(mBatteryController.isOverheated());
+        Assert.assertFalse(mBatteryController.isBatteryDefender());
     }
 
     @Test
-    public void batteryStateChanged_healthOverheated_outputsTrue() {
+    public void batteryStateChanged_chargingStatusLongLife_outputsTrue() {
         Intent intent = new Intent(Intent.ACTION_BATTERY_CHANGED);
-        intent.putExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_OVERHEAT);
+        intent.putExtra(BatteryManager.EXTRA_CHARGING_STATUS,
+                BatteryManager.CHARGING_POLICY_ADAPTIVE_LONGLIFE);
 
         mBatteryController.onReceive(getContext(), intent);
 
-        Assert.assertTrue(mBatteryController.isOverheated());
+        Assert.assertTrue(mBatteryController.isBatteryDefender());
     }
 
     @Test
-    public void batteryStateChanged_noHealthGiven_outputsFalse() {
+    public void batteryStateChanged_noChargingStatusGiven_outputsFalse() {
         Intent intent = new Intent(Intent.ACTION_BATTERY_CHANGED);
 
         mBatteryController.onReceive(getContext(), intent);
 
-        Assert.assertFalse(mBatteryController.isOverheated());
+        Assert.assertFalse(mBatteryController.isBatteryDefender());
+    }
+
+    @Test
+    public void complianceChanged_complianceIncompatible_outputsTrue() {
+        mContext.addMockSystemService(UsbManager.class, mUsbManager);
+        setupIncompatibleCharging();
+        Intent intent = new Intent(UsbManager.ACTION_USB_PORT_COMPLIANCE_CHANGED);
+
+        mBatteryController.onReceive(getContext(), intent);
+
+        Assert.assertTrue(mBatteryController.isIncompatibleCharging());
+    }
+
+    @Test
+    public void complianceChanged_emptyComplianceWarnings_outputsFalse() {
+        mContext.addMockSystemService(UsbManager.class, mUsbManager);
+        setupIncompatibleCharging();
+        when(mUsbPortStatus.getComplianceWarnings()).thenReturn(new int[1]);
+        Intent intent = new Intent(UsbManager.ACTION_USB_PORT_COMPLIANCE_CHANGED);
+
+        mBatteryController.onReceive(getContext(), intent);
+
+        Assert.assertFalse(mBatteryController.isIncompatibleCharging());
+    }
+
+    @Test
+    public void callbackRemovedWhileDispatching_doesntCrash() {
+        final AtomicBoolean remove = new AtomicBoolean(false);
+        BatteryStateChangeCallback callback = new BatteryStateChangeCallback() {
+            @Override
+            public void onBatteryLevelChanged(int level, boolean pluggedIn, boolean charging) {
+                if (remove.get()) {
+                    mBatteryController.removeCallback(this);
+                }
+            }
+        };
+        mBatteryController.addCallback(callback);
+        // Add another callback so the iteration continues
+        mBatteryController.addCallback(new BatteryStateChangeCallback() {});
+        remove.set(true);
+        mBatteryController.fireBatteryLevelChanged();
+    }
+
+    private void setupIncompatibleCharging() {
+        final List<UsbPort> usbPorts = new ArrayList<>();
+        usbPorts.add(mUsbPort);
+        when(mUsbManager.getPorts()).thenReturn(usbPorts);
+        when(mUsbPort.getStatus()).thenReturn(mUsbPortStatus);
+        when(mUsbPort.supportsComplianceWarnings()).thenReturn(true);
+        when(mUsbPortStatus.isConnected()).thenReturn(true);
+        when(mUsbPortStatus.getComplianceWarnings())
+                .thenReturn(new int[]{UsbPortStatus.COMPLIANCE_WARNING_DEBUG_ACCESSORY});
     }
 }

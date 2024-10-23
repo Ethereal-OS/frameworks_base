@@ -56,11 +56,13 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.lang.ref.Reference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * A class to manage native tombstones.
@@ -72,7 +74,12 @@ public final class NativeTombstoneManager {
 
     private final Context mContext;
     private final Handler mHandler;
+    // TODO(b/339371242): The garbage collector is misbehaving, and we must have
+    // a reference to this member outside the constructor. More details in the
+    // corresponding comment elsewhere in this class.
     private final TombstoneWatcher mWatcher;
+
+    private final ReentrantLock mTmpFileLock = new ReentrantLock();
 
     private final Object mLock = new Object();
 
@@ -89,12 +96,14 @@ public final class NativeTombstoneManager {
         mHandler = thread.getThreadHandler();
 
         mWatcher = new TombstoneWatcher();
-        mWatcher.startWatching();
     }
 
     void onSystemReady() {
         registerForUserRemoval();
         registerForPackageRemoval();
+        mWatcher.startWatching();
+
+        BootReceiver.initDropboxRateLimiter();
 
         // Scan existing tombstones.
         mHandler.post(() -> {
@@ -109,6 +118,18 @@ public final class NativeTombstoneManager {
 
     private void handleTombstone(File path) {
         final String filename = path.getName();
+
+        // Clean up temporary files if they made it this far (e.g. if system server crashes).
+        if (filename.endsWith(".tmp")) {
+            mTmpFileLock.lock();
+            try {
+                path.delete();
+            } finally {
+                mTmpFileLock.unlock();
+            }
+            return;
+        }
+
         if (!filename.startsWith("tombstone_")) {
             return;
         }
@@ -121,7 +142,15 @@ public final class NativeTombstoneManager {
         if (parsedTombstone.isPresent()) {
             processName = parsedTombstone.get().getProcessName();
         }
-        BootReceiver.addTombstoneToDropBox(mContext, path, isProtoFile, processName);
+        BootReceiver.addTombstoneToDropBox(mContext, path, isProtoFile, processName, mTmpFileLock);
+
+        // TODO(b/339371242): An optimizer on WearOS is misbehaving and this member is being garbage
+        // collected as it's never referenced inside this class outside of the constructor. But,
+        // it's a file watcher, and needs to stay alive to do its job. So, add a cheap check here to
+        // force the GC to behave itself. From a technical perspective, it's possible that we need
+        // to add this trick to every single member function, but this seems to work correctly in
+        // practice and avoids polluting a lot more of this class.
+        Reference.reachabilityFence(mWatcher);
     }
 
     private Optional<TombstoneFile> handleProtoTombstone(File path, boolean addToList) {
@@ -363,7 +392,7 @@ public final class NativeTombstoneManager {
                 return false;
             }
 
-            if (Math.abs(exitInfo.getTimestamp() - mTimestampMs) > 5000) {
+            if (Math.abs(exitInfo.getTimestamp() - mTimestampMs) > 10000) {
                 return false;
             }
 
@@ -560,7 +589,15 @@ public final class NativeTombstoneManager {
 
         @Override
         public void onEvent(int event, @Nullable String path) {
+            if (path == null) {
+                Slog.w(TAG, "path is null at TombstoneWatcher.onEvent()");
+                return;
+            }
             mHandler.post(() -> {
+                // Ignore .tmp files.
+                if (path.endsWith(".tmp")) {
+                    return;
+                }
                 handleTombstone(new File(TOMBSTONE_DIR, path));
             });
         }

@@ -17,6 +17,7 @@
 
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:androidprv="http://schemas.android.com/apk/prv/res/android"
     android:id="@+id/internet_connectivity_dialog"
     android:layout_width="@dimen/large_dialog_width"
@@ -127,7 +128,8 @@
 
                 <LinearLayout
                     android:id="@+id/mobile_network_layout"
-                    style="@style/InternetDialog.Network">
+                    style="@style/InternetDialog.Network"
+                    android:layout_height="72dp">
 
                     <FrameLayout
                         android:layout_width="24dp"
@@ -195,10 +197,84 @@
                   android:layout="@layout/qs_dialog_secondary_mobile_network"
                   style="@style/InternetDialog.Network"/>
 
+                <Space
+                    android:id="@+id/mobile_connected_space"
+                    android:layout_height="8dp"
+                    android:layout_width="match_parent"
+                    android:visibility="gone"/>
+
+                <LinearLayout
+                    android:id="@+id/hotspot_layout"
+                    style="@style/InternetDialog.Network"
+                    android:layout_height="72dp">
+
+                    <FrameLayout
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:clickable="false"
+                        android:layout_gravity="center_vertical|start">
+                        <ImageView
+                            android:id="@+id/hotspot_icon"
+                            android:autoMirrored="true"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center"
+                            android:src="@drawable/ic_internet_hotspot_disabled"/>
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:clickable="false"
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:gravity="start|center_vertical">
+                        <TextView
+                            android:id="@+id/hotspot_title"
+                            android:maxLines="1"
+                            style="@style/InternetDialog.NetworkTitle"/>
+                        <TextView
+                            android:id="@+id/hotspot_summary"
+                            style="@style/InternetDialog.NetworkSummary"/>
+                    </LinearLayout>
+
+                    <View
+                        android:id="@+id/hotspot_toggle_divider"
+                        android:layout_width="1dp"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="7dp"
+                        android:layout_marginEnd="16dp"
+                        android:layout_gravity="center_vertical"
+                        android:background="?android:attr/textColorSecondary"/>
+
+                    <FrameLayout
+                        android:layout_width="@dimen/settingslib_switch_track_width"
+                        android:layout_height="48dp"
+                        android:layout_gravity="end|center_vertical">
+                        <Switch
+                            android:id="@+id/hotspot_toggle"
+                            android:contentDescription="@string/quick_settings_hotspot_label"
+                            android:switchMinWidth="@dimen/settingslib_switch_track_width"
+                            android:layout_gravity="center"
+                            android:layout_width="@dimen/settingslib_switch_track_width"
+                            android:layout_height="match_parent"
+                            android:track="@drawable/settingslib_track_selector"
+                            android:thumb="@drawable/settingslib_thumb_selector"
+                            android:theme="@style/MainSwitch.Settingslib"/>
+                    </FrameLayout>
+
+                </LinearLayout>
+
+                <Space
+                    android:id="@+id/wifi_connected_space"
+                    android:layout_height="8dp"
+                    android:layout_width="match_parent"
+                    android:visibility="gone"/>
+
                 <LinearLayout
                     android:id="@+id/turn_on_wifi_layout"
                     style="@style/InternetDialog.Network"
-                    android:layout_height="@dimen/internet_dialog_wifi_network_height"
+                    android:layout_height="@dimen/internet_dialog_wifi_toggle_height"
                     android:gravity="center"
                     android:clickable="false"
                     android:focusable="false">
@@ -250,6 +326,7 @@
                     android:id="@+id/wifi_connected_layout"
                     style="@style/InternetDialog.Network"
                     android:layout_height="@dimen/internet_dialog_wifi_network_height"
+                    android:layout_marginTop="8dp"
                     android:paddingStart="20dp"
                     android:paddingEnd="24dp"
                     android:background="@drawable/settingslib_switch_bar_bg_on"
@@ -262,8 +339,9 @@
                         android:layout_gravity="center_vertical|start">
                         <ImageView
                             android:id="@+id/wifi_connected_icon"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:scaleType="fitCenter"
                             android:layout_gravity="center"/>
                     </FrameLayout>
 
@@ -313,7 +391,8 @@
             <LinearLayout
                 android:id="@+id/see_all_layout"
                 style="@style/InternetDialog.Network"
-                android:layout_height="64dp"
+                android:layout_height="56dp"
+                android:paddingTop="8dp"
                 android:paddingStart="20dp">
 
                 <FrameLayout
@@ -386,9 +465,8 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <LinearLayout
+            <androidx.constraintlayout.widget.ConstraintLayout
                 android:id="@+id/button_layout"
-                android:orientation="horizontal"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -398,41 +476,58 @@
                 android:clickable="false"
                 android:focusable="false">
 
-                <LinearLayout
+                <Button
+                    android:id="@+id/apm_button"
+                    style="@style/Widget.Dialog.Button.BorderButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_gravity="start|center_vertical"
-                    android:orientation="vertical">
-                    <Button
-                        android:id="@+id/apm_button"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/turn_off_airplane_mode"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        style="@style/Widget.Dialog.Button.BorderButton"
-                        android:clickable="true"
-                        android:focusable="true"/>
-                </LinearLayout>
+                    android:layout_marginEnd="10dp"
+                    android:clickable="true"
+                    android:ellipsize="end"
+                    android:focusable="true"
+                    android:maxLines="1"
+                    android:text="@string/turn_off_airplane_mode"
+                    app:layout_constrainedWidth="true"
+                    app:layout_constraintHorizontal_bias="0"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintEnd_toStartOf="@id/share_wifi_button"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toTopOf="parent" />
 
-                <LinearLayout
+                <Button
+                    android:id="@+id/share_wifi_button"
+                    style="?android:attr/buttonBarNeutralButtonStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="16dp"
-                    android:layout_gravity="end|center_vertical">
-                    <Button
-                        android:id="@+id/done_button"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/inline_done_button"
-                        style="@style/Widget.Dialog.Button"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        android:clickable="true"
-                        android:focusable="true"/>
-                </LinearLayout>
-            </LinearLayout>
+                    android:layout_marginEnd="10dp"
+                    android:clickable="true"
+                    android:ellipsize="end"
+                    android:focusable="true"
+                    android:maxLines="1"
+                    android:visibility="gone"
+                    app:layout_constraintHorizontal_bias="0"
+                    android:text="@string/share_wifi_button_text"
+                    app:layout_constrainedWidth="true"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintEnd_toStartOf="@id/done_button"
+                    app:layout_constraintStart_toEndOf="@id/apm_button"
+                    app:layout_constraintTop_toTopOf="parent" />
+
+                <Button
+                    android:id="@+id/done_button"
+                    style="@style/Widget.Dialog.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:ellipsize="end"
+                    android:focusable="true"
+                    android:maxLines="1"
+                    android:text="@string/inline_done_button"
+                    app:layout_constrainedWidth="true"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintTop_toTopOf="parent" />
+            </androidx.constraintlayout.widget.ConstraintLayout>
 
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>

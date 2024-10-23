@@ -23,22 +23,34 @@ import static android.content.pm.SigningDetails.CertCapabilities.SHARED_USER_ID;
 import static android.system.OsConstants.O_CREAT;
 import static android.system.OsConstants.O_RDWR;
 
+import static com.android.internal.content.NativeLibraryHelper.LIB64_DIR_NAME;
 import static com.android.internal.content.NativeLibraryHelper.LIB_DIR_NAME;
+import static com.android.internal.util.FrameworkStatsLog.UNSAFE_INTENT_EVENT_REPORTED__EVENT_TYPE__EXPLICIT_INTENT_FILTER_UNMATCH;
+import static com.android.server.LocalManagerRegistry.ManagerNotFoundException;
+import static com.android.server.pm.PackageInstallerSession.APP_METADATA_FILE_ACCESS_MODE;
+import static com.android.server.pm.PackageInstallerSession.getAppMetadataSizeLimit;
+import static com.android.server.pm.PackageManagerService.APP_METADATA_FILE_IN_APK_PATH;
 import static com.android.server.pm.PackageManagerService.COMPRESSED_EXTENSION;
 import static com.android.server.pm.PackageManagerService.DEBUG_COMPRESSION;
 import static com.android.server.pm.PackageManagerService.DEBUG_INTENT_MATCHING;
 import static com.android.server.pm.PackageManagerService.DEBUG_PREFERRED;
+import static com.android.server.pm.PackageManagerService.DEFAULT_FILE_ACCESS_MODE;
+import static com.android.server.pm.PackageManagerService.DEFAULT_NATIVE_LIBRARY_FILE_ACCESS_MODE;
 import static com.android.server.pm.PackageManagerService.RANDOM_CODEPATH_PREFIX;
 import static com.android.server.pm.PackageManagerService.RANDOM_DIR_PREFIX;
+import static com.android.server.pm.PackageManagerService.SHELL_PACKAGE_NAME;
 import static com.android.server.pm.PackageManagerService.STUB_SUFFIX;
 import static com.android.server.pm.PackageManagerService.TAG;
 
+import android.Manifest;
+import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.UserIdInt;
 import android.app.ActivityManager;
 import android.compat.annotation.ChangeId;
 import android.compat.annotation.Disabled;
+import android.compat.annotation.Overridable;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -63,7 +75,9 @@ import android.os.Debug;
 import android.os.Environment;
 import android.os.FileUtils;
 import android.os.Process;
+import android.os.SELinux;
 import android.os.SystemProperties;
+import android.os.UserHandle;
 import android.os.incremental.IncrementalManager;
 import android.os.incremental.IncrementalStorage;
 import android.os.incremental.V4Signature;
@@ -85,17 +99,19 @@ import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.content.InstallLocationUtils;
 import com.android.internal.content.NativeLibraryHelper;
+import com.android.internal.pm.pkg.component.ParsedMainComponent;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.FastPrintWriter;
 import com.android.internal.util.HexDump;
 import com.android.server.EventLogTags;
 import com.android.server.IntentResolver;
+import com.android.server.LocalManagerRegistry;
 import com.android.server.Watchdog;
+import com.android.server.am.ActivityManagerUtils;
 import com.android.server.compat.PlatformCompat;
 import com.android.server.pm.dex.PackageDexUsage;
-import com.android.server.pm.parsing.pkg.AndroidPackage;
+import com.android.server.pm.pkg.AndroidPackage;
 import com.android.server.pm.pkg.PackageStateInternal;
-import com.android.server.pm.pkg.component.ParsedMainComponent;
 import com.android.server.pm.resolution.ComponentResolverApi;
 import com.android.server.pm.verify.domain.DomainVerificationManagerInternal;
 
@@ -113,18 +129,24 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * Class containing helper methods for the PackageManagerService.
@@ -134,9 +156,12 @@ import java.util.zip.GZIPInputStream;
 public class PackageManagerServiceUtils {
     private static final long MAX_CRITICAL_INFO_DUMP_SIZE = 3 * 1000 * 1000; // 3MB
 
-    private static final boolean DEBUG = Build.IS_ENG;
+    private static final boolean DEBUG = Build.IS_DEBUGGABLE;
 
-    public final static Predicate<PackageStateInternal> REMOVE_IF_NULL_PKG =
+    // Skip APEX which doesn't have a valid UID
+    public static final Predicate<PackageStateInternal> REMOVE_IF_APEX_PKG =
+            pkgSetting -> pkgSetting.getPkg().isApex();
+    public static final Predicate<PackageStateInternal> REMOVE_IF_NULL_PKG =
             pkgSetting -> pkgSetting.getPkg() == null;
 
     // This is a horrible hack to workaround b/240373119, specifically for fixing the T branch.
@@ -145,8 +170,32 @@ public class PackageManagerServiceUtils {
             ThreadLocal.withInitial(() -> false);
 
     /**
-     * Components of apps targeting Android T and above will stop receiving intents from
-     * external callers that do not match its declared intent filters.
+     * Type used with {@link #canJoinSharedUserId(String, SigningDetails, SharedUserSetting, int)}
+     * when the package attempting to join the sharedUserId is a new install.
+     */
+    public static final int SHARED_USER_ID_JOIN_TYPE_INSTALL = 0;
+    /**
+     * Type used with {@link #canJoinSharedUserId(String, SigningDetails, SharedUserSetting, int)}
+     * when the package attempting to join the sharedUserId is an update.
+     */
+    public static final int SHARED_USER_ID_JOIN_TYPE_UPDATE = 1;
+    /**
+     * Type used with {@link #canJoinSharedUserId(String, SigningDetails, SharedUserSetting, int)}
+     * when the package attempting to join the sharedUserId is a part of the system image.
+     */
+    public static final int SHARED_USER_ID_JOIN_TYPE_SYSTEM = 2;
+    @IntDef(prefix = { "TYPE_" }, value = {
+            SHARED_USER_ID_JOIN_TYPE_INSTALL,
+            SHARED_USER_ID_JOIN_TYPE_UPDATE,
+            SHARED_USER_ID_JOIN_TYPE_SYSTEM,
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface SharedUserIdJoinType {}
+
+    /**
+     * Intents sent from apps targeting Android V and above will stop resolving to components with
+     * non matching intent filters, even when explicitly setting a component name, unless the
+     * target components are in the same app as the calling app.
      *
      * When an app registers an exported component in its manifest and adds an <intent-filter>,
      * the component can be started by any intent - even those that do not match the intent filter.
@@ -154,14 +203,15 @@ public class PackageManagerServiceUtils {
      * Without checking the intent when the component is started, in some circumstances this can
      * allow 3P apps to trigger internal-only functionality.
      */
+    @Overridable
     @ChangeId
-    @Disabled  /* Revert enforcement: b/274147456 */
+    @Disabled
     private static final long ENFORCE_INTENTS_TO_MATCH_INTENT_FILTERS = 161252188;
 
     /**
      * The initial enabled state of the cache before other checks are done.
      */
-    private static final boolean DEFAULT_PACKAGE_PARSER_CACHE_ENABLED = false;
+    private static final boolean DEFAULT_PACKAGE_PARSER_CACHE_ENABLED = true;
 
     /**
      * Whether to skip all other checks and force the cache to be enabled.
@@ -170,6 +220,17 @@ public class PackageManagerServiceUtils {
      * build fingerprint changes.
      */
     private static final boolean FORCE_PACKAGE_PARSED_CACHE_ENABLED = false;
+
+    /**
+     * Returns the registered PackageManagerLocal instance, or else throws an unchecked error.
+     */
+    public static @NonNull PackageManagerLocal getPackageManagerLocal() {
+        try {
+            return LocalManagerRegistry.getManagerOrThrow(PackageManagerLocal.class);
+        } catch (ManagerNotFoundException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     /**
      * Checks if the package was inactive during since <code>thresholdTimeinMillis</code>.
@@ -357,7 +418,11 @@ public class PackageManagerServiceUtils {
      * <br />
      * {@link PackageManager#SIGNATURE_NO_MATCH}: if the two signature sets differ.
      */
-    public static int compareSignatures(Signature[] s1, Signature[] s2) {
+    public static int compareSignatures(SigningDetails sd1, SigningDetails sd2) {
+        return compareSignatureArrays(sd1.getSignatures(), sd2.getSignatures());
+    }
+
+    static int compareSignatureArrays(Signature[] s1, Signature[] s2) {
         if (s1 == null) {
             return s2 == null
                     ? PackageManager.SIGNATURE_NEITHER_SIGNED
@@ -399,10 +464,10 @@ public class PackageManagerServiceUtils {
      * set or if the signing details of the package are unknown.
      */
     public static boolean comparePackageSignatures(PackageSetting pkgSetting,
-            Signature[] signatures) {
+            SigningDetails otherSigningDetails) {
         final SigningDetails signingDetails = pkgSetting.getSigningDetails();
         return signingDetails == SigningDetails.UNKNOWN
-                || compareSignatures(signingDetails.getSignatures(), signatures)
+                || compareSignatures(signingDetails, otherSigningDetails)
                 == PackageManager.SIGNATURE_MATCH;
     }
 
@@ -467,11 +532,8 @@ public class PackageManagerServiceUtils {
     }
 
     /**
-     * Make sure the updated priv app is signed with the same key as the original APK file on the
-     * /system partition.
-     *
-     * <p>The rationale is that {@code disabledPkg} is a PackageSetting backed by xml files in /data
-     * and is not tamperproof.
+     * Verifies the updated system app has a signature that is consistent with the pre-installed
+     * version or the signing lineage.
      */
     private static boolean matchSignatureInSystem(@NonNull String packageName,
             @NonNull SigningDetails signingDetails, PackageSetting disabledPkgSetting) {
@@ -497,15 +559,12 @@ public class PackageManagerServiceUtils {
 
     /** Returns true if standard APK Verity is enabled. */
     static boolean isApkVerityEnabled() {
+        if (android.security.Flags.deprecateFsvSig()) {
+            return false;
+        }
         return Build.VERSION.DEVICE_INITIAL_SDK_INT >= Build.VERSION_CODES.R
                 || SystemProperties.getInt("ro.apk_verity.mode", FSVERITY_DISABLED)
                         == FSVERITY_ENABLED;
-    }
-
-    /** Returns true to force apk verification if the package is considered privileged. */
-    static boolean isApkVerificationForced(@Nullable PackageSetting ps) {
-        // TODO(b/154310064): re-enable.
-        return false;
     }
 
     /**
@@ -513,6 +572,7 @@ public class PackageManagerServiceUtils {
      * @returns {@code true} if the compat signatures were matched; otherwise, {@code false}.
      * @throws PackageManagerException if the signatures did not match.
      */
+    @SuppressWarnings("ReferenceEquality")
     public static boolean verifySignatures(PackageSetting pkgSetting,
             @Nullable SharedUserSetting sharedUserSetting,
             PackageSetting disabledPkgSetting, SigningDetails parsedSignatures,
@@ -521,13 +581,23 @@ public class PackageManagerServiceUtils {
         final String packageName = pkgSetting.getPackageName();
         boolean compatMatch = false;
         if (pkgSetting.getSigningDetails().getSignatures() != null) {
-            // Already existing package. Make sure signatures match
+            // For an already existing package, make sure the parsed signatures from the package
+            // match the one in PackageSetting.
             boolean match = parsedSignatures.checkCapability(
                     pkgSetting.getSigningDetails(),
                     SigningDetails.CertCapabilities.INSTALLED_DATA)
                             || pkgSetting.getSigningDetails().checkCapability(
                                     parsedSignatures,
                                     SigningDetails.CertCapabilities.ROLLBACK);
+            // Also make sure the parsed signatures are consistent with the disabled package
+            // setting, if any. The additional UNKNOWN check is because disabled package settings
+            // may not have SigningDetails currently, and we don't want to cause an uninstall.
+            if (android.security.Flags.extendVbChainToUpdatedApk()
+                    && match && disabledPkgSetting != null
+                    && disabledPkgSetting.getSigningDetails() != SigningDetails.UNKNOWN) {
+                match = matchSignatureInSystem(packageName, parsedSignatures, disabledPkgSetting);
+            }
+
             if (!match && compareCompat) {
                 match = matchSignaturesCompat(packageName, pkgSetting.getSignatures(),
                         parsedSignatures);
@@ -544,11 +614,6 @@ public class PackageManagerServiceUtils {
                                         parsedSignatures,
                                         pkgSetting.getSigningDetails(),
                                         SigningDetails.CertCapabilities.ROLLBACK);
-            }
-
-            if (!match && isApkVerificationForced(disabledPkgSetting)) {
-                match = matchSignatureInSystem(packageName, pkgSetting.getSigningDetails(),
-                        disabledPkgSetting);
             }
 
             if (!match && isRollback) {
@@ -572,17 +637,9 @@ public class PackageManagerServiceUtils {
             // the older ones.  We check to see if either the new package is signed by an older cert
             // with which the current sharedUser is ok, or if it is signed by a newer one, and is ok
             // with being sharedUser with the existing signing cert.
-            boolean match = canJoinSharedUserId(parsedSignatures,
-                    sharedUserSetting.getSigningDetails());
-            // Special case: if the sharedUserId capability check failed it could be due to this
-            // being the only package in the sharedUserId so far and the lineage being updated to
-            // deny the sharedUserId capability of the previous key in the lineage.
-            final ArraySet<PackageStateInternal> susPackageStates =
-                    (ArraySet<PackageStateInternal>) sharedUserSetting.getPackageStates();
-            if (!match && susPackageStates.size() == 1
-                    && susPackageStates.valueAt(0).getPackageName().equals(packageName)) {
-                match = true;
-            }
+            boolean match = canJoinSharedUserId(packageName, parsedSignatures, sharedUserSetting,
+                    pkgSetting.getSigningDetails().getSignatures() != null
+                            ? SHARED_USER_ID_JOIN_TYPE_UPDATE : SHARED_USER_ID_JOIN_TYPE_INSTALL);
             if (!match && compareCompat) {
                 match = matchSignaturesCompat(
                         packageName, sharedUserSetting.signatures, parsedSignatures);
@@ -605,36 +662,6 @@ public class PackageManagerServiceUtils {
                         + " has no signatures that match those in shared user "
                         + sharedUserSetting.name + "; ignoring!");
             }
-            // It is possible that this package contains a lineage that blocks sharedUserId access
-            // to an already installed package in the sharedUserId signed with a previous key.
-            // Iterate over all of the packages in the sharedUserId and ensure any that are signed
-            // with a key in this package's lineage have the SHARED_USER_ID capability granted.
-            if (parsedSignatures.hasPastSigningCertificates()) {
-                for (int i = 0; i < susPackageStates.size(); i++) {
-                    PackageStateInternal shUidPkgSetting = susPackageStates.valueAt(i);
-                    // if the current package in the sharedUserId is the package being updated then
-                    // skip this check as the update may revoke the sharedUserId capability from
-                    // the key with which this app was previously signed.
-                    if (packageName.equals(shUidPkgSetting.getPackageName())) {
-                        continue;
-                    }
-                    SigningDetails shUidSigningDetails =
-                            shUidPkgSetting.getSigningDetails();
-                    // The capability check only needs to be performed against the package if it is
-                    // signed with a key that is in the lineage of the package being installed.
-                    if (parsedSignatures.hasAncestor(shUidSigningDetails)) {
-                        if (!parsedSignatures.checkCapability(shUidSigningDetails,
-                                SigningDetails.CertCapabilities.SHARED_USER_ID)) {
-                            throw new PackageManagerException(
-                                    INSTALL_FAILED_SHARED_USER_INCOMPATIBLE,
-                                    "Package " + packageName
-                                            + " revoked the sharedUserId capability from the"
-                                            + " signing key used to sign "
-                                            + shUidPkgSetting.getPackageName());
-                        }
-                    }
-                }
-            }
             // If the lineage of this package diverges from the lineage of the sharedUserId then
             // do not allow the installation to proceed.
             if (!parsedSignatures.hasCommonAncestor(
@@ -648,25 +675,97 @@ public class PackageManagerServiceUtils {
     }
 
     /**
-     * Returns whether the package with {@code packageSigningDetails} can join the sharedUserId
-     * with {@code sharedUserSigningDetails}.
+     * Returns whether the package {@code packageName} can join the sharedUserId based on the
+     * settings in {@code sharedUserSetting}.
      * <p>
      * A sharedUserId maintains a shared {@link SigningDetails} containing the full lineage and
      * capabilities for each package in the sharedUserId. A package can join the sharedUserId if
      * its current signer is the same as the shared signer, or if the current signer of either
      * is in the signing lineage of the other with the {@link
      * SigningDetails.CertCapabilities#SHARED_USER_ID} capability granted to that previous signer
-     * in the lineage.
+     * in the lineage. In the case of a key compromise, an app signed with a lineage revoking
+     * this capability from a previous signing key can still join the sharedUserId with another
+     * app signed with this previous key if the joining app is being updated; however, a new
+     * install will not be allowed until all apps have rotated off the key with the capability
+     * revoked.
      *
+     * @param packageName           the name of the package seeking to join the sharedUserId
      * @param packageSigningDetails the {@code SigningDetails} of the package seeking to join the
-     *                             sharedUserId
-     * @param sharedUserSigningDetails the {@code SigningDetails} of the sharedUserId
+     *                              sharedUserId
+     * @param sharedUserSetting     the {@code SharedUserSetting} for the sharedUserId {@code
+     *                              packageName} is seeking to join
+     * @param joinType              the type of join (install, update, system, etc)
      * @return true if the package seeking to join the sharedUserId meets the requirements
      */
-    public static boolean canJoinSharedUserId(@NonNull SigningDetails packageSigningDetails,
-            @NonNull SigningDetails sharedUserSigningDetails) {
-        return packageSigningDetails.checkCapability(sharedUserSigningDetails, SHARED_USER_ID)
-                || sharedUserSigningDetails.checkCapability(packageSigningDetails, SHARED_USER_ID);
+    public static boolean canJoinSharedUserId(@NonNull String packageName,
+            @NonNull SigningDetails packageSigningDetails,
+            @NonNull SharedUserSetting sharedUserSetting, @SharedUserIdJoinType int joinType) {
+        SigningDetails sharedUserSigningDetails = sharedUserSetting.getSigningDetails();
+        boolean capabilityGranted =
+                packageSigningDetails.checkCapability(sharedUserSigningDetails, SHARED_USER_ID)
+                        || sharedUserSigningDetails.checkCapability(packageSigningDetails,
+                        SHARED_USER_ID);
+
+        // If the current signer for either the package or the sharedUserId is the current signer
+        // of the other or in the lineage of the other with the SHARED_USER_ID capability granted,
+        // then a system and update join type can proceed; an install join type is not allowed here
+        // since the sharedUserId may contain packages that are signed with a key untrusted by
+        // the new package.
+        if (capabilityGranted && joinType != SHARED_USER_ID_JOIN_TYPE_INSTALL) {
+            return true;
+        }
+
+        // If the package is signed with a key that is no longer trusted by the sharedUserId, then
+        // the join should not be allowed unless this is a system join type; system packages can
+        // join the sharedUserId as long as they share a common lineage.
+        if (!capabilityGranted && sharedUserSigningDetails.hasAncestor(packageSigningDetails)) {
+            if (joinType == SHARED_USER_ID_JOIN_TYPE_SYSTEM) {
+                return true;
+            }
+            return false;
+        }
+
+        // If the package is signed with a rotated key that no longer trusts the sharedUserId key,
+        // then allow system and update join types to rotate away from an untrusted key; install
+        // join types are not allowed since a new package that doesn't trust a previous key
+        // shouldn't be allowed to join until all packages in the sharedUserId have rotated off the
+        // untrusted key.
+        if (!capabilityGranted && packageSigningDetails.hasAncestor(sharedUserSigningDetails)) {
+            if (joinType != SHARED_USER_ID_JOIN_TYPE_INSTALL) {
+                return true;
+            }
+            return false;
+        }
+
+        // If the capability is not granted and the package signatures are not an ancestor
+        // or descendant of the sharedUserId signatures, then do not allow any join type to join
+        // the sharedUserId since there are no common signatures.
+        if (!capabilityGranted) {
+            return false;
+        }
+
+        // At this point this is a new install with the capability granted; ensure the current
+        // packages in the sharedUserId are all signed by a key trusted by the new package.
+        final ArraySet<PackageStateInternal> susPackageStates =
+                (ArraySet<PackageStateInternal>) sharedUserSetting.getPackageStates();
+        if (packageSigningDetails.hasPastSigningCertificates()) {
+            for (PackageStateInternal shUidPkgSetting : susPackageStates) {
+                SigningDetails shUidSigningDetails = shUidPkgSetting.getSigningDetails();
+                // The capability check only needs to be performed against the package if it is
+                // signed with a key that is in the lineage of the package being installed.
+                if (packageSigningDetails.hasAncestor(shUidSigningDetails)) {
+                    if (!packageSigningDetails.checkCapability(shUidSigningDetails,
+                            SigningDetails.CertCapabilities.SHARED_USER_ID)) {
+                        Slog.d(TAG, "Package " + packageName
+                                + " revoked the sharedUserId capability from the"
+                                + " signing key used to sign "
+                                + shUidPkgSetting.getPackageName());
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     /**
@@ -765,7 +864,7 @@ public class PackageManagerServiceUtils {
             FileUtils.copy(fileIn, outputStream);
             // Flush anything in buffer before chmod, because any writes after chmod will fail.
             outputStream.flush();
-            Os.fchmod(outputStream.getFD(), 0644);
+            Os.fchmod(outputStream.getFD(), DEFAULT_FILE_ACCESS_MODE);
             atomicFile.finishWrite(outputStream);
             return PackageManager.INSTALL_SUCCEEDED;
         } catch (IOException e) {
@@ -839,16 +938,22 @@ public class PackageManagerServiceUtils {
 
         final File packageFile = new File(packagePath);
         final long sizeBytes;
-        try {
-            sizeBytes = InstallLocationUtils.calculateInstalledSize(pkg, abiOverride);
-        } catch (IOException e) {
-            if (!packageFile.exists()) {
-                ret.recommendedInstallLocation = InstallLocationUtils.RECOMMEND_FAILED_INVALID_URI;
-            } else {
-                ret.recommendedInstallLocation = InstallLocationUtils.RECOMMEND_FAILED_INVALID_APK;
-            }
+        if (!PackageInstallerSession.isArchivedInstallation(flags)) {
+            try {
+                sizeBytes = InstallLocationUtils.calculateInstalledSize(pkg, abiOverride);
+            } catch (IOException e) {
+                if (!packageFile.exists()) {
+                    ret.recommendedInstallLocation =
+                            InstallLocationUtils.RECOMMEND_FAILED_INVALID_URI;
+                } else {
+                    ret.recommendedInstallLocation =
+                            InstallLocationUtils.RECOMMEND_FAILED_INVALID_APK;
+                }
 
-            return ret;
+                return ret;
+            }
+        } else {
+            sizeBytes = 0;
         }
 
         final PackageInstaller.SessionParams sessionParams = new PackageInstaller.SessionParams(
@@ -933,7 +1038,7 @@ public class PackageManagerServiceUtils {
         if (!downgradeRequested) {
             return false;
         }
-        final boolean isDebuggable = Build.IS_ENG || isAppDebuggable;
+        final boolean isDebuggable = Build.IS_DEBUGGABLE || isAppDebuggable;
         if (isDebuggable) {
             return true;
         }
@@ -987,8 +1092,8 @@ public class PackageManagerServiceUtils {
 
         final File targetFile = new File(targetDir, targetName);
         final FileDescriptor targetFd = Os.open(targetFile.getAbsolutePath(),
-                O_RDWR | O_CREAT, 0644);
-        Os.chmod(targetFile.getAbsolutePath(), 0644);
+                O_RDWR | O_CREAT, DEFAULT_FILE_ACCESS_MODE);
+        Os.chmod(targetFile.getAbsolutePath(), DEFAULT_FILE_ACCESS_MODE);
         FileInputStream source = null;
         try {
             source = new FileInputStream(sourcePath);
@@ -1076,17 +1181,17 @@ public class PackageManagerServiceUtils {
                 throw new IOException("Root has not present");
             }
             return ApkChecksums.verityHashForFile(new File(filename), hashInfo.rawRootHash);
-        } catch (IOException ignore) {
-            Slog.e(TAG, "ERROR: could not load root hash from incremental install");
+        } catch (IOException e) {
+            Slog.i(TAG, "Could not obtain verity root hash", e);
         }
         return null;
     }
 
-    public static boolean isSystemApp(PackageSetting ps) {
+    public static boolean isSystemApp(PackageStateInternal ps) {
         return (ps.getFlags() & ApplicationInfo.FLAG_SYSTEM) != 0;
     }
 
-    public static boolean isUpdatedSystemApp(PackageSetting ps) {
+    public static boolean isUpdatedSystemApp(PackageStateInternal ps) {
         return (ps.getFlags() & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0;
     }
 
@@ -1097,22 +1202,22 @@ public class PackageManagerServiceUtils {
             Intent intent, String resolvedType, int filterCallingUid) {
         if (DISABLE_ENFORCE_INTENTS_TO_MATCH_INTENT_FILTERS.get()) return;
 
+        // Do not enforce filter matching when the caller is system or root
+        if (ActivityManager.canAccessUnexportedComponents(filterCallingUid)) return;
+
         final Printer logPrinter = DEBUG_INTENT_MATCHING
                 ? new LogPrinter(Log.VERBOSE, TAG, Log.LOG_ID_SYSTEM)
                 : null;
 
+        final boolean enforce = android.security.Flags.enforceIntentFilterMatch()
+                && compat.isChangeEnabledByUidInternal(
+                        ENFORCE_INTENTS_TO_MATCH_INTENT_FILTERS, filterCallingUid);
+
         for (int i = resolveInfos.size() - 1; i >= 0; --i) {
             final ComponentInfo info = resolveInfos.get(i).getComponentInfo();
 
-            // Do not enforce filter matching when the caller is system, root, or the same app
-            if (ActivityManager.checkComponentPermission(null, filterCallingUid,
-                    info.applicationInfo.uid, false) == PackageManager.PERMISSION_GRANTED) {
-                continue;
-            }
-
-            // Only enforce filter matching if target app's target SDK >= T
-            if (!compat.isChangeEnabledInternal(
-                    ENFORCE_INTENTS_TO_MATCH_INTENT_FILTERS, info.applicationInfo)) {
+            // Skip filter matching when the caller is targeting the same app
+            if (UserHandle.isSameApp(filterCallingUid, info.applicationInfo.uid)) {
                 continue;
             }
 
@@ -1143,14 +1248,22 @@ public class PackageManagerServiceUtils {
                 }
             }
             if (!match) {
-                Slog.w(TAG, "Intent does not match component's intent filter: " + intent);
-                Slog.w(TAG, "Access blocked: " + comp.getComponentName());
-                if (DEBUG_INTENT_MATCHING) {
-                    Slog.v(TAG, "Component intent filters:");
-                    comp.getIntents().forEach(f -> f.getIntentFilter().dump(logPrinter, "  "));
-                    Slog.v(TAG, "-----------------------------");
+                ActivityManagerUtils.logUnsafeIntentEvent(
+                        UNSAFE_INTENT_EVENT_REPORTED__EVENT_TYPE__EXPLICIT_INTENT_FILTER_UNMATCH,
+                        filterCallingUid, intent, resolvedType, enforce);
+                if (android.security.Flags.enforceIntentFilterMatch()) {
+                    intent.addExtendedFlags(Intent.EXTENDED_FLAG_FILTER_MISMATCH);
                 }
-                resolveInfos.remove(i);
+                if (enforce) {
+                    Slog.w(TAG, "Intent does not match component's intent filter: " + intent);
+                    Slog.w(TAG, "Access blocked: " + comp.getComponentName());
+                    if (DEBUG_INTENT_MATCHING) {
+                        Slog.v(TAG, "Component intent filters:");
+                        comp.getIntents().forEach(f -> f.getIntentFilter().dump(logPrinter, "  "));
+                        Slog.v(TAG, "-----------------------------");
+                    }
+                    resolveInfos.remove(i);
+                }
             }
         }
     }
@@ -1281,7 +1394,13 @@ public class PackageManagerServiceUtils {
      * Check if the Binder caller is system UID, root's UID, or shell's UID.
      */
     public static boolean isSystemOrRootOrShell() {
-        final int uid = Binder.getCallingUid();
+        return isSystemOrRootOrShell(Binder.getCallingUid());
+    }
+
+    /**
+     * @see #isSystemOrRoot()
+     */
+    public static boolean isSystemOrRootOrShell(int uid) {
         return uid == Process.SYSTEM_UID || uid == Process.ROOT_UID || uid == Process.SHELL_UID;
     }
 
@@ -1290,7 +1409,29 @@ public class PackageManagerServiceUtils {
      */
     public static boolean isSystemOrRoot() {
         final int uid = Binder.getCallingUid();
+        return isSystemOrRoot(uid);
+    }
+
+    /**
+     * Check if a UID is system UID or root's UID.
+     */
+    public static boolean isSystemOrRoot(int uid) {
         return uid == Process.SYSTEM_UID || uid == Process.ROOT_UID;
+    }
+
+    /**
+     * Check if a UID is non-system UID adopted shell permission.
+     */
+    public static boolean isAdoptedShell(int uid, Context context) {
+        return uid != Process.SYSTEM_UID && context.checkCallingOrSelfPermission(
+                Manifest.permission.USE_SYSTEM_DATA_LOADERS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Check if a UID is system UID or shell's UID.
+     */
+    public static boolean isRootOrShell(int uid) {
+        return uid == Process.ROOT_UID || uid == Process.SHELL_UID;
     }
 
     /**
@@ -1310,7 +1451,6 @@ public class PackageManagerServiceUtils {
             boolean isUserDebugBuild, String incrementalVersion, boolean isUpgrade) {
         if (!FORCE_PACKAGE_PARSED_CACHE_ENABLED) {
             if (!DEFAULT_PACKAGE_PARSER_CACHE_ENABLED) {
-                FileUtils.deleteContentsAndDir(Environment.getPackageCacheDirectory());
                 return null;
             }
 
@@ -1364,7 +1504,7 @@ public class PackageManagerServiceUtils {
         // NOTE: When no BUILD_NUMBER is set by the build system, it defaults to a build
         // that starts with "eng." to signify that this is an engineering build and not
         // destined for release.
-        if (incrementalVersion.startsWith("eng.")) {
+        if (isUpgrade || incrementalVersion.startsWith("eng.")) {
             Slog.w(TAG, "Wiping cache directory because the system partition changed.");
 
             // Heuristic: If the /system directory has been modified recently due to an "adb sync"
@@ -1413,6 +1553,162 @@ public class PackageManagerServiceUtils {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Check if package name is com.android.shell or is null.
+     */
+    public static boolean isInstalledByAdb(String initiatingPackageName) {
+        return initiatingPackageName == null || SHELL_PACKAGE_NAME.equals(initiatingPackageName);
+    }
+
+    /**
+     * Extract the app.metadata file from apk.
+     */
+    public static boolean extractAppMetadataFromApk(String apkPath, File appMetadataFile) {
+        boolean found = false;
+        try (ZipInputStream zipInputStream =
+                     new ZipInputStream(new FileInputStream(new File(apkPath)))) {
+            ZipEntry zipEntry = null;
+            while ((zipEntry = zipInputStream.getNextEntry()) != null) {
+                if (zipEntry.getName().equals(APP_METADATA_FILE_IN_APK_PATH)) {
+                    found = true;
+                    try (FileOutputStream out = new FileOutputStream(appMetadataFile)) {
+                        FileUtils.copy(zipInputStream, out);
+                    }
+                    if (appMetadataFile.length() > getAppMetadataSizeLimit()) {
+                        appMetadataFile.delete();
+                        return false;
+                    }
+                    Os.chmod(appMetadataFile.getAbsolutePath(), APP_METADATA_FILE_ACCESS_MODE);
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            Slog.e(TAG, e.getMessage());
+            return false;
+        }
+        return found;
+    }
+
+    public static void linkFilesToOldDirs(@NonNull Installer installer,
+                                           @NonNull String packageName,
+                                           @NonNull File newPath,
+                                           @Nullable Set<File> oldPaths) {
+        if (oldPaths == null || oldPaths.isEmpty()) {
+            return;
+        }
+        if (IncrementalManager.isIncrementalPath(newPath.getPath())) {
+            //TODO(b/291212866): handle incremental installs
+            return;
+        }
+        final File[] filesInNewPath = newPath.listFiles();
+        if (filesInNewPath == null || filesInNewPath.length == 0) {
+            return;
+        }
+        final List<File> splitApks = new ArrayList<>();
+        for (File file : filesInNewPath) {
+            if (!file.isDirectory() && file.toString().endsWith(".apk")) {
+                splitApks.add(file);
+            }
+        }
+        if (splitApks.isEmpty()) {
+            return;
+        }
+        final File[] splitApkNames = splitApks.toArray(new File[0]);
+        for (File oldPath : oldPaths) {
+            if (!oldPath.exists()) {
+                continue;
+            }
+            linkFilesAndSetModes(installer, packageName, newPath, oldPath, splitApkNames,
+                    DEFAULT_FILE_ACCESS_MODE);
+            linkNativeLibraries(installer, packageName, newPath, oldPath, LIB_DIR_NAME);
+            linkNativeLibraries(installer, packageName, newPath, oldPath, LIB64_DIR_NAME);
+        }
+
+    }
+
+    private static void linkNativeLibraries(@NonNull Installer installer,
+                                            @NonNull String packageName,
+                                            @NonNull File sourcePath, @NonNull File targetPath,
+                                            @NonNull String libDirName) {
+        final File sourceLibDir = new File(sourcePath, libDirName);
+        if (!sourceLibDir.exists()) {
+            return;
+        }
+        final File targetLibDir = new File(targetPath, libDirName);
+        if (!targetLibDir.exists()) {
+            try {
+                NativeLibraryHelper.createNativeLibrarySubdir(targetLibDir);
+            } catch (IOException e) {
+                Slog.w(PackageManagerService.TAG, "Failed to create native library dir at <"
+                        + targetLibDir + ">", e);
+                return;
+            }
+        }
+        final File[] archs = sourceLibDir.listFiles();
+        if (archs == null) {
+            return;
+        }
+        for (File arch : archs) {
+            final File targetArchDir = new File(targetLibDir, arch.getName());
+            if (!targetArchDir.exists()) {
+                try {
+                    NativeLibraryHelper.createNativeLibrarySubdir(targetArchDir);
+                } catch (IOException e) {
+                    Slog.w(PackageManagerService.TAG, "Failed to create native library subdir at <"
+                            + targetArchDir + ">", e);
+                    continue;
+                }
+            }
+            final File sourceArchDir = new File(sourceLibDir, arch.getName());
+            final File[] files = sourceArchDir.listFiles();
+            if (files == null || files.length == 0) {
+                continue;
+            }
+            linkFilesAndSetModes(installer, packageName, sourceArchDir, targetArchDir, files,
+                    DEFAULT_NATIVE_LIBRARY_FILE_ACCESS_MODE);
+        }
+    }
+
+    // Link the files with specified names from under the sourcePath to be under the targetPath
+    private static void linkFilesAndSetModes(@NonNull Installer installer, String packageName,
+            @NonNull File sourcePath, @NonNull File targetPath, @NonNull File[] files, int mode) {
+        for (File file : files) {
+            final String fileName = file.getName();
+            final File sourceFile = new File(sourcePath, fileName);
+            final File targetFile = new File(targetPath, fileName);
+            if (targetFile.exists()) {
+                if (DEBUG) {
+                    Slog.d(PackageManagerService.TAG, "Skipping existing linked file <"
+                            + targetFile + ">");
+                }
+                continue;
+            }
+            try {
+                installer.linkFile(packageName, fileName,
+                        sourcePath.getAbsolutePath(), targetPath.getAbsolutePath());
+                if (DEBUG) {
+                    Slog.d(PackageManagerService.TAG, "Linked <"
+                            + sourceFile + "> to <" + targetFile + ">");
+                }
+            } catch (Installer.InstallerException e) {
+                Slog.w(PackageManagerService.TAG, "Failed to link native library <"
+                        + sourceFile + "> to <" + targetFile + ">", e);
+                continue;
+            }
+            try {
+                Os.chmod(targetFile.getAbsolutePath(), mode);
+            } catch (ErrnoException e) {
+                Slog.w(PackageManagerService.TAG, "Failed to set mode for linked file <"
+                        + targetFile + ">", e);
+                continue;
+            }
+            if (!SELinux.restorecon(targetFile)) {
+                Slog.w(PackageManagerService.TAG, "Failed to restorecon for linked file <"
+                        + targetFile + ">");
             }
         }
     }

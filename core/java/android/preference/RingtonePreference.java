@@ -33,6 +33,7 @@ import android.util.AttributeSet;
  * <p>
  * If the user chooses the "Default" item, the saved string will be one of
  * {@link System#DEFAULT_RINGTONE_URI},
+ * {@link System#DEFAULT_RINGTONE2_URI},
  * {@link System#DEFAULT_NOTIFICATION_URI}, or
  * {@link System#DEFAULT_ALARM_ALERT_URI}. If the user chooses the "Silent"
  * item, the saved string will be an empty string.
@@ -248,7 +249,7 @@ public class RingtonePreference extends Preference implements
         if (requestCode == mRequestCode) {
             
             if (data != null) {
-                Uri uri = data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
+                Uri uri = data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, android.net.Uri.class);
                 
                 if (callChangeListener(uri != null ? uri.toString() : "")) {
                     onSaveRingtone(uri);

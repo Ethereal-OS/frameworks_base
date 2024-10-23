@@ -18,8 +18,8 @@ package android.libcore;
 
 import android.perftests.utils.BenchmarkState;
 import android.perftests.utils.PerfStatusReporter;
-import android.test.suitebuilder.annotation.LargeTest;
 
+import androidx.test.filters.LargeTest;
 import androidx.test.runner.AndroidJUnit4;
 
 import org.junit.Rule;
@@ -118,7 +118,7 @@ public class ReferencePerfTest {
         int got = count.get();
         if (n != got) {
             throw new IllegalStateException(
-                    String.format("Only %i of %i objects finalized?", got, n));
+                    String.format("Only %d of %d objects finalized?", got, n));
         }
     }
 }

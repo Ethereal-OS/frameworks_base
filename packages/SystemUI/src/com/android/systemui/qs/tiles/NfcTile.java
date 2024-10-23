@@ -34,7 +34,7 @@ import androidx.annotation.Nullable;
 
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
-import com.android.systemui.R;
+import com.android.systemui.res.R;
 import com.android.systemui.broadcast.BroadcastDispatcher;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
@@ -43,6 +43,7 @@ import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.logging.QSLogger;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.systemui.statusbar.policy.KeyguardStateController;
@@ -66,6 +67,7 @@ public class NfcTile extends SecureQSTile<BooleanState> {
     @Inject
     public NfcTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
@@ -76,7 +78,7 @@ public class NfcTile extends SecureQSTile<BooleanState> {
             BroadcastDispatcher broadcastDispatcher,
             KeyguardStateController keyguardStateController
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger, keyguardStateController);
         mBroadcastDispatcher = broadcastDispatcher;
     }
@@ -159,11 +161,7 @@ public class NfcTile extends SecureQSTile<BooleanState> {
 
     private NfcAdapter getAdapter() {
         if (mAdapter == null) {
-            try {
-                mAdapter = NfcAdapter.getNfcAdapter(mContext.getApplicationContext());
-            } catch (UnsupportedOperationException e) {
-                mAdapter = null;
-            }
+            mAdapter = NfcAdapter.getDefaultAdapter(mContext.getApplicationContext());
         }
         return mAdapter;
     }

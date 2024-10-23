@@ -21,7 +21,6 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
-import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
@@ -34,8 +33,6 @@ import android.media.AudioSystem;
 import android.net.ConnectivityManager;
 import android.os.Build;
 import android.os.Environment;
-import android.os.RemoteException;
-import android.os.ServiceManager;
 import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -227,15 +224,7 @@ class DatabaseHelper extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX bookmarksIndex2 ON bookmarks (shortcut);");
 
         // Populate bookmarks table with initial bookmarks
-        boolean onlyCore = false;
-        try {
-            onlyCore = IPackageManager.Stub.asInterface(ServiceManager.getService(
-                    "package")).isOnlyCoreApps();
-        } catch (RemoteException e) {
-        }
-        if (!onlyCore) {
-            loadBookmarks(db);
-        }
+        loadBookmarks(db);
 
         // Load initial volume levels into DB
         loadVolumeLevels(db);
@@ -718,9 +707,6 @@ class DatabaseHelper extends SQLiteOpenHelper {
                    Secure.LOCK_PATTERN_ENABLED,
                    Secure.LOCK_PATTERN_VISIBLE,
                    Secure.LOCK_PATTERN_TACTILE_FEEDBACK_ENABLED,
-                   Secure.LOCK_PATTERN_SIZE,
-                   Secure.LOCK_DOTS_VISIBLE,
-                   Secure.LOCK_SHOW_ERROR_PATH,
                    "lockscreen.password_type",
                    "lockscreen.lockoutattemptdeadline",
                    "lockscreen.patterneverchosen",
@@ -1965,11 +1951,10 @@ class DatabaseHelper extends SQLiteOpenHelper {
                 // Convert lock pattern
                 try {
                     LockPatternUtils lpu = new LockPatternUtils(mContext);
-                    byte size = lpu.getLockPatternSize(mUserHandle);
                     List<LockPatternView.Cell> cellPattern =
-                            LockPatternUtils.byteArrayToPattern(lockPattern.getBytes(), size);
+                            LockPatternUtils.byteArrayToPattern(lockPattern.getBytes());
                     lpu.setLockCredential(
-                            LockscreenCredential.createPattern(cellPattern, size),
+                            LockscreenCredential.createPattern(cellPattern),
                             LockscreenCredential.createNone(),
                             UserHandle.USER_SYSTEM);
                 } catch (IllegalArgumentException e) {
@@ -2257,9 +2242,6 @@ class DatabaseHelper extends SQLiteOpenHelper {
             loadIntegerSetting(stmt, Settings.System.SCREEN_BRIGHTNESS,
                     R.integer.def_screen_brightness);
 
-            loadIntegerSetting(stmt, Settings.System.SCREEN_BRIGHTNESS_FOR_VR,
-                    com.android.internal.R.integer.config_screenBrightnessForVrSettingDefault);
-
             loadBooleanSetting(stmt, Settings.System.SCREEN_BRIGHTNESS_MODE,
                     R.bool.def_screen_brightness_automatic_mode);
 
@@ -2385,9 +2367,6 @@ class DatabaseHelper extends SQLiteOpenHelper {
             loadBooleanSetting(stmt, Settings.Secure.WAKE_GESTURE_ENABLED,
                     R.bool.def_wake_gesture_enabled);
 
-            loadIntegerSetting(stmt, Settings.Secure.VOLUME_PANEL_ON_LEFT,
-                    R.bool.def_volume_panel_on_left);
-
             loadIntegerSetting(stmt, Secure.LOCK_SCREEN_SHOW_NOTIFICATIONS,
                     R.integer.def_lock_screen_show_notifications);
 
@@ -2434,6 +2413,12 @@ class DatabaseHelper extends SQLiteOpenHelper {
             loadStringSetting(stmt, Settings.Global.AIRPLANE_MODE_RADIOS,
                     R.string.def_airplane_mode_radios);
 
+            loadStringSetting(stmt, Global.SATELLITE_MODE_RADIOS,
+                    R.string.def_satellite_mode_radios);
+
+            loadIntegerSetting(stmt, Global.SATELLITE_MODE_ENABLED,
+                    R.integer.def_satellite_mode_enabled);
+
             loadStringSetting(stmt, Settings.Global.AIRPLANE_MODE_TOGGLEABLE_RADIOS,
                     R.string.airplane_mode_toggleable_radios);
 
@@ -2447,9 +2432,7 @@ class DatabaseHelper extends SQLiteOpenHelper {
                     R.bool.def_auto_time_zone); // Sync timezone to NITZ
 
             loadSetting(stmt, Settings.Global.STAY_ON_WHILE_PLUGGED_IN,
-                    ("1".equals(SystemProperties.get("ro.boot.qemu"))
-                        || res.getBoolean(R.bool.def_stay_on_while_plugged_in))
-                     ? 1 : 0);
+                    res.getBoolean(R.bool.def_stay_on_while_plugged_in) ? 1 : 0);
 
             loadIntegerSetting(stmt, Settings.Global.WIFI_SLEEP_POLICY,
                     R.integer.def_wifi_sleep_policy);
@@ -2601,9 +2584,6 @@ class DatabaseHelper extends SQLiteOpenHelper {
             loadIntegerSetting(stmt, Settings.Global.TETHER_DUN_REQUIRED,
                     R.integer.def_tether_dun_required);
 
-            loadIntegerSetting(stmt, Settings.Global.OTA_DISABLE_AUTOMATIC_UPDATE,
-                    R.integer.def_ota_disable_automatic_update);
-
             /*
              * IMPORTANT: Do not add any more upgrade steps here as the global,
              * secure, and system settings are no longer stored in a database
@@ -2673,7 +2653,8 @@ class DatabaseHelper extends SQLiteOpenHelper {
     }
 
     private String getDefaultDeviceName() {
-        return mContext.getResources().getString(R.string.def_device_name_simple, Build.MODEL);
+        return mContext.getResources().getString(R.string.def_device_name_simple,
+            SystemProperties.get("ro.product.marketname", Build.MODEL));
     }
 
     private TelephonyManager getTelephonyManager() {

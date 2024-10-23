@@ -25,6 +25,8 @@ import android.widget.ImageView;
 import androidx.preference.CheckBoxPreference;
 import androidx.preference.PreferenceViewHolder;
 
+import com.android.settingslib.widget.preference.selector.R;
+
 /**
  * Selector preference (checkbox or radio button) with an optional additional widget.
  *
@@ -159,10 +161,6 @@ public class SelectorWithWidgetPreference extends CheckBoxPreference {
         mExtraWidgetContainer = holder.findViewById(R.id.selector_extra_widget_container);
 
         setExtraWidgetOnClickListener(mExtraWidgetOnClickListener);
-
-        if (mExtraWidgetDrawableRes != 0) {
-            mExtraWidget.setImageResource(mExtraWidgetDrawableRes);
-        }
     }
 
     /**
@@ -210,11 +208,5 @@ public class SelectorWithWidgetPreference extends CheckBoxPreference {
         }
         setLayoutResource(R.layout.preference_selector_with_widget);
         setIconSpaceReserved(false);
-    }
-
-    private int mExtraWidgetDrawableRes;
-
-    public void setExtraWidgetDrawableResource(int resId) {
-        mExtraWidgetDrawableRes = resId;
     }
 }

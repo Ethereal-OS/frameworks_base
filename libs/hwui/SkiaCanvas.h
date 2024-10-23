@@ -19,19 +19,21 @@
 #ifdef __ANDROID__ // Layoutlib does not support hardware acceleration
 #include "DeferredLayerUpdater.h"
 #endif
-#include "RenderNode.h"
-#include "VectorDrawable.h"
-#include "hwui/Canvas.h"
-#include "hwui/Paint.h"
-#include "hwui/BlurDrawLooper.h"
-
 #include <SkCanvas.h>
-#include <SkDeque.h>
-#include "pipeline/skia/AnimatedDrawables.h"
-#include "src/core/SkArenaAlloc.h"
 
 #include <cassert>
+#include <deque>
 #include <optional>
+
+#include "RenderNode.h"
+#include "VectorDrawable.h"
+#include "hwui/BlurDrawLooper.h"
+#include "hwui/Canvas.h"
+#include "hwui/Paint.h"
+#include "pipeline/skia/AnimatedDrawables.h"
+
+enum class SkBlendMode;
+class SkRRect;
 
 namespace android {
 
@@ -63,7 +65,7 @@ public:
         LOG_ALWAYS_FATAL("SkiaCanvas does not support enableZ");
     }
 
-    virtual void punchHole(const SkRRect& rect) override;
+    virtual void punchHole(const SkRRect& rect, float alpha) override;
 
     virtual void setBitmap(const SkBitmap& bitmap) override;
 
@@ -84,6 +86,7 @@ public:
     virtual void getMatrix(SkMatrix* outMatrix) const override;
     virtual void setMatrix(const SkMatrix& matrix) override;
     virtual void concat(const SkMatrix& matrix) override;
+    virtual void concat(const SkM44& matrix) override;
     virtual void rotate(float degrees) override;
     virtual void scale(float sx, float sy) override;
     virtual void skew(float sx, float sy) override;
@@ -94,6 +97,7 @@ public:
     virtual bool quickRejectPath(const SkPath& path) const override;
     virtual bool clipRect(float left, float top, float right, float bottom, SkClipOp op) override;
     virtual bool clipPath(const SkPath* path, SkClipOp op) override;
+    virtual void clipShader(sk_sp<SkShader> shader, SkClipOp op) override;
     virtual bool replaceClipRect_deprecated(float left, float top, float right,
                                             float bottom) override;
     virtual bool replaceClipPath_deprecated(const SkPath* path) override;
@@ -117,8 +121,8 @@ public:
     virtual void drawRoundRect(float left, float top, float right, float bottom, float rx, float ry,
                                const Paint& paint) override;
 
-   virtual void drawDoubleRoundRect(const SkRRect& outer, const SkRRect& inner,
-                               const Paint& paint) override;
+    virtual void drawDoubleRoundRect(const SkRRect& outer, const SkRRect& inner,
+                                     const Paint& paint) override;
 
     virtual void drawCircle(float x, float y, float radius, const Paint& paint) override;
     virtual void drawOval(float left, float top, float right, float bottom,
@@ -127,6 +131,7 @@ public:
                          float sweepAngle, bool useCenter, const Paint& paint) override;
     virtual void drawPath(const SkPath& path, const Paint& paint) override;
     virtual void drawVertices(const SkVertices*, SkBlendMode, const Paint& paint) override;
+    virtual void drawMesh(const Mesh& mesh, sk_sp<SkBlender> blender, const Paint& paint) override;
 
     virtual void drawBitmap(Bitmap& bitmap, float left, float top, const Paint* paint) override;
     virtual void drawBitmap(Bitmap& bitmap, const SkMatrix& matrix, const Paint* paint) override;
@@ -172,7 +177,7 @@ protected:
                                   const Paint& paint, const SkPath& path, size_t start,
                                   size_t end) override;
 
-    void onFilterPaint(Paint& paint);
+    virtual void onFilterPaint(Paint& paint);
 
     Paint filterPaint(const Paint& src) {
         Paint dst(src);
@@ -206,6 +211,9 @@ private:
         int saveCount;
         SaveFlags::Flags saveFlags;
         size_t clipIndex;
+
+        SaveRec(int saveCount, SaveFlags::Flags saveFlags, size_t clipIndex)
+                : saveCount(saveCount), saveFlags(saveFlags), clipIndex(clipIndex) {}
     };
 
     const SaveRec* currentSaveRec() const;
@@ -217,13 +225,15 @@ private:
 
     void drawPoints(const float* points, int count, const Paint& paint, SkCanvas::PointMode mode);
 
+    bool useGainmapShader(Bitmap& bitmap);
+
     class Clip;
 
-    std::unique_ptr<SkCanvas> mCanvasOwned;    // might own a canvas we allocated
-    SkCanvas* mCanvas;                         // we do NOT own this canvas, it must survive us
-                                               // unless it is the same as mCanvasOwned.get()
-    std::unique_ptr<SkDeque> mSaveStack;       // lazily allocated, tracks partial saves.
-    std::vector<Clip> mClipStack;              // tracks persistent clips.
+    std::unique_ptr<SkCanvas> mCanvasOwned;  // Might own a canvas we allocated.
+    SkCanvas* mCanvas;                       // We do NOT own this canvas, it must survive us
+                                             // unless it is the same as mCanvasOwned.get().
+    std::unique_ptr<std::deque<SaveRec>> mSaveStack;  // Lazily allocated, tracks partial saves.
+    std::vector<Clip> mClipStack;                     // Tracks persistent clips.
     sk_sp<PaintFilter> mPaintFilter;
 };
 

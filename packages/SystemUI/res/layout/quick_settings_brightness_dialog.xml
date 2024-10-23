@@ -36,6 +36,7 @@
             android:paddingEnd="0dp"
             android:progressDrawable="@drawable/brightness_progress_drawable"
             android:splitTrack="false"
+            android:clickable="true"
         />
 
         <ImageButton
@@ -44,9 +45,8 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center_vertical"
             android:layout_marginStart="20.0dip"
-            android:background="@drawable/brightness_bg"
-            android:src="@drawable/ic_qs_brightness_auto_off"
-            android:tint="?android:attr/textColorPrimaryInverse"
+            android:background="@drawable/bg_qs_brightness_auto_on"
+            android:src="@drawable/ic_qs_brightness_auto_off_new"
             android:contentDescription="@null"
             android:visibility="gone"
         />

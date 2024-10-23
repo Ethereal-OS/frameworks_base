@@ -1,5 +1,4 @@
 /*
- * Copyright (C) 2017 ABC rom
  * Copyright (C) 2020 The OmniROM Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +26,7 @@ import android.provider.Settings;
 import android.service.quicksettings.Tile;
 import android.view.View;
 import android.view.WindowManager;
+import static android.view.WindowManager.ScreenshotSource.SCREENSHOT_GLOBAL_ACTIONS;
 import static android.view.WindowManager.TAKE_SCREENSHOT_FULLSCREEN;
 import static android.view.WindowManager.TAKE_SCREENSHOT_SELECTED_REGION;
 
@@ -38,11 +38,13 @@ import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.qs.QSHost;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.qs.logging.QSLogger;
+import com.android.systemui.qs.pipeline.domain.interactor.PanelInteractor;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.internal.R;
 
@@ -53,24 +55,29 @@ public class ScreenshotTile extends QSTileImpl<BooleanState> {
 
     public static final String TILE_SPEC = "screenshot";
 
+    private final PanelInteractor mPanelInteractor;
+
     @Inject
     public ScreenshotTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
             MetricsLogger metricsLogger,
             StatusBarStateController statusBarStateController,
             ActivityStarter activityStarter,
-            QSLogger qsLogger
+            QSLogger qsLogger,
+            PanelInteractor panelInteractor
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
+        mPanelInteractor = panelInteractor;
     }
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.ETHEREAL;
+        return MetricsEvent.GEOMETRICS;
     }
 
     @Override
@@ -88,11 +95,10 @@ public class ScreenshotTile extends QSTileImpl<BooleanState> {
 
     @Override
     public void handleClick(@Nullable View view) {
-        mHost.collapsePanels();
+        mPanelInteractor.collapsePanels();
         final ScreenshotHelper screenshotHelper = new ScreenshotHelper(mContext);
         mHandler.postDelayed(() -> {
-            screenshotHelper.takeScreenshot(TAKE_SCREENSHOT_FULLSCREEN,
-                    WindowManager.ScreenshotSource.SCREENSHOT_OTHER, mHandler, null);
+            screenshotHelper.takeScreenshot(TAKE_SCREENSHOT_FULLSCREEN, SCREENSHOT_GLOBAL_ACTIONS, mHandler, null);
         }, 1000);
     }
 
@@ -103,11 +109,10 @@ public class ScreenshotTile extends QSTileImpl<BooleanState> {
 
     @Override
     public void handleLongClick(@Nullable View view) {
-        mHost.collapsePanels();
+        mPanelInteractor.collapsePanels();
         final ScreenshotHelper screenshotHelper = new ScreenshotHelper(mContext);
         mHandler.postDelayed(() -> {
-            screenshotHelper.takeScreenshot(TAKE_SCREENSHOT_SELECTED_REGION,
-                    WindowManager.ScreenshotSource.SCREENSHOT_OTHER, mHandler, null);
+            screenshotHelper.takeScreenshot(TAKE_SCREENSHOT_SELECTED_REGION, SCREENSHOT_GLOBAL_ACTIONS, mHandler, null);
         }, 1000);
         refreshState();
     }

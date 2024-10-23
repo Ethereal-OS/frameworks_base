@@ -16,6 +16,8 @@
 
 package com.android.server.accessibility;
 
+import static com.android.server.accessibility.AbstractAccessibilityServiceConnection.DISPLAY_TYPE_DEFAULT;
+import static com.android.server.accessibility.AccessibilityWindowManagerTest.DisplayIdMatcher.displayId;
 import static com.android.server.accessibility.AccessibilityWindowManagerTest.WindowChangesMatcher.a11yWindowChanges;
 import static com.android.server.accessibility.AccessibilityWindowManagerTest.WindowIdMatcher.a11yWindowId;
 
@@ -34,20 +36,28 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.annotation.Nullable;
 import android.graphics.Region;
 import android.os.IBinder;
+import android.os.LocaleList;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.platform.test.annotations.RequiresFlagsDisabled;
+import android.platform.test.flag.junit.CheckFlagsRule;
+import android.platform.test.flag.junit.DeviceFlagsValueProvider;
 import android.util.SparseArray;
 import android.view.Display;
 import android.view.IWindow;
 import android.view.WindowInfo;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowAttributes;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.view.accessibility.IAccessibilityInteractionConnection;
 
@@ -60,6 +70,7 @@ import org.hamcrest.Description;
 import org.hamcrest.TypeSafeMatcher;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -70,9 +81,16 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+// This test verifies deprecated codepath. Probably changing this file means
+// AccessibilityWindowManagerWithAccessibilityWindowTest also needs to be updated.
+// LINT.IfChange
+
 /**
- * Tests for the AccessibilityWindowManager
+ * Tests for the AccessibilityWindowManager with Flags.FLAG_COMPUTE_WINDOW_CHANGES_ON_A11Y enabled.
+ * TODO(b/322444245): Merge with AccessibilityWindowManagerWithAccessibilityWindowTest
+ *  after completing the flag migration.
  */
+@RequiresFlagsDisabled(Flags.FLAG_COMPUTE_WINDOW_CHANGES_ON_A11Y)
 public class AccessibilityWindowManagerTest {
     private static final String PACKAGE_NAME = "com.android.server.accessibility";
     private static final boolean FORCE_SEND = true;
@@ -125,6 +143,9 @@ public class AccessibilityWindowManagerTest {
     @Mock private IBinder mMockEmbeddedToken;
     @Mock private IBinder mMockInvalidToken;
 
+    @Rule
+    public final CheckFlagsRule mCheckFlagsRule = DeviceFlagsValueProvider.createCheckFlagsRule();
+
     @Before
     public void setUp() throws RemoteException {
         MockitoAnnotations.initMocks(this);
@@ -135,6 +156,11 @@ public class AccessibilityWindowManagerTest {
                 USER_SYSTEM_ID)).thenReturn(USER_SYSTEM_ID);
         when(mMockA11ySecurityPolicy.resolveValidReportedPackageLocked(
                 anyString(), anyInt(), anyInt(), anyInt())).thenReturn(PACKAGE_NAME);
+
+        doAnswer((invocation) -> {
+            onWindowsForAccessibilityChanged(invocation.getArgument(0), false);
+            return null;
+        }).when(mMockWindowManagerInternal).computeWindowsForAccessibility(anyInt());
 
         mA11yWindowManager = new AccessibilityWindowManager(new Object(), mHandler,
                 mMockWindowManagerInternal,
@@ -440,7 +466,9 @@ public class AccessibilityWindowManagerTest {
                 false, mockHostToken, USER_SYSTEM_ID);
         final int embeddedWindowId = addAccessibilityInteractionConnection(Display.DEFAULT_DISPLAY,
                 false, mockEmbeddedToken, USER_SYSTEM_ID);
+
         mA11yWindowManager.associateEmbeddedHierarchyLocked(mockHostToken, mockEmbeddedToken);
+
         final int resolvedWindowId = mA11yWindowManager.resolveParentWindowIdLocked(
                 embeddedWindowId);
         assertEquals(hostWindowId, resolvedWindowId);
@@ -455,10 +483,13 @@ public class AccessibilityWindowManagerTest {
                 false, mockHostToken, USER_SYSTEM_ID);
         final int embeddedWindowId = addAccessibilityInteractionConnection(Display.DEFAULT_DISPLAY,
                 false, mockEmbeddedToken, USER_SYSTEM_ID);
+
         mA11yWindowManager.associateEmbeddedHierarchyLocked(mockHostToken, mockEmbeddedToken);
         mA11yWindowManager.disassociateEmbeddedHierarchyLocked(mockEmbeddedToken);
+
         final int resolvedWindowId = mA11yWindowManager.resolveParentWindowIdLocked(
                 embeddedWindowId);
+        assertNotEquals(hostWindowId, resolvedWindowId);
         assertEquals(embeddedWindowId, resolvedWindowId);
     }
 
@@ -578,10 +609,12 @@ public class AccessibilityWindowManagerTest {
         verify(mMockA11yEventSender, times(2))
                 .sendAccessibilityEventForCurrentUserLocked(captor.capture());
         assertThat(captor.getAllValues().get(0),
-                allOf(a11yWindowId(currentActiveWindowId),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(currentActiveWindowId),
                         a11yWindowChanges(AccessibilityEvent.WINDOWS_CHANGE_ACTIVE)));
         assertThat(captor.getAllValues().get(1),
-                allOf(a11yWindowId(eventWindowId),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(eventWindowId),
                         a11yWindowChanges(AccessibilityEvent.WINDOWS_CHANGE_ACTIVE)));
     }
 
@@ -591,9 +624,58 @@ public class AccessibilityWindowManagerTest {
                 DEFAULT_FOCUSED_INDEX);
         final int currentA11yFocusedWindowId = mA11yWindowManager.getFocusedWindowId(
                 AccessibilityNodeInfo.FOCUS_ACCESSIBILITY);
-        assertThat(currentA11yFocusedWindowId, is(not(eventWindowId)));
+        assertThat(currentA11yFocusedWindowId, is(AccessibilityWindowInfo.UNDEFINED_WINDOW_ID));
 
         final int noUse = 0;
+        mA11yWindowManager.updateActiveAndAccessibilityFocusedWindowLocked(USER_SYSTEM_ID,
+                eventWindowId,
+                AccessibilityNodeInfo.ROOT_NODE_ID,
+                AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED,
+                noUse);
+        assertThat(mA11yWindowManager.getFocusedWindowId(
+                AccessibilityNodeInfo.FOCUS_ACCESSIBILITY), is(eventWindowId));
+        final ArgumentCaptor<AccessibilityEvent> captor =
+                ArgumentCaptor.forClass(AccessibilityEvent.class);
+        verify(mMockA11yEventSender, times(1))
+                .sendAccessibilityEventForCurrentUserLocked(captor.capture());
+        assertThat(captor.getAllValues().get(0),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(eventWindowId),
+                        a11yWindowChanges(
+                                AccessibilityEvent.WINDOWS_CHANGE_ACCESSIBILITY_FOCUSED)));
+    }
+
+    @Test
+    public void updateActiveAndA11yFocusedWindow_a11yFocusEvent_multiDisplay_defaultToSecondary()
+            throws RemoteException {
+        runUpdateActiveAndA11yFocusedWindow_MultiDisplayTest(
+                Display.DEFAULT_DISPLAY, SECONDARY_DISPLAY_ID);
+    }
+
+    @Test
+    public void updateActiveAndA11yFocusedWindow_a11yFocusEvent_multiDisplay_SecondaryToDefault()
+            throws RemoteException {
+        runUpdateActiveAndA11yFocusedWindow_MultiDisplayTest(
+                SECONDARY_DISPLAY_ID, Display.DEFAULT_DISPLAY);
+    }
+
+    private void runUpdateActiveAndA11yFocusedWindow_MultiDisplayTest(
+            int initialDisplayId, int eventDisplayId) throws RemoteException {
+        startTrackingPerDisplay(SECONDARY_DISPLAY_ID);
+        final int initialWindowId = getWindowIdFromWindowInfosForDisplay(
+                initialDisplayId, DEFAULT_FOCUSED_INDEX);
+        final int noUse = 0;
+        mA11yWindowManager.updateActiveAndAccessibilityFocusedWindowLocked(USER_SYSTEM_ID,
+                initialWindowId,
+                AccessibilityNodeInfo.ROOT_NODE_ID,
+                AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED,
+                noUse);
+        assertThat(mA11yWindowManager.getFocusedWindowId(
+                AccessibilityNodeInfo.FOCUS_ACCESSIBILITY), is(initialWindowId));
+        Mockito.reset(mMockA11yEventSender);
+
+        final int eventWindowId = getWindowIdFromWindowInfosForDisplay(
+                eventDisplayId, DEFAULT_FOCUSED_INDEX);
         mA11yWindowManager.updateActiveAndAccessibilityFocusedWindowLocked(USER_SYSTEM_ID,
                 eventWindowId,
                 AccessibilityNodeInfo.ROOT_NODE_ID,
@@ -606,11 +688,13 @@ public class AccessibilityWindowManagerTest {
         verify(mMockA11yEventSender, times(2))
                 .sendAccessibilityEventForCurrentUserLocked(captor.capture());
         assertThat(captor.getAllValues().get(0),
-                allOf(a11yWindowId(currentA11yFocusedWindowId),
+                allOf(displayId(initialDisplayId),
+                        a11yWindowId(initialWindowId),
                         a11yWindowChanges(
                                 AccessibilityEvent.WINDOWS_CHANGE_ACCESSIBILITY_FOCUSED)));
         assertThat(captor.getAllValues().get(1),
-                allOf(a11yWindowId(eventWindowId),
+                allOf(displayId(eventDisplayId),
+                        a11yWindowId(eventWindowId),
                         a11yWindowChanges(
                                 AccessibilityEvent.WINDOWS_CHANGE_ACCESSIBILITY_FOCUSED)));
     }
@@ -665,10 +749,12 @@ public class AccessibilityWindowManagerTest {
         verify(mMockA11yEventSender, times(2))
                 .sendAccessibilityEventForCurrentUserLocked(captor.capture());
         assertThat(captor.getAllValues().get(0),
-                allOf(a11yWindowId(eventWindowId),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(eventWindowId),
                         a11yWindowChanges(AccessibilityEvent.WINDOWS_CHANGE_ACTIVE)));
         assertThat(captor.getAllValues().get(1),
-                allOf(a11yWindowId(currentActiveWindowId),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(currentActiveWindowId),
                         a11yWindowChanges(AccessibilityEvent.WINDOWS_CHANGE_ACTIVE)));
     }
 
@@ -758,7 +844,8 @@ public class AccessibilityWindowManagerTest {
         // Starts tracking window of second display.
         startTrackingPerDisplay(SECONDARY_DISPLAY_ID);
 
-        final ArrayList<Integer> displayList = mA11yWindowManager.getDisplayListLocked();
+        final ArrayList<Integer> displayList = mA11yWindowManager.getDisplayListLocked(
+                DISPLAY_TYPE_DEFAULT);
         assertTrue(displayList.equals(mExpectedDisplayList));
     }
 
@@ -825,14 +912,102 @@ public class AccessibilityWindowManagerTest {
 
     @Test
     public void getTokenLocked_windowIsRegistered_shouldReturnToken() {
-        final IBinder token = mA11yWindowManager.getTokenLocked(HOST_WINDOW_ID);
+        final IBinder token = mA11yWindowManager.getLeashTokenLocked(HOST_WINDOW_ID);
         assertEquals(token, mMockHostToken);
     }
 
     @Test
     public void getTokenLocked_windowIsNotRegistered_shouldReturnNull() {
-        final IBinder token = mA11yWindowManager.getTokenLocked(OTHER_WINDOW_ID);
+        final IBinder token = mA11yWindowManager.getLeashTokenLocked(OTHER_WINDOW_ID);
         assertNull(token);
+    }
+
+    @Test
+    public void setAccessibilityWindowAttributes_windowIsNotRegistered_titleIsChanged() {
+        final int windowId =
+                getWindowIdFromWindowInfosForDisplay(Display.DEFAULT_DISPLAY, 0);
+        final WindowManager.LayoutParams layoutParams = new WindowManager.LayoutParams();
+        layoutParams.accessibilityTitle = "accessibility window title";
+        final AccessibilityWindowAttributes attributes = new AccessibilityWindowAttributes(
+                layoutParams, new LocaleList());
+
+        mA11yWindowManager.setAccessibilityWindowAttributes(Display.DEFAULT_DISPLAY, windowId,
+                USER_SYSTEM_ID, attributes);
+
+        final AccessibilityWindowInfo a11yWindow = mA11yWindowManager.findA11yWindowInfoByIdLocked(
+                windowId);
+        assertEquals(toString(layoutParams.accessibilityTitle), toString(a11yWindow.getTitle()));
+    }
+
+    @Test
+    public void sendAccessibilityEventOnWindowRemoval() {
+        final ArrayList<WindowInfo> infos = mWindowInfos.get(Display.DEFAULT_DISPLAY);
+
+        // Removing index 0 because it's not focused, and avoids unnecessary layer change.
+        final int windowId =
+                getWindowIdFromWindowInfosForDisplay(Display.DEFAULT_DISPLAY, 0);
+        infos.remove(0);
+        for (WindowInfo info : infos) {
+            // Adjust layer number because it should start from 0.
+            info.layer--;
+        }
+
+        onWindowsForAccessibilityChanged(Display.DEFAULT_DISPLAY, FORCE_SEND);
+
+        final ArgumentCaptor<AccessibilityEvent> captor =
+                ArgumentCaptor.forClass(AccessibilityEvent.class);
+        verify(mMockA11yEventSender, times(1))
+                .sendAccessibilityEventForCurrentUserLocked(captor.capture());
+        assertThat(captor.getAllValues().get(0),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(windowId),
+                        a11yWindowChanges(AccessibilityEvent.WINDOWS_CHANGE_REMOVED)));
+    }
+
+    @Test
+    public void sendAccessibilityEventOnWindowAddition() throws RemoteException {
+        final ArrayList<WindowInfo> infos = mWindowInfos.get(Display.DEFAULT_DISPLAY);
+
+        for (WindowInfo info : infos) {
+            // Adjust layer number because new window will have 0 so that layer number in
+            // A11yWindowInfo in window won't be changed.
+            info.layer++;
+        }
+
+        final IWindow token = addAccessibilityInteractionConnection(Display.DEFAULT_DISPLAY,
+                false, USER_SYSTEM_ID);
+        addWindowInfo(infos, token, 0);
+        final int windowId =
+                getWindowIdFromWindowInfosForDisplay(Display.DEFAULT_DISPLAY, infos.size() - 1);
+
+        onWindowsForAccessibilityChanged(Display.DEFAULT_DISPLAY, FORCE_SEND);
+
+        final ArgumentCaptor<AccessibilityEvent> captor =
+                ArgumentCaptor.forClass(AccessibilityEvent.class);
+        verify(mMockA11yEventSender, times(1))
+                .sendAccessibilityEventForCurrentUserLocked(captor.capture());
+        assertThat(captor.getAllValues().get(0),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(windowId),
+                        a11yWindowChanges(AccessibilityEvent.WINDOWS_CHANGE_ADDED)));
+    }
+
+    @Test
+    public void sendAccessibilityEventOnWindowChange() {
+        final ArrayList<WindowInfo> infos = mWindowInfos.get(Display.DEFAULT_DISPLAY);
+        infos.get(0).title = "new title";
+        final int windowId = getWindowIdFromWindowInfosForDisplay(Display.DEFAULT_DISPLAY, 0);
+
+        onWindowsForAccessibilityChanged(Display.DEFAULT_DISPLAY, FORCE_SEND);
+
+        final ArgumentCaptor<AccessibilityEvent> captor =
+                ArgumentCaptor.forClass(AccessibilityEvent.class);
+        verify(mMockA11yEventSender, times(1))
+                .sendAccessibilityEventForCurrentUserLocked(captor.capture());
+        assertThat(captor.getAllValues().get(0),
+                allOf(displayId(Display.DEFAULT_DISPLAY),
+                        a11yWindowId(windowId),
+                        a11yWindowChanges(AccessibilityEvent.WINDOWS_CHANGE_TITLE)));
     }
 
     private void registerLeashedTokenAndWindowId() {
@@ -864,7 +1039,7 @@ public class AccessibilityWindowManagerTest {
             windowInfosForDisplay.get(DEFAULT_FOCUSED_INDEX).focused = true;
         }
         // Turns on windows tracking, and update window info.
-        mA11yWindowManager.startTrackingWindows(displayId);
+        mA11yWindowManager.startTrackingWindows(displayId, false);
         // Puts window lists into array.
         mWindowInfos.put(displayId, windowInfosForDisplay);
         // Sets the default display is the top focused display and
@@ -901,7 +1076,7 @@ public class AccessibilityWindowManagerTest {
         when(mockWindowToken.asBinder()).thenReturn(mockWindowBinder);
         when(mMockA11ySecurityPolicy.isCallerInteractingAcrossUsers(userId))
                 .thenReturn(bGlobal);
-        when(mMockWindowManagerInternal.getDisplayIdForWindow(mockWindowToken.asBinder()))
+        when(mMockWindowManagerInternal.getDisplayIdForWindow(mockWindowBinder))
                 .thenReturn(displayId);
 
         int windowId = mA11yWindowManager.addAccessibilityInteractionConnection(
@@ -921,7 +1096,7 @@ public class AccessibilityWindowManagerTest {
         when(mockWindowToken.asBinder()).thenReturn(mockWindowBinder);
         when(mMockA11ySecurityPolicy.isCallerInteractingAcrossUsers(userId))
                 .thenReturn(bGlobal);
-        when(mMockWindowManagerInternal.getDisplayIdForWindow(mockWindowToken.asBinder()))
+        when(mMockWindowManagerInternal.getDisplayIdForWindow(mockWindowBinder))
                 .thenReturn(displayId);
 
         int windowId = mA11yWindowManager.addAccessibilityInteractionConnection(
@@ -992,6 +1167,34 @@ public class AccessibilityWindowManagerTest {
         }
     }
 
+    @Nullable
+    private static String toString(@Nullable CharSequence cs) {
+        return cs == null ? null : cs.toString();
+    }
+
+    static class DisplayIdMatcher extends TypeSafeMatcher<AccessibilityEvent> {
+        private final int mDisplayId;
+
+        DisplayIdMatcher(int displayId) {
+            super();
+            mDisplayId = displayId;
+        }
+
+        static DisplayIdMatcher displayId(int displayId) {
+            return new DisplayIdMatcher(displayId);
+        }
+
+        @Override
+        protected boolean matchesSafely(AccessibilityEvent event) {
+            return event.getDisplayId() == mDisplayId;
+        }
+
+        @Override
+        public void describeTo(Description description) {
+            description.appendText("Matching to displayId " + mDisplayId);
+        }
+    }
+
     static class WindowIdMatcher extends TypeSafeMatcher<AccessibilityEvent> {
         private int mWindowId;
 
@@ -1038,3 +1241,4 @@ public class AccessibilityWindowManagerTest {
         }
     }
 }
+// LINT.ThenChange(/services/tests/servicestests/src/com/android/server/accessibility/AccessibilityWindowManagerWithAccessibilityWindowTest.java)

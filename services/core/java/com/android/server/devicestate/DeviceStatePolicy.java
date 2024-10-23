@@ -20,7 +20,7 @@ import android.annotation.NonNull;
 import android.content.Context;
 import android.content.res.Resources;
 import android.text.TextUtils;
-import android.util.Slog;
+import android.util.Dumpable;
 
 import com.android.server.policy.DeviceStatePolicyImpl;
 
@@ -30,7 +30,7 @@ import com.android.server.policy.DeviceStatePolicyImpl;
  *
  * @see DeviceStateManagerService
  */
-public abstract class DeviceStatePolicy {
+public abstract class DeviceStatePolicy implements Dumpable {
     protected final Context mContext;
 
     protected DeviceStatePolicy(@NonNull Context context) {
@@ -93,16 +93,11 @@ public abstract class DeviceStatePolicy {
 
             try {
                 return (DeviceStatePolicy.Provider) Class.forName(name).newInstance();
-            } catch (ClassCastException e) {
+            } catch (ReflectiveOperationException | ClassCastException e) {
                 throw new IllegalStateException("Couldn't instantiate class " + name
                         + " for config_deviceSpecificDeviceStatePolicyProvider:"
                         + " make sure it has a public zero-argument constructor"
-                        + " and implements DeviceStatePolicy.Provider");
-            } catch (ReflectiveOperationException e) {
-                Slog.e("DeviceStatePolicy", "Couldn't instantiate class " + name
-                        + " for config_deviceSpecificDeviceStatePolicyProvider:"
-                        + " using default provider", e);
-                return new DeviceStatePolicy.DefaultProvider();
+                        + " and implements DeviceStatePolicy.Provider", e);
             }
         }
     }

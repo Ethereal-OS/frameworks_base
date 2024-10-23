@@ -10,12 +10,7 @@
       "name": "CtsCompanionDeviceManagerNoCompanionServicesTestCases"
     },
     {
-      "name": "CtsOsTestCases",
-      "options": [
-        {
-          "include-filter": "android.os.cts.CompanionDeviceManagerTest"
-        }
-      ]
+      "name": "CtsCompanionDeviceManagerMultiProcessTestCases"
     }
   ]
 }

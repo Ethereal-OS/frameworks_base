@@ -97,11 +97,17 @@ public class SystemServerAdapter {
      */
     @VisibleForTesting
     public void broadcastStickyIntentToCurrentProfileGroup(Intent intent) {
-        int[] profileIds = LocalServices.getService(
-                ActivityManagerInternal.class).getCurrentProfileIds();
-        for (int userId : profileIds) {
-            ActivityManager.broadcastStickyIntent(intent, userId);
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            int[] profileIds = LocalServices.getService(
+                    ActivityManagerInternal.class).getCurrentProfileIds();
+            for (int userId : profileIds) {
+                ActivityManager.broadcastStickyIntent(intent, userId);
+            }
+        } finally {
+            Binder.restoreCallingIdentity(ident);
         }
+
     }
 
     /**
@@ -143,6 +149,20 @@ public class SystemServerAdapter {
                 new IntentFilter(intentAction), /*broadcastPermission*/ null, /*scheduler*/ null);
         if (intent != null) {
             ActivityManager.broadcastStickyIntent(intent, profileId);
+        }
+    }
+
+    /*package*/ void broadcastMasterMuteStatus(boolean muted) {
+        Intent intent = new Intent(AudioManager.MASTER_MUTE_CHANGED_ACTION);
+        intent.putExtra(AudioManager.EXTRA_MASTER_VOLUME_MUTED, muted);
+        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT
+                | Intent.FLAG_RECEIVER_REPLACE_PENDING
+                | Intent.FLAG_RECEIVER_FOREGROUND);
+        final long ident = Binder.clearCallingIdentity();
+        try {
+            mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
         }
     }
 }

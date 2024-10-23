@@ -54,16 +54,6 @@ public abstract class MediaManager {
         }
     }
 
-    /**
-     * Start scan connected MediaDevice
-     */
-    public abstract void startScan();
-
-    /**
-     * Stop scan MediaDevice
-     */
-    public abstract void stopScan();
-
     protected MediaDevice findMediaDevice(String id) {
         for (MediaDevice mediaDevice : mMediaDevices) {
             if (mediaDevice.getId().equals(id)) {
@@ -72,18 +62,6 @@ public abstract class MediaManager {
         }
         Log.e(TAG, "findMediaDevice() can't found device");
         return null;
-    }
-
-    protected void dispatchDeviceAdded(MediaDevice mediaDevice) {
-        for (MediaDeviceCallback callback : getCallbacks()) {
-            callback.onDeviceAdded(mediaDevice);
-        }
-    }
-
-    protected void dispatchDeviceRemoved(MediaDevice mediaDevice) {
-        for (MediaDeviceCallback callback : getCallbacks()) {
-            callback.onDeviceRemoved(mediaDevice);
-        }
     }
 
     protected void dispatchDeviceListAdded() {
@@ -104,12 +82,6 @@ public abstract class MediaManager {
         }
     }
 
-    protected void dispatchDataChanged() {
-        for (MediaDeviceCallback callback : getCallbacks()) {
-            callback.onDeviceAttributesChanged();
-        }
-    }
-
     protected void dispatchOnRequestFailed(int reason) {
         for (MediaDeviceCallback callback : getCallbacks()) {
             callback.onRequestFailed(reason);
@@ -124,12 +96,6 @@ public abstract class MediaManager {
      * Callback for notifying device is added, removed and attributes changed.
      */
     public interface MediaDeviceCallback {
-        /**
-         * Callback for notifying MediaDevice is added.
-         *
-         * @param device the MediaDevice
-         */
-        void onDeviceAdded(MediaDevice device);
 
         /**
          * Callback for notifying MediaDevice list is added.
@@ -137,13 +103,6 @@ public abstract class MediaManager {
          * @param devices the MediaDevice list
          */
         void onDeviceListAdded(List<MediaDevice> devices);
-
-        /**
-         * Callback for notifying MediaDevice is removed.
-         *
-         * @param device the MediaDevice
-         */
-        void onDeviceRemoved(MediaDevice device);
 
         /**
          * Callback for notifying MediaDevice list is removed.
@@ -158,12 +117,6 @@ public abstract class MediaManager {
          * @param id the id of MediaDevice
          */
         void onConnectedDeviceChanged(String id);
-
-        /**
-         * Callback for notifying that MediaDevice attributes
-         * (e.g: device name, connection state, subtitle) is changed.
-         */
-        void onDeviceAttributesChanged();
 
         /**
          * Callback for notifying that transferring is failed.

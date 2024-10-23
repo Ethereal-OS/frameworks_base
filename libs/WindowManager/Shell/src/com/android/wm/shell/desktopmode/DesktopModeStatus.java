@@ -16,14 +16,9 @@
 
 package com.android.wm.shell.desktopmode;
 
-import static com.android.wm.shell.protolog.ShellProtoLogGroup.WM_SHELL_DESKTOP_MODE;
-
-import android.content.Context;
 import android.os.SystemProperties;
-import android.os.UserHandle;
-import android.provider.Settings;
 
-import com.android.internal.protolog.common.ProtoLog;
+import com.android.window.flags.Flags;
 
 /**
  * Constants for desktop mode feature
@@ -31,59 +26,82 @@ import com.android.internal.protolog.common.ProtoLog;
 public class DesktopModeStatus {
 
     /**
-     * Flag to indicate whether desktop mode is available on the device
+     * Flag to indicate whether task resizing is veiled.
      */
-    private static final boolean IS_SUPPORTED = SystemProperties.getBoolean(
-            "persist.wm.debug.desktop_mode", false);
+    private static final boolean IS_VEILED_RESIZE_ENABLED = SystemProperties.getBoolean(
+            "persist.wm.debug.desktop_veiled_resizing", true);
 
     /**
-     * Flag to indicate whether desktop mode proto 2 is available on the device
+     * Flag to indicate is moving task to another display is enabled.
      */
-    private static final boolean IS_PROTO2_ENABLED = SystemProperties.getBoolean(
-            "persist.wm.debug.desktop_mode_2", false);
+    public static final boolean IS_DISPLAY_CHANGE_ENABLED = SystemProperties.getBoolean(
+            "persist.wm.debug.desktop_change_display", false);
+
 
     /**
-     * Return {@code true} if desktop mode support is enabled
+     * Flag to indicate that desktop stashing is enabled.
+     * When enabled, swiping home from desktop stashes the open apps. Next app that launches,
+     * will be added to the desktop.
      */
-    public static boolean isProto1Enabled() {
-        return IS_SUPPORTED;
-    }
+    private static final boolean IS_STASHING_ENABLED = SystemProperties.getBoolean(
+            "persist.wm.debug.desktop_stashing", false);
 
     /**
-     * Return {@code true} is desktop windowing proto 2 is enabled
+     * Flag to indicate whether to apply shadows to windows in desktop mode.
      */
-    public static boolean isProto2Enabled() {
-        return IS_PROTO2_ENABLED;
-    }
+    private static final boolean USE_WINDOW_SHADOWS = SystemProperties.getBoolean(
+            "persist.wm.debug.desktop_use_window_shadows", true);
 
     /**
-     * Return {@code true} if proto 1 or 2 is enabled.
-     * Can be used to guard logic that is common for both prototypes.
-     */
-    public static boolean isAnyEnabled() {
-        return isProto1Enabled() || isProto2Enabled();
-    }
-
-    /**
-     * Check if desktop mode is active
+     * Flag to indicate whether to apply shadows to the focused window in desktop mode.
      *
-     * @return {@code true} if active
+     * Note: this flag is only relevant if USE_WINDOW_SHADOWS is false.
      */
-    public static boolean isActive(Context context) {
-        if (!isAnyEnabled()) {
-            return false;
-        }
-        if (isProto2Enabled()) {
-            // Desktop mode is always active in prototype 2
-            return true;
-        }
-        try {
-            int result = Settings.System.getIntForUser(context.getContentResolver(),
-                    Settings.System.DESKTOP_MODE, UserHandle.USER_CURRENT);
-            return result != 0;
-        } catch (Exception e) {
-            ProtoLog.e(WM_SHELL_DESKTOP_MODE, "Failed to read DESKTOP_MODE setting %s", e);
-            return false;
-        }
+    private static final boolean USE_WINDOW_SHADOWS_FOCUSED_WINDOW = SystemProperties.getBoolean(
+            "persist.wm.debug.desktop_use_window_shadows_focused_window", false);
+
+    /**
+     * Flag to indicate whether to apply shadows to windows in desktop mode.
+     */
+    private static final boolean USE_ROUNDED_CORNERS = SystemProperties.getBoolean(
+            "persist.wm.debug.desktop_use_rounded_corners", true);
+
+    /**
+     * Return {@code true} if desktop windowing is enabled
+     */
+    public static boolean isEnabled() {
+        return Flags.enableDesktopWindowingMode();
+    }
+
+    /**
+     * Return {@code true} if veiled resizing is active. If false, fluid resizing is used.
+     */
+    public static boolean isVeiledResizeEnabled() {
+        return IS_VEILED_RESIZE_ENABLED;
+    }
+
+    /**
+     * Return {@code true} if desktop task stashing is enabled when going home.
+     * Allows users to use home screen to add tasks to desktop.
+     */
+    public static boolean isStashingEnabled() {
+        return IS_STASHING_ENABLED;
+    }
+
+    /**
+     * Return whether to use window shadows.
+     *
+     * @param isFocusedWindow whether the window to apply shadows to is focused
+     */
+    public static boolean useWindowShadow(boolean isFocusedWindow) {
+        return USE_WINDOW_SHADOWS
+            || (USE_WINDOW_SHADOWS_FOCUSED_WINDOW && isFocusedWindow);
+    }
+
+    /**
+     * Return whether to use rounded corners for windows.
+     */
+    public static boolean useRoundedCorners() {
+        return USE_ROUNDED_CORNERS;
     }
 }

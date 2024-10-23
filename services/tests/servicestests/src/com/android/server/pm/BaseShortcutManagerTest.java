@@ -74,6 +74,8 @@ import android.content.pm.Signature;
 import android.content.pm.SigningDetails;
 import android.content.pm.SigningInfo;
 import android.content.pm.UserInfo;
+import android.content.pm.UserPackage;
+import android.content.pm.UserProperties;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.graphics.drawable.Icon;
@@ -97,7 +99,6 @@ import com.android.internal.infra.AndroidFuture;
 import com.android.server.LocalServices;
 import com.android.server.SystemService;
 import com.android.server.pm.LauncherAppsService.LauncherAppsImpl;
-import com.android.server.pm.ShortcutUser.PackageWithUser;
 import com.android.server.uri.UriGrantsManagerInternal;
 import com.android.server.uri.UriPermissionOwner;
 import com.android.server.wm.ActivityTaskManagerInternal;
@@ -157,6 +158,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
                     return mMockDevicePolicyManager;
                 case Context.APP_SEARCH_SERVICE:
                 case Context.ROLE_SERVICE:
+                case Context.APP_OPS_SERVICE:
                     // RoleManager is final and cannot be mocked, so we only override the inject
                     // accessor methods in ShortcutService.
                     return getTestContext().getSystemService(name);
@@ -692,9 +694,9 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
 
     protected Map<String, PackageInfo> mInjectedPackages;
 
-    protected Set<PackageWithUser> mUninstalledPackages;
-    protected Set<PackageWithUser> mDisabledPackages;
-    protected Set<PackageWithUser> mEphemeralPackages;
+    protected Set<UserPackage> mUninstalledPackages;
+    protected Set<UserPackage> mDisabledPackages;
+    protected Set<UserPackage> mEphemeralPackages;
     protected Set<String> mSystemPackages;
 
     protected PackageManager mMockPackageManager;
@@ -775,6 +777,15 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
             new UserInfo(USER_P1, "userP1",
                     UserInfo.FLAG_INITIALIZED | UserInfo.FLAG_MANAGED_PROFILE), 0);
 
+    protected static final UserProperties USER_PROPERTIES_0 =
+            new UserProperties.Builder().setItemsRestrictedOnHomeScreen(false).build();
+
+    protected static final UserProperties USER_PROPERTIES_10 =
+            new UserProperties.Builder().setItemsRestrictedOnHomeScreen(false).build();
+
+    protected static final UserProperties USER_PROPERTIES_11 =
+            new UserProperties.Builder().setItemsRestrictedOnHomeScreen(true).build();
+
     protected BiPredicate<String, Integer> mDefaultLauncherChecker =
             (callingPackage, userId) ->
             LAUNCHER_1.equals(callingPackage) || LAUNCHER_2.equals(callingPackage)
@@ -816,6 +827,7 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
             = new HashMap<>();
 
     protected final Map<Integer, UserInfo> mUserInfos = new HashMap<>();
+    protected final Map<Integer, UserProperties> mUserProperties = new HashMap<>();
     protected final Map<Integer, Boolean> mRunningUsers = new HashMap<>();
     protected final Map<Integer, Boolean> mUnlockedUsers = new HashMap<>();
 
@@ -910,6 +922,9 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         mUserInfos.put(USER_11, USER_INFO_11);
         mUserInfos.put(USER_P0, USER_INFO_P0);
         mUserInfos.put(USER_P1, USER_INFO_P1);
+        mUserProperties.put(USER_0, USER_PROPERTIES_0);
+        mUserProperties.put(USER_10, USER_PROPERTIES_10);
+        mUserProperties.put(USER_11, USER_PROPERTIES_11);
 
         when(mMockUserManagerInternal.isUserUnlockingOrUnlocked(anyInt()))
                 .thenAnswer(inv -> {
@@ -958,6 +973,15 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
                 inv -> mUserInfos.get((Integer) inv.getArguments()[0])));
         when(mMockActivityManagerInternal.getUidProcessState(anyInt())).thenReturn(
                 ActivityManager.PROCESS_STATE_CACHED_EMPTY);
+        when(mMockUserManagerInternal.getUserProperties(anyInt()))
+                .thenAnswer(inv -> {
+                    final int userId = (Integer) inv.getArguments()[0];
+                    final UserProperties userProperties = mUserProperties.get(userId);
+                    if (userProperties == null) {
+                        return new UserProperties.Builder().build();
+                    }
+                    return userProperties;
+                });
 
         // User 0 and P0 are always running
         mRunningUsers.put(USER_0, true);
@@ -1200,28 +1224,28 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Uninstall package " + packageName + " / " + userId);
         }
-        mUninstalledPackages.add(PackageWithUser.of(userId, packageName));
+        mUninstalledPackages.add(UserPackage.of(userId, packageName));
     }
 
     protected void installPackage(int userId, String packageName) {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Install package " + packageName + " / " + userId);
         }
-        mUninstalledPackages.remove(PackageWithUser.of(userId, packageName));
+        mUninstalledPackages.remove(UserPackage.of(userId, packageName));
     }
 
     protected void disablePackage(int userId, String packageName) {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Disable package " + packageName + " / " + userId);
         }
-        mDisabledPackages.add(PackageWithUser.of(userId, packageName));
+        mDisabledPackages.add(UserPackage.of(userId, packageName));
     }
 
     protected void enablePackage(int userId, String packageName) {
         if (ENABLE_DUMP) {
             Log.v(TAG, "Enable package " + packageName + " / " + userId);
         }
-        mDisabledPackages.remove(PackageWithUser.of(userId, packageName));
+        mDisabledPackages.remove(UserPackage.of(userId, packageName));
     }
 
     PackageInfo getInjectedPackageInfo(String packageName, @UserIdInt int userId,
@@ -1239,17 +1263,17 @@ public abstract class BaseShortcutManagerTest extends InstrumentationTestCase {
         ret.applicationInfo.uid = UserHandle.getUid(userId, pi.applicationInfo.uid);
         ret.applicationInfo.packageName = pi.packageName;
 
-        if (mUninstalledPackages.contains(PackageWithUser.of(userId, packageName))) {
+        if (mUninstalledPackages.contains(UserPackage.of(userId, packageName))) {
             ret.applicationInfo.flags &= ~ApplicationInfo.FLAG_INSTALLED;
         }
-        if (mEphemeralPackages.contains(PackageWithUser.of(userId, packageName))) {
+        if (mEphemeralPackages.contains(UserPackage.of(userId, packageName))) {
             ret.applicationInfo.privateFlags |= ApplicationInfo.PRIVATE_FLAG_INSTANT;
         }
         if (mSystemPackages.contains(packageName)) {
             ret.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;
         }
         ret.applicationInfo.enabled =
-                !mDisabledPackages.contains(PackageWithUser.of(userId, packageName));
+                !mDisabledPackages.contains(UserPackage.of(userId, packageName));
 
         if (getSignatures) {
             ret.signatures = null;

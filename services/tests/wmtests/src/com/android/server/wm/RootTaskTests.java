@@ -140,7 +140,7 @@ public class RootTaskTests extends WindowTestsBase {
 
         final WindowContainer parent = activity1.getTask().getParent();
         assertEquals(SCREEN_ORIENTATION_PORTRAIT, parent.getOrientation());
-        mDisplayContent.mClosingApps.add(activity2);
+        activity2.setVisibleRequested(false);
         assertEquals(SCREEN_ORIENTATION_LANDSCAPE, parent.getOrientation());
     }
 
@@ -422,7 +422,7 @@ public class RootTaskTests extends WindowTestsBase {
         final ComponentName alias = new ComponentName(DEFAULT_COMPONENT_PACKAGE_NAME,
                 aliasActivity);
         final Task parentTask = new TaskBuilder(mSupervisor).build();
-        final Task task = new TaskBuilder(mSupervisor).setParentTaskFragment(parentTask).build();
+        final Task task = new TaskBuilder(mSupervisor).setParentTask(parentTask).build();
         task.origActivity = alias;
         task.realActivity = target;
         new ActivityBuilder(mAtm).setComponent(target).setTask(task).setTargetActivity(
@@ -641,6 +641,31 @@ public class RootTaskTests extends WindowTestsBase {
         // Home split secondary and home task should be invisible.
         assertEquals(TASK_FRAGMENT_VISIBILITY_INVISIBLE,
                 splitSecondary.getVisibility(null /* starting */));
+
+        // Put another task on top of primary split.
+        final Task topSplitPrimary = new TaskBuilder(mSupervisor).setParentTask(organizer.mPrimary)
+                .setCreateActivity(true).build();
+        doReturn(false).when(topSplitPrimary).isTranslucent(any());
+        // Convert the fullscreen translucent task to opaque.
+        doReturn(false).when(translucentRootTask).isTranslucent(any());
+        translucentRootTask.moveToFront("test");
+        // The tasks of primary split are occluded by the fullscreen opaque task.
+        assertEquals(TASK_FRAGMENT_VISIBILITY_INVISIBLE,
+                organizer.mPrimary.getVisibility(null /* starting */));
+        assertEquals(TASK_FRAGMENT_VISIBILITY_INVISIBLE,
+                topSplitPrimary.getVisibility(null /* starting */));
+        // Make primary split root transient-hide.
+        spyOn(splitPrimary.mTransitionController);
+        doReturn(true).when(splitPrimary.mTransitionController).isTransientVisible(
+                organizer.mPrimary);
+        // The split root and its top become visible.
+        assertEquals(TASK_FRAGMENT_VISIBILITY_VISIBLE,
+                organizer.mPrimary.getVisibility(null /* starting */));
+        assertEquals(TASK_FRAGMENT_VISIBILITY_VISIBLE,
+                topSplitPrimary.getVisibility(null /* starting */));
+        // The bottom of primary split becomes invisible because it is occluded by topSplitPrimary.
+        assertEquals(TASK_FRAGMENT_VISIBILITY_INVISIBLE,
+                splitPrimary.getVisibility(null /* starting */));
     }
 
     @Test
@@ -798,8 +823,7 @@ public class RootTaskTests extends WindowTestsBase {
                 .build();
 
         doReturn(false).when(secondActivity).occludesParent();
-        homeRootTask.ensureActivitiesVisible(null /* starting */, 0 /* configChanges */,
-                false /* preserveWindows */);
+        homeRootTask.ensureActivitiesVisible(null /* starting */);
 
         assertTrue(firstActivity.shouldBeVisible());
     }
@@ -1215,7 +1239,7 @@ public class RootTaskTests extends WindowTestsBase {
         final ActivityRecord activity1 = finishTopActivity(rootTask1);
         assertEquals(DESTROYING, activity1.getState());
         verify(mRootWindowContainer).ensureVisibilityAndConfig(eq(null) /* starting */,
-                eq(display.mDisplayId), anyBoolean(), anyBoolean());
+                eq(display.mDisplayId), anyBoolean());
     }
 
     private ActivityRecord finishTopActivity(Task task) {
@@ -1394,8 +1418,7 @@ public class RootTaskTests extends WindowTestsBase {
 
         // Any common path that updates activity visibility should clear the unknown visibility
         // records that are no longer visible according to hierarchy.
-        task.ensureActivitiesVisible(null /* starting */, 0 /* configChanges */,
-                false /* preserveWindows */);
+        task.ensureActivitiesVisible(null /* starting */);
         // Assume the top activity relayouted, just remove it directly.
         unknownAppVisibilityController.appRemovedOrHidden(activities[1]);
         // All unresolved records should be removed.
@@ -1416,8 +1439,7 @@ public class RootTaskTests extends WindowTestsBase {
         doNothing().when(mSupervisor).startSpecificActivity(any(), anyBoolean(),
                 anyBoolean());
 
-        task.ensureActivitiesVisible(null /* starting */, 0 /* configChanges */,
-                false /* preserveWindows */);
+        task.ensureActivitiesVisible(null /* starting */);
         verify(mSupervisor).startSpecificActivity(any(), eq(false) /* andResume */,
                 anyBoolean());
     }

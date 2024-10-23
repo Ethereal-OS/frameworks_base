@@ -37,27 +37,25 @@ import androidx.annotation.VisibleForTesting;
 import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.keyguard.KeyguardUpdateMonitorCallback;
 import com.android.systemui.Dumpable;
-import com.android.systemui.R;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.doze.AlwaysOnDisplayPolicy;
 import com.android.systemui.doze.DozeScreenState;
 import com.android.systemui.dump.DumpManager;
+import com.android.systemui.keyguard.domain.interactor.DozeInteractor;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.res.R;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.statusbar.policy.BatteryController;
 import com.android.systemui.statusbar.policy.BatteryController.BatteryStateChangeCallback;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.statusbar.policy.DevicePostureController;
-import com.android.systemui.tuner.TunerService;
 import com.android.systemui.unfold.FoldAodAnimationController;
 import com.android.systemui.unfold.SysUIUnfoldComponent;
 
 import java.io.PrintWriter;
-import java.util.HashSet;
 import java.util.Optional;
-import java.util.Set;
 
 import javax.inject.Inject;
 
@@ -66,7 +64,6 @@ import javax.inject.Inject;
  */
 @SysUISingleton
 public class DozeParameters implements
-        TunerService.Tunable,
         com.android.systemui.plugins.statusbar.DozeParameters,
         Dumpable, ConfigurationController.ConfigurationListener,
         StatusBarStateController.StateListener, FoldAodAnimationController.FoldAodAnimationStatus {
@@ -83,11 +80,10 @@ public class DozeParameters implements
     private final Resources mResources;
     private final BatteryController mBatteryController;
     private final ScreenOffAnimationController mScreenOffAnimationController;
+    private final DozeInteractor mDozeInteractor;
     private final FoldAodAnimationController mFoldAodAnimationController;
     private final UnlockedScreenOffAnimationController mUnlockedScreenOffAnimationController;
     private final UserTracker mUserTracker;
-
-    private final Set<Callback> mCallbacks = new HashSet<>();
 
     private boolean mControlScreenOffAnimation;
     private boolean mIsQuickPickupEnabled;
@@ -122,7 +118,6 @@ public class DozeParameters implements
             AlwaysOnDisplayPolicy alwaysOnDisplayPolicy,
             PowerManager powerManager,
             BatteryController batteryController,
-            TunerService tunerService,
             DumpManager dumpManager,
             ScreenOffAnimationController screenOffAnimationController,
             Optional<SysUIUnfoldComponent> sysUiUnfoldComponent,
@@ -130,7 +125,8 @@ public class DozeParameters implements
             KeyguardUpdateMonitor keyguardUpdateMonitor,
             ConfigurationController configurationController,
             StatusBarStateController statusBarStateController,
-            UserTracker userTracker) {
+            UserTracker userTracker,
+            DozeInteractor dozeInteractor) {
         mResources = resources;
         mAmbientDisplayConfiguration = ambientDisplayConfiguration;
         mAlwaysOnPolicy = alwaysOnDisplayPolicy;
@@ -143,12 +139,9 @@ public class DozeParameters implements
         mScreenOffAnimationController = screenOffAnimationController;
         mUnlockedScreenOffAnimationController = unlockedScreenOffAnimationController;
         mUserTracker = userTracker;
+        mDozeInteractor = dozeInteractor;
 
         keyguardUpdateMonitor.registerCallback(mKeyguardVisibilityCallback);
-        tunerService.addTunable(
-                this,
-                Settings.Secure.DOZE_ALWAYS_ON,
-                Settings.Secure.ACCESSIBILITY_DISPLAY_INVERSION_ENABLED);
         configurationController.addCallback(this);
         statusBarStateController.addCallback(this);
 
@@ -263,7 +256,8 @@ public class DozeParameters implements
      * @return {@code true} if enabled and available.
      */
     public boolean getAlwaysOn() {
-        return mAmbientDisplayConfiguration.alwaysOnEnabled(UserHandle.USER_CURRENT) && !mBatteryController.isAodPowerSave();
+        return mAmbientDisplayConfiguration.alwaysOnEnabled(UserHandle.USER_CURRENT)
+                && !mBatteryController.isAodPowerSave();
     }
 
     /**
@@ -371,10 +365,6 @@ public class DozeParameters implements
         return mResources.getBoolean(R.bool.doze_double_tap_proximity_check);
     }
 
-    public boolean pickupEventNeedsProximityCheck() {
-        return mResources.getBoolean(R.bool.doze_pickup_event_proximity_check);
-    }
-
     public boolean doubleTapReportsTouchCoordinates() {
         return mResources.getBoolean(R.bool.doze_double_tap_reports_touch_coordinates);
     }
@@ -417,29 +407,6 @@ public class DozeParameters implements
         return mResources.getStringArray(R.array.doze_brightness_sensor_name_posture_mapping);
     }
 
-    /**
-     * Callback to listen for DozeParameter changes.
-     */
-    public void addCallback(Callback callback) {
-        mCallbacks.add(callback);
-    }
-
-    /**
-     * Remove callback that listens for DozeParameter changes.
-     */
-    public void removeCallback(Callback callback) {
-        mCallbacks.remove(callback);
-    }
-
-    @Override
-    public void onTuningChanged(String key, String newValue) {
-        if (key.equals(Settings.Secure.DOZE_ALWAYS_ON)) {
-            updateControlScreenOff();
-        }
-
-        dispatchAlwaysOnEvent();
-    }
-
     @Override
     public void onConfigChanged(Configuration newConfig) {
         updateControlScreenOff();
@@ -474,10 +441,9 @@ public class DozeParameters implements
     }
 
     private void dispatchAlwaysOnEvent() {
-        for (Callback callback : mCallbacks) {
-            callback.onAlwaysOnChange();
-        }
         mScreenOffAnimationController.onAlwaysOnChanged(getAlwaysOn());
+        mDozeInteractor.setAodAvailable(getAlwaysOn());
+
     }
 
     private boolean getPostureSpecificBool(
@@ -492,14 +458,6 @@ public class DozeParameters implements
         }
 
         return bool;
-    }
-
-    /** Callbacks for doze parameter related information */
-    public interface Callback {
-        /**
-         * Invoked when the value of getAlwaysOn may have changed.
-         */
-        void onAlwaysOnChange();
     }
 
     private final class SettingsObserver extends ContentObserver {

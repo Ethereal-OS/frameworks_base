@@ -1,18 +1,3 @@
-/*
- * Copyright (C) 2020-2023 crDroidAndroid Project
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package com.android.systemui.qs.tiles;
 
 import android.content.BroadcastReceiver;
@@ -46,8 +31,10 @@ import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.qs.QSTile.BooleanState;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.qs.QsEventLogger;
 import com.android.systemui.qs.QSHost;
 import com.android.systemui.qs.logging.QSLogger;
+import com.android.systemui.qs.pipeline.domain.interactor.PanelInteractor;
 import com.android.systemui.qs.tileimpl.QSTileImpl;
 import com.android.systemui.qs.tileimpl.QSTileImpl.ResourceIcon;
 
@@ -71,6 +58,7 @@ public class DataSwitchTile extends QSTileImpl<BooleanState> {
     private final MyCallStateListener mPhoneStateListener;
     private final SubscriptionManager mSubscriptionManager;
     private final TelephonyManager mTelephonyManager;
+    private final PanelInteractor mPanelInteractor;
 
     class MyCallStateListener extends PhoneStateListener {
         MyCallStateListener() {
@@ -85,19 +73,22 @@ public class DataSwitchTile extends QSTileImpl<BooleanState> {
     @Inject
     public DataSwitchTile(
             QSHost host,
+            QsEventLogger uiEventLogger,
             @Background Looper backgroundLooper,
             @Main Handler mainHandler,
             FalsingManager falsingManager,
             MetricsLogger metricsLogger,
             StatusBarStateController statusBarStateController,
             ActivityStarter activityStarter,
-            QSLogger qsLogger
+            QSLogger qsLogger,
+            PanelInteractor panelInteractor
     ) {
-        super(host, backgroundLooper, mainHandler, falsingManager, metricsLogger,
+        super(host, uiEventLogger, backgroundLooper, mainHandler, falsingManager, metricsLogger,
                 statusBarStateController, activityStarter, qsLogger);
         mSubscriptionManager = SubscriptionManager.from(host.getContext());
         mTelephonyManager = TelephonyManager.from(host.getContext());
         mPhoneStateListener = new MyCallStateListener();
+        mPanelInteractor = panelInteractor;
     }
 
     @Override
@@ -118,7 +109,7 @@ public class DataSwitchTile extends QSTileImpl<BooleanState> {
             if (!mRegistered) {
                 IntentFilter filter = new IntentFilter();
                 filter.addAction(TelephonyIntents.ACTION_SIM_STATE_CHANGED);
-                mContext.registerReceiver(mSimReceiver, filter);
+                mContext.registerReceiver(mSimReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
                 mTelephonyManager.listen(mPhoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
                 mRegistered = true;
             }
@@ -162,13 +153,13 @@ public class DataSwitchTile extends QSTileImpl<BooleanState> {
                 toggleMobileDataEnabled();
                 refreshState();
             });
-            mHost.collapsePanels();
+            mPanelInteractor.collapsePanels();
         }
     }
 
     @Override
     public Intent getLongClickIntent() {
-        return new Intent(Settings.ACTION_NETWORK_OPERATOR_SETTINGS);
+        return new Intent(Settings.Panel.ACTION_MOBILE_DATA);
     }
 
     @Override
@@ -180,7 +171,8 @@ public class DataSwitchTile extends QSTileImpl<BooleanState> {
     protected void handleUpdateState(BooleanState state, Object arg) {
         boolean activeSIMZero;
         if (arg == null) {
-            int defaultPhoneId = mSubscriptionManager.getDefaultDataPhoneId();
+            int defaultPhoneId = mSubscriptionManager.getPhoneId(
+                        mSubscriptionManager.getDefaultDataSubscriptionId());
             Log.d(TAG, "default data phone id=" + defaultPhoneId);
             activeSIMZero = defaultPhoneId == 0;
         } else {
@@ -227,7 +219,7 @@ public class DataSwitchTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.ETHEREAL;
+        return MetricsEvent.GEOMETRICS;
     }
 
     /**

@@ -16,25 +16,32 @@
 
 package com.android.keyguard;
 
+import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Point;
+import android.graphics.Rect;
 import android.graphics.RectF;
-import android.graphics.drawable.Drawable;
+import android.provider.Settings;
+import android.os.UserHandle;
 import android.util.AttributeSet;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
-import androidx.annotation.VisibleForTesting;
 
 import com.android.internal.graphics.ColorUtils;
 import com.android.settingslib.Utils;
 import com.android.systemui.Dumpable;
-import com.android.systemui.R;
+import com.android.systemui.biometrics.UdfpsDrawable;
+import com.android.systemui.biometrics.UdfpsFpDrawable;
+import com.android.systemui.res.R;
 
 import java.io.PrintWriter;
 
@@ -65,16 +72,17 @@ public class LockIconView extends FrameLayout implements Dumpable {
     private boolean mUseBackground = false;
     private float mDozeAmount = 0f;
 
+    private UdfpsDrawable mFingerprintDrawable; // placeholder
+
+    @SuppressLint("ClickableViewAccessibility")
     public LockIconView(Context context, AttributeSet attrs) {
         super(context, attrs);
         mSensorRect = new RectF();
-    }
 
-    @Override
-    public void onFinishInflate() {
-        super.onFinishInflate();
-        mLockIcon = findViewById(R.id.lock_icon);
-        mBgView = findViewById(R.id.lock_icon_bg);
+        mFingerprintDrawable = new UdfpsFpDrawable(context);
+
+        addBgImageView(context, attrs);
+        addLockIconImageView(context, attrs);
     }
 
     void setDozeAmount(float dozeAmount) {
@@ -83,35 +91,20 @@ public class LockIconView extends FrameLayout implements Dumpable {
     }
 
     void updateColorAndBackgroundVisibility() {
+        mLockIconColor = ColorUtils.blendARGB(
+                Color.WHITE,
+                Color.WHITE,
+                mDozeAmount);
         if (mUseBackground && mLockIcon.getDrawable() != null) {
-            mLockIconColor = ColorUtils.blendARGB(
-                    Utils.getColorAttrDefaultColor(getContext(), android.R.attr.textColorPrimary),
-                    Color.WHITE,
-                    mDozeAmount);
-            mBgView.setBackground(getContext().getDrawable(R.drawable.fingerprint_bg));
+            int backgroundColor = Color.parseColor("#99000000");
+            mBgView.setImageTintList(ColorStateList.valueOf(backgroundColor));
             mBgView.setAlpha(1f - mDozeAmount);
             mBgView.setVisibility(View.VISIBLE);
         } else {
-            mLockIconColor = ColorUtils.blendARGB(
-                    Utils.getColorAttrDefaultColor(getContext(), R.attr.wallpaperTextColorAccent),
-                    Color.WHITE,
-                    mDozeAmount);
             mBgView.setVisibility(View.GONE);
         }
 
         mLockIcon.setImageTintList(ColorStateList.valueOf(mLockIconColor));
-    }
-
-    void setImageDrawable(Drawable drawable) {
-        mLockIcon.setImageDrawable(drawable);
-
-        if (!mUseBackground) return;
-
-        if (drawable == null) {
-            mBgView.setVisibility(View.INVISIBLE);
-        } else {
-            mBgView.setVisibility(View.VISIBLE);
-        }
     }
 
     /**
@@ -125,7 +118,6 @@ public class LockIconView extends FrameLayout implements Dumpable {
     /**
      * Set the location of the lock icon.
      */
-    @VisibleForTesting
     public void setCenterLocation(@NonNull Point center, float radius, int drawablePadding) {
         mLockIconCenter = center;
         mRadius = radius;
@@ -134,19 +126,19 @@ public class LockIconView extends FrameLayout implements Dumpable {
         mLockIcon.setPadding(mLockIconPadding, mLockIconPadding, mLockIconPadding,
                 mLockIconPadding);
 
-        // mSensorProps coordinates assume portrait mode which is OK b/c the keyguard is always in
-        // portrait.
         mSensorRect.set(mLockIconCenter.x - mRadius,
                 mLockIconCenter.y - mRadius,
                 mLockIconCenter.x + mRadius,
                 mLockIconCenter.y + mRadius);
 
         final FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
-        lp.width = (int) (mSensorRect.right - mSensorRect.left);
-        lp.height = (int) (mSensorRect.bottom - mSensorRect.top);
-        lp.topMargin = (int) mSensorRect.top;
-        lp.setMarginStart((int) mSensorRect.left);
-        setLayoutParams(lp);
+        if (lp != null) {
+            lp.width = (int) (mSensorRect.right - mSensorRect.left);
+            lp.height = (int) (mSensorRect.bottom - mSensorRect.top);
+            lp.topMargin = (int) mSensorRect.top;
+            lp.setMarginStart((int) mSensorRect.left);
+            setLayoutParams(lp);
+        }
     }
 
     @Override
@@ -155,11 +147,16 @@ public class LockIconView extends FrameLayout implements Dumpable {
     }
 
     float getLocationTop() {
-        return mLockIconCenter.y - mRadius;
+        Rect r = new Rect();
+        mLockIcon.getGlobalVisibleRect(r);
+        return r.top;
     }
 
     float getLocationBottom() {
-        return mLockIconCenter.y + mRadius;
+        Rect r = new Rect();
+        mLockIcon.getGlobalVisibleRect(r);
+        return r.bottom;
+
     }
 
     /**
@@ -180,6 +177,39 @@ public class LockIconView extends FrameLayout implements Dumpable {
         mAod = aod;
 
         mLockIcon.setImageState(getLockIconState(mIconType, mAod), true);
+    }
+
+    public ImageView getLockIcon() {
+        return mLockIcon;
+    }
+
+    private void addLockIconImageView(Context context, AttributeSet attrs) {
+        mLockIcon = new ImageView(context, attrs);
+        mLockIcon.setId(R.id.lock_icon);
+        mLockIcon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        mLockIcon.setImageDrawable(context.getDrawable(R.drawable.super_lock_icon));
+        addView(mLockIcon);
+        LayoutParams lp = (LayoutParams) mLockIcon.getLayoutParams();
+        lp.height = MATCH_PARENT;
+        lp.width = MATCH_PARENT;
+        lp.gravity = Gravity.CENTER;
+        mLockIcon.setLayoutParams(lp);
+    }
+
+    private void addBgImageView(Context context, AttributeSet attrs) {
+        boolean customUdfpsIcon = Settings.System.getIntForUser(
+                context.getContentResolver(), Settings.System.UDFPS_ICON, 0, UserHandle.USER_CURRENT) != 0;
+        mBgView = new ImageView(context, attrs);
+        mBgView.setId(R.id.lock_icon_bg);
+        mBgView.setImageDrawable(customUdfpsIcon
+                ? mFingerprintDrawable :
+                context.getDrawable(R.drawable.fingerprint_bg));
+        mBgView.setVisibility(View.INVISIBLE);
+        addView(mBgView);
+        LayoutParams lp = (LayoutParams) mBgView.getLayoutParams();
+        lp.height = MATCH_PARENT;
+        lp.width = MATCH_PARENT;
+        mBgView.setLayoutParams(lp);
     }
 
     private static int[] getLockIconState(@IconType int icon, boolean aod) {

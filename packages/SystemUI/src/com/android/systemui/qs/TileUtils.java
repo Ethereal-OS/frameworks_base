@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2022 crDroid Android Project
+* Copyright (C) 2022-2024 crDroid Android Project
 *
 * This program is free software: you can redistribute it and/or modify
 * it under the terms of the GNU General Public License as published by
@@ -23,9 +23,26 @@ import android.content.res.Resources;
 import android.os.UserHandle;
 import android.provider.Settings;
 
+import com.android.systemui.res.R;
+import com.android.systemui.flags.Flags;
+import com.android.systemui.flags.RefactorFlag;
+
 public class TileUtils {
 
-    public static int getQSColumnsCount(Context context, int resourceCount) {
+    private static boolean useSmallLandscapeLockscreenResources(Resources res) {
+        return RefactorFlag.forView(Flags.LOCKSCREEN_ENABLE_LANDSCAPE).isEnabled()
+                && res.getBoolean(R.bool.is_small_screen_landscape);
+    }
+
+    public static int getQSColumnsCount(Context context) {
+        Resources res = context.getResources();
+        int columns = useSmallLandscapeLockscreenResources(res)
+                ? res.getInteger(R.integer.small_land_lockscreen_quick_settings_num_columns)
+                : res.getInteger(R.integer.quick_settings_num_columns);
+        return getQSColumnsCount(context, columns);
+    }
+
+    private static int getQSColumnsCount(Context context, int resourceCount) {
         final int QS_COLUMNS_MIN = 2;
         final Resources res = context.getResources();
         int value = QS_COLUMNS_MIN;
@@ -43,16 +60,35 @@ public class TileUtils {
 
     public static int getQSRowsCount(Context context) {
         final int QS_ROWS_MIN = 1;
-        final Resources res = context.getResources();
         int value = QS_ROWS_MIN;
-        if (res.getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
+        int valueQQS = QS_ROWS_MIN;
+        if (context.getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
+            value = Settings.System.getIntForUser(
+                    context.getContentResolver(), Settings.System.QS_LAYOUT_ROWS,
+                    4, UserHandle.USER_CURRENT);
+            valueQQS = Settings.System.getIntForUser(
+                    context.getContentResolver(), Settings.System.QQS_LAYOUT_ROWS,
+                    2, UserHandle.USER_CURRENT);
+        } else {
+            value = 1;
+            valueQQS = Settings.System.getIntForUser(
+                    context.getContentResolver(), Settings.System.QQS_LAYOUT_ROWS_LANDSCAPE,
+                    1, UserHandle.USER_CURRENT);
+        }
+        return Math.max(value, valueQQS);
+    }
+
+    public static int getQQSRowsCount(Context context) {
+        final int QS_ROWS_MIN = 1;
+        int value = QS_ROWS_MIN;
+        if (context.getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
             value = Settings.System.getIntForUser(
                     context.getContentResolver(), Settings.System.QQS_LAYOUT_ROWS,
                     2, UserHandle.USER_CURRENT);
         } else {
             value = Settings.System.getIntForUser(
                     context.getContentResolver(), Settings.System.QQS_LAYOUT_ROWS_LANDSCAPE,
-                    2, UserHandle.USER_CURRENT);
+                    1, UserHandle.USER_CURRENT);
         }
         return Math.max(QS_ROWS_MIN, value);
     }
