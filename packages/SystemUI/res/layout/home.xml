@@ -13,7 +13,7 @@
      See the License for the specific language governing permissions and
      limitations under the License.
 -->
-<com.android.systemui.euclid.OpaLayout
+<com.android.systemui.ethereal.OpaLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:systemui="http://schemas.android.com/apk/res-auto"
     android:id="@+id/home"
@@ -63,4 +63,4 @@
         android:scaleType="center"
         android:contentDescription="@string/accessibility_home"
         systemui:keyCode="3"/>
-</com.android.systemui.euclid.OpaLayout>
+</com.android.systemui.ethereal.OpaLayout>

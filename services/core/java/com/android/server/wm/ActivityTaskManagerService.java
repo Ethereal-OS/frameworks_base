@@ -288,7 +288,7 @@ import com.android.server.uri.UriGrantsManagerInternal;
 import com.android.server.wallpaper.WallpaperManagerInternal;
 import com.android.wm.shell.Flags;
 
-import com.android.internal.util.euclid.cutout.CutoutFullscreenController;
+import com.android.internal.util.ethereal.cutout.CutoutFullscreenController;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -316,7 +316,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-import com.android.internal.util.euclid.PixelPropsUtils;
+import com.android.internal.util.ethereal.PixelPropsUtils;
 
 /**
  * System service for managing activities and their containers (task, displays,... ).

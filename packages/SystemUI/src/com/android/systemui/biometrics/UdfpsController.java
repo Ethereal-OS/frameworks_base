@@ -74,7 +74,7 @@ import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.InstanceId;
 import com.android.internal.util.LatencyTracker;
-import com.android.internal.util.euclid.udfps.CustomUdfpsUtils;
+import com.android.internal.util.ethereal.udfps.CustomUdfpsUtils;
 import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.systemui.Dumpable;
 import com.android.systemui.animation.ActivityTransitionAnimator;
@@ -866,8 +866,8 @@ public class UdfpsController implements DozeReceiver, Dumpable {
     }
 
     private void updateUdfpsAnimation() {
-        if (com.android.internal.util.euclid.EuclidUtils.isPackageInstalled(mContext,
-                "com.euclid.udfps.animations")) {
+        if (com.android.internal.util.ethereal.EtherealUtils.isPackageInstalled(mContext,
+                "com.ethereal.udfps.animations")) {
             if (mUdfpsAnimation != null) {
                 mUdfpsAnimation.removeAnimation();
                 mUdfpsAnimation = null;

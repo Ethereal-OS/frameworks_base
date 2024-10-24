@@ -72,7 +72,7 @@ public class UdfpsAnimation extends ImageView {
 
     private String[] mStyleNames;
 
-    private static final String UDFPS_ANIMATIONS_PACKAGE = "com.euclid.udfps.animations";
+    private static final String UDFPS_ANIMATIONS_PACKAGE = "com.ethereal.udfps.animations";
 
     private Resources mApkResources;
     

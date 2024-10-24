@@ -234,7 +234,7 @@ interface IStatusBarService
     void showRearDisplayDialog(int currentBaseState);
 
 
-    /** euclidOS additions. */
+    /** EtherealOS additions. */
     void toggleCameraFlash();
 
     void killForegroundApp();

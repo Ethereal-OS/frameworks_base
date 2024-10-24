@@ -29,7 +29,7 @@ import android.util.Log;
 import android.view.MotionEvent;
 import android.view.WindowManagerPolicyConstants.PointerEventListener;
 
-import com.android.internal.util.euclid.systemUtils;
+import com.android.internal.util.ethereal.systemUtils;
 
 import java.util.Calendar;
 

@@ -591,9 +591,9 @@ public final class ColorUtils {
     }
 
     /**
-     * Returns the euclidean distance between two LAB colors.
+     * Returns the Etherealean distance between two LAB colors.
      */
-    public static double distanceEuclidean(@NonNull double[] labX, @NonNull double[] labY) {
+    public static double distanceEtherealean(@NonNull double[] labX, @NonNull double[] labY) {
         return Math.sqrt(Math.pow(labX[0] - labY[0], 2)
                 + Math.pow(labX[1] - labY[1], 2)
                 + Math.pow(labX[2] - labY[2], 2));

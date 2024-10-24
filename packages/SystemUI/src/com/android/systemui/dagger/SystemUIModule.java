@@ -105,7 +105,7 @@ import com.android.systemui.shade.transition.LargeScreenShadeInterpolator;
 import com.android.systemui.shade.transition.LargeScreenShadeInterpolatorImpl;
 import com.android.systemui.shared.condition.Monitor;
 import com.android.systemui.smartspace.dagger.SmartspaceModule;
-import com.android.systemui.euclid.EuclidOSModule;
+import com.android.systemui.ethereal.EtherealOSModule;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
 import com.android.systemui.statusbar.NotificationMediaManager;
@@ -264,7 +264,7 @@ import javax.inject.Named;
         UtilModule.class,
         NoteTaskModule.class,
         WalletModule.class,
-        EuclidOSModule.class
+        EtherealOSModule.class
         },
         subcomponents = {
             ComplicationComponent.class,

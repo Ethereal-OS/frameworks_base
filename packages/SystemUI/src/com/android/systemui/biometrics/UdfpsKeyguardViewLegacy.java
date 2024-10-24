@@ -95,8 +95,8 @@ public class UdfpsKeyguardViewLegacy extends UdfpsAnimationView {
             .getDimensionPixelSize(R.dimen.udfps_burn_in_offset_x);
         mMaxBurnInOffsetY = context.getResources()
             .getDimensionPixelSize(R.dimen.udfps_burn_in_offset_y);
-        mPackageInstalled = com.android.internal.util.euclid.EuclidUtils.isPackageInstalled(
-                mContext, "com.euclid.udfps.icons");
+        mPackageInstalled = com.android.internal.util.ethereal.EtherealUtils.isPackageInstalled(
+                mContext, "com.ethereal.udfps.icons");
     }
 
     /**

@@ -234,7 +234,7 @@ import com.android.server.uri.UriGrantsManagerService;
 import com.android.server.usage.UsageStatsService;
 import com.android.server.utils.TimingsTraceAndSlog;
 import com.android.server.vibrator.LinearmotorVibratorService;
-import com.android.server.euclid.CustomDeviceConfigService;
+import com.android.server.ethereal.CustomDeviceConfigService;
 import com.android.server.vibrator.VibratorManagerService;
 import com.android.server.vr.VrManagerService;
 import com.android.server.wearable.WearableSensingManagerService;
@@ -242,7 +242,7 @@ import com.android.server.webkit.WebViewUpdateService;
 import com.android.server.wm.ActivityTaskManagerService;
 import com.android.server.wm.WindowManagerGlobalLock;
 import com.android.server.wm.WindowManagerService;
-import com.android.server.euclid.ParallelSpaceManagerService;
+import com.android.server.ethereal.ParallelSpaceManagerService;
 import com.android.server.lineage.health.HealthInterfaceService;
 
 import dalvik.system.VMRuntime;
@@ -445,7 +445,7 @@ public final class SystemServer implements Dumpable {
     private static final String HEALTHCONNECT_MANAGER_SERVICE_CLASS =
             "com.android.server.healthconnect.HealthConnectManagerService";
     private static final String PARALLEL_SPACE_SERVICE_CLASS =
-            "com.android.server.euclid.ParallelSpaceManagerService";
+            "com.android.server.ethereal.ParallelSpaceManagerService";
 
     private static final String ROLE_SERVICE_CLASS = "com.android.role.RoleService";
     private static final String GAME_MANAGER_SERVICE_CLASS =

@@ -41,7 +41,7 @@ import androidx.annotation.VisibleForTesting;
 
 import com.android.systemui.Dependency;
 import com.android.systemui.Dumpable;
-import com.android.systemui.euclid.CurrentWeatherView;
+import com.android.systemui.ethereal.CurrentWeatherView;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.dump.DumpManager;

@@ -30,7 +30,7 @@ import androidx.annotation.Nullable;
 
 import com.android.internal.logging.MetricsLogger;
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
-import com.android.internal.util.euclid.EuclidUtils;
+import com.android.internal.util.ethereal.EtherealUtils;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
 import com.android.systemui.dagger.qualifiers.Background;
@@ -73,28 +73,28 @@ public class SoundSearchTile extends QSTileImpl<BooleanState> {
 
     @Override
     public int getMetricsCategory() {
-        return MetricsEvent.GEOMETRICS;
+        return MetricsEvent.ETHEREAL;
     }
 
     @Override
     protected void handleClick(@Nullable View view) {
         mPanelInteractor.collapsePanels();
         // Shazam
-        if (EuclidUtils.isPackageInstalled(mContext, "com.shazam.android")
+        if (EtherealUtils.isPackageInstalled(mContext, "com.shazam.android")
 || 
-EuclidUtils.isPackageInstalled(mContext, "com.shazam.encore.android")) {
+EtherealUtils.isPackageInstalled(mContext, "com.shazam.encore.android")) {
             Intent intent = new Intent(Intent.ACTION_MAIN);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             intent.setAction("com.shazam.android.intent.actions.START_TAGGING");
             mContext.startActivity(intent);
         // Soundhound
-        } else if (EuclidUtils.isPackageInstalled(mContext, "com.melodis.midomiMusicIdentifier.freemium") || EuclidUtils.isPackageInstalled(mContext, "com.melodis.midomiMusicIdentifier")) {
+        } else if (EtherealUtils.isPackageInstalled(mContext, "com.melodis.midomiMusicIdentifier.freemium") || EtherealUtils.isPackageInstalled(mContext, "com.melodis.midomiMusicIdentifier")) {
             Intent intent = new Intent(Intent.ACTION_MAIN);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             intent.setAction("com.soundhound.android.ID_NOW_EXTERNAL");
             mContext.startActivity(intent);
         // Google Search Music
-        } else if (EuclidUtils.isPackageInstalled(mContext, "com.google.android.googlequicksearchbox")) {
+        } else if (EtherealUtils.isPackageInstalled(mContext, "com.google.android.googlequicksearchbox")) {
             Intent intent = new Intent(Intent.ACTION_MAIN);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             intent.setAction("com.google.android.googlequicksearchbox.MUSIC_SEARCH");

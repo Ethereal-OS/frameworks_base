@@ -190,7 +190,7 @@ public class KMeans {
         final int meanCount = means.size();
         for (int i = 0; i < meanCount; i++) {
             Mean next = means.get(i);
-            // We don't need the sqrt when comparing distances in euclidean space
+            // We don't need the sqrt when comparing distances in etherealean space
             // because they exist on both sides of the equation and cancel each other out.
             float nextDistance = sqDistance(point, next.mCentroid);
             if (nextDistance < nearestDistance) {

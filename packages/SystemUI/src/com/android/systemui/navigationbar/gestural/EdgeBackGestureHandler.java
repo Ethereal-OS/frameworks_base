@@ -77,8 +77,8 @@ import androidx.annotation.DimenRes;
 
 import com.android.internal.config.sysui.SystemUiDeviceConfigFlags;
 import com.android.internal.policy.GestureNavigationSettingsObserver;
-import com.android.internal.util.euclid.EuclidUtils;
-import com.android.internal.util.euclid.systemUtils;
+import com.android.internal.util.ethereal.EtherealUtils;
+import com.android.internal.util.ethereal.systemUtils;
 import com.android.systemui.Dependency;
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.dagger.qualifiers.Main;
@@ -1355,46 +1355,46 @@ public class EdgeBackGestureHandler implements PluginListener<NavigationEdgeBack
             default:
                 break;
             case 1: // Voice search
-                EuclidUtils.launchVoiceSearch(mContext);
+                EtherealUtils.launchVoiceSearch(mContext);
                 break;
             case 2: // Camera
-                EuclidUtils.launchCamera(mContext);
+                EtherealUtils.launchCamera(mContext);
                 break;
             case 3: // Flashlight
-                EuclidUtils.toggleCameraFlash();
+                EtherealUtils.toggleCameraFlash();
                 break;
             case 4: // Application
                 launchApp(mContext, mIsOnLeftEdge, isVertical);
                 break;
             case 5: // Volume panel
-                EuclidUtils.toggleVolumePanel(mContext);
+                EtherealUtils.toggleVolumePanel(mContext);
                 break;
             case 6: // Screen off
-                EuclidUtils.switchScreenOff(mContext);
+                EtherealUtils.switchScreenOff(mContext);
                 break;
             case 7: // Screenshot
                 systemUtils.takeScreenshot(true);
                 break;
             case 8: // Notification panel
-                EuclidUtils.toggleNotifications();
+                EtherealUtils.toggleNotifications();
                 break;
             case 9: // QS panel
-                EuclidUtils.toggleQsPanel();
+                EtherealUtils.toggleQsPanel();
                 break;
             case 10: // Clear notifications
-                EuclidUtils.clearAllNotifications();
+                EtherealUtils.clearAllNotifications();
                 break;
             case 11: // Ringer modes
-                EuclidUtils.toggleRingerModes(mContext);
+                EtherealUtils.toggleRingerModes(mContext);
                 break;
             case 12: // Kill app
-                EuclidUtils.killForegroundApp();
+                EtherealUtils.killForegroundApp();
                 break;
             case 13: // Switch recent app
-                EuclidUtils.switchToLastApp(mContext);
+                EtherealUtils.switchToLastApp(mContext);
                 break;
             case 14: // Powermenu
-                EuclidUtils.showPowerMenu();
+                EtherealUtils.showPowerMenu();
                 break;
             case 15: // Partial Screenshot
                 systemUtils.takeScreenshot(false);

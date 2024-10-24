@@ -101,7 +101,7 @@ import android.widget.Editor;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.util.Preconditions;
 
-import com.android.internal.util.euclid.HideDeveloperStatusUtils;
+import com.android.internal.util.ethereal.HideDeveloperStatusUtils;
 
 import java.io.IOException;
 import java.lang.annotation.ElementType;
@@ -120,7 +120,7 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
-import com.android.internal.util.euclid.DeviceConfigUtils;
+import com.android.internal.util.ethereal.DeviceConfigUtils;
 
 /**
  * The Settings provider contains global system-level device preferences.

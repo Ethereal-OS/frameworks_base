@@ -271,7 +271,7 @@ class TvPipKeepClearAlgorithm() {
 
     /** Cost function to evaluate candidate bounds */
     private fun candidateCost(candidateBounds: Rect, pipAnchorBounds: Rect): Int {
-        // squared euclidean distance of corresponding rect corners
+        // squared etherealean distance of corresponding rect corners
         val dx = candidateBounds.left - pipAnchorBounds.left
         val dy = candidateBounds.top - pipAnchorBounds.top
         return dx * dx + dy * dy

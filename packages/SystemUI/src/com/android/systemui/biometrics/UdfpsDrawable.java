@@ -32,7 +32,7 @@ import android.util.PathParser;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.android.internal.util.euclid.EuclidUtils;
+import com.android.internal.util.ethereal.EtherealUtils;
 import com.android.systemui.Dependency;
 import com.android.systemui.res.R;
 import com.android.systemui.tuner.TunerService;
@@ -45,7 +45,7 @@ public abstract class UdfpsDrawable extends Drawable {
     static final float DEFAULT_STROKE_WIDTH = 3f;
     static final String UDFPS_ICON = "system:" + Settings.System.UDFPS_ICON;
 
-    String udfpsResourcesPackage = "com.euclid.udfps.icons";
+    String udfpsResourcesPackage = "com.ethereal.udfps.icons";
 
     @NonNull final Context mContext;
     @NonNull final ShapeDrawable mFingerprintDrawable;
@@ -75,7 +75,7 @@ public abstract class UdfpsDrawable extends Drawable {
     }
 
     void init() {
-        if (EuclidUtils.isPackageInstalled(mContext, udfpsResourcesPackage)) {
+        if (EtherealUtils.isPackageInstalled(mContext, udfpsResourcesPackage)) {
             try {
                 PackageManager pm = mContext.getPackageManager();
                 udfpsRes = pm.getResourcesForApplication(udfpsResourcesPackage);

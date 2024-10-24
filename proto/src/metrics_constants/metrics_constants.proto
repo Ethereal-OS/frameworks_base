@@ -7445,8 +7445,8 @@ message MetricsEvent {
     // Add new aosp constants above this line.
     // END OF AOSP CONSTANTS
 
-    //euclidOS Metrics
-    GEOMETRICS = 1999;
+    //ETHEREALOS Metrics
+    ETHEREAL = 1999;
 
     // Panel for Mobile Data
     PANEL_MOBILE_DATA = 4001;

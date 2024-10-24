@@ -656,12 +656,12 @@ class AppErrors {
 
             // Add paste content for Memochō option
             String devFP = SystemProperties.get("ro.vendor.build.fingerprint", "");
-            String euclidVers = SystemProperties.get("ro.euclid.version", "");
+            String etherealVers = SystemProperties.get("ro.ethereal.version", "");
             String boardName = SystemProperties.get("ro.product.board", "");
             data.paste = "time: " + timeMillis + "\n" +
             "device fp:" + devFP + "\n" +
             "product board:" + boardName + "\n" +
-            "euclid vers:" + euclidVers + "\n" +
+            "ethereal vers:" + etherealVers + "\n" +
             "msg: " + longMsg + "\n" +
             "stacktrace: " + stackTrace;
 

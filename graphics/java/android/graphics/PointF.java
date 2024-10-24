@@ -111,14 +111,14 @@ public class PointF implements Parcelable {
     }
 
     /**
-     * Return the euclidian distance from (0,0) to the point
+     * Return the etherealian distance from (0,0) to the point
      */
     public final float length() { 
         return length(x, y); 
     }
     
     /**
-     * Returns the euclidian distance from (0,0) to (x,y)
+     * Returns the etherealian distance from (0,0) to (x,y)
      */
     public static float length(float x, float y) {
         return (float) Math.hypot(x, y);

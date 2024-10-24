@@ -33,7 +33,7 @@ import android.os.UserHandle;
 import android.widget.Toast;
 
 import com.android.systemui.dagger.qualifiers.Background;
-import com.android.internal.util.euclid.EuclidUtils;
+import com.android.internal.util.ethereal.EtherealUtils;
 
 import com.android.systemui.dagger.qualifiers.Background;
 import com.android.systemui.res.R;
@@ -67,7 +67,7 @@ public class LensScreenshotReceiver extends BroadcastReceiver {
 
 
     private boolean doesGoogleEnabled(Context context) {
-        return EuclidUtils.isPackageInstalled(context, GSA_PACKAGE, false /* 
+        return EtherealUtils.isPackageInstalled(context, GSA_PACKAGE, false /* 
 ignoreState */);
     }
 

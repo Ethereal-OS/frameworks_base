@@ -32,7 +32,7 @@ import android.system.keystore2.KeyEntryResponse;
 import android.system.keystore2.ResponseCode;
 import android.util.Log;
 
-import com.android.internal.util.euclid.AttestationHooks;
+import com.android.internal.util.ethereal.AttestationHooks;
 
 import java.util.Calendar;
 
